@@ -7,10 +7,19 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"worktime/internal/config"
+	"worktime/internal/store"
 	"worktime/web"
 )
 
-func NewRouter() http.Handler {
+type server struct {
+	store *store.Store
+	cfg   config.Config
+}
+
+func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
+	s := &server{store: dataStore, cfg: cfg}
+
 	router := chi.NewRouter()
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
@@ -18,6 +27,18 @@ func NewRouter() http.Handler {
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	router.Route("/api", func(api chi.Router) {
+		api.Use(s.requireAuth)
+		api.Post("/sync", s.handleSync)
+		api.Get("/me", s.handleMe)
+		api.Get("/report", s.handleReport)
+		api.Get("/projects", s.handlePull)
+		api.Get("/entries", s.handlePull)
+		api.Get("/tokens", s.handleListTokens)
+		api.Post("/tokens", s.handleCreateToken)
+		api.Delete("/tokens/{id}", s.handleDeleteToken)
 	})
 
 	router.NotFound(spaHandler())

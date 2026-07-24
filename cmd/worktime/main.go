@@ -3,21 +3,28 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
 	"worktime/internal/api"
+	"worktime/internal/config"
+	"worktime/internal/store"
 )
 
 func main() {
-	addr := os.Getenv("WORKTIME_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	cfg := config.Load()
+
+	dataStore, err := store.Open(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
 	}
+	defer dataStore.Close()
 
-	router := api.NewRouter()
+	router := api.NewRouter(dataStore, cfg)
 
-	log.Printf("worktime listening on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
+	if cfg.DevAuth {
+		log.Print("WARNING: dev auth is enabled, all requests run as the local dev user")
+	}
+	log.Printf("worktime listening on %s (db: %s)", cfg.Addr, cfg.DBPath)
+	if err := http.ListenAndServe(cfg.Addr, router); err != nil {
 		log.Fatal(err)
 	}
 }

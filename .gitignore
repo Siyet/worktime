@@ -1,0 +1,20 @@
+# Data & local state
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# Go
+bin/
+worktime.exe
+worktime
+
+# Frontend
+web/node_modules/
+web/dist/
+!web/dist/.gitkeep
+
+# Tooling
+.playwright-mcp/
+*.log

@@ -7,8 +7,8 @@ data/
 
 # Go
 bin/
-worktime.exe
-worktime
+/worktime.exe
+/worktime
 
 # Frontend
 web/node_modules/

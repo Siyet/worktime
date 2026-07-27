@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"worktime/internal/config"
+	"worktime/internal/mcpserver"
 	"worktime/internal/store"
 	"worktime/web"
 )
@@ -47,6 +48,10 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		api.Post("/tokens", s.handleCreateToken)
 		api.Delete("/tokens/{id}", s.handleDeleteToken)
 	})
+
+	mcpHandler := mcpserver.NewHandler(dataStore)
+	router.With(s.requireAuth).Handle("/mcp", mcpHandler)
+	router.With(s.requireAuth).Handle("/mcp/*", mcpHandler)
 
 	router.NotFound(spaHandler())
 

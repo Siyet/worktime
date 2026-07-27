@@ -1,22 +1,19 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
+	"worktime/internal/authctx"
 	"worktime/internal/store"
 )
-
-type contextKey int
-
-const userContextKey contextKey = 0
 
 const sessionCookieName = "wt_session"
 
 // currentUser returns the authenticated user placed into the request context by requireAuth.
 func currentUser(r *http.Request) store.User {
-	return r.Context().Value(userContextKey).(store.User)
+	user, _ := authctx.User(r.Context())
+	return user
 }
 
 // requireAuth resolves the user from a Bearer API token, then from the session
@@ -26,7 +23,7 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 		if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
 			user, err := s.store.GetUserByAPIToken(r.Context(), strings.TrimPrefix(header, "Bearer "))
 			if err == nil {
-				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+				next.ServeHTTP(w, r.WithContext(authctx.WithUser(r.Context(), user)))
 				return
 			}
 			http.Error(w, "invalid API token", http.StatusUnauthorized)
@@ -36,7 +33,7 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 		if cookie, err := r.Cookie(sessionCookieName); err == nil {
 			user, err := s.store.GetUserBySession(r.Context(), cookie.Value)
 			if err == nil {
-				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+				next.ServeHTTP(w, r.WithContext(authctx.WithUser(r.Context(), user)))
 				return
 			}
 		}
@@ -44,7 +41,7 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 		if s.cfg.DevAuth {
 			user, err := s.store.EnsureDevUser(r.Context())
 			if err == nil {
-				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+				next.ServeHTTP(w, r.WithContext(authctx.WithUser(r.Context(), user)))
 				return
 			}
 		}

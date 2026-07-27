@@ -3,6 +3,7 @@
   import { syncState } from "./lib/sync.svelte";
   import { startSyncEngine } from "./lib/sync.svelte";
   import { appState, loadStateFromDB } from "./lib/state/app.svelte";
+  import { initSession, session } from "./lib/session.svelte";
   import TimerPage from "./pages/TimerPage.svelte";
   import ProjectsPage from "./pages/ProjectsPage.svelte";
   import TimeOffPage from "./pages/TimeOffPage.svelte";
@@ -10,7 +11,10 @@
   import SettingsPage from "./pages/SettingsPage.svelte";
 
   void loadStateFromDB();
+  void initSession();
   startSyncEngine();
+
+  const signedOut = $derived(syncState.status === "unauthenticated" && session.checked && session.user === null);
 
   const tabs = [
     { path: "/", label: "Timer" },
@@ -46,7 +50,19 @@
   </header>
 
   <main>
-    {#if !appState.loaded}
+    {#if signedOut}
+      <div class="card signin">
+        <h2>Sign in to WorkTime</h2>
+        {#if session.googleAvailable}
+          <a class="google-button" href="/auth/google">Sign in with Google</a>
+        {:else}
+          <p class="muted">
+            Google sign-in is not configured. Set WORKTIME_GOOGLE_CLIENT_ID and
+            WORKTIME_GOOGLE_CLIENT_SECRET on the server, or run with WORKTIME_DEV_AUTH=1 for local development.
+          </p>
+        {/if}
+      </div>
+    {:else if !appState.loaded}
       <p class="muted">Loading…</p>
     {:else if route.path === "/projects"}
       <ProjectsPage />
@@ -110,5 +126,23 @@
   .status[data-status="error"],
   .status[data-status="unauthenticated"] {
     color: var(--danger);
+  }
+
+  .signin {
+    text-align: center;
+    padding: 3rem 1rem;
+  }
+
+  .signin h2 {
+    margin-top: 0;
+  }
+
+  .google-button {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--accent-text);
+    padding: 0.6rem 1.4rem;
+    border-radius: var(--radius);
+    text-decoration: none;
   }
 </style>

@@ -29,6 +29,13 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	router.Route("/auth", func(auth chi.Router) {
+		auth.Get("/config", s.handleAuthConfig)
+		auth.Get("/google", s.handleGoogleLogin)
+		auth.Get("/google/callback", s.handleGoogleCallback)
+		auth.Post("/logout", s.handleLogout)
+	})
+
 	router.Route("/api", func(api chi.Router) {
 		api.Use(s.requireAuth)
 		api.Post("/sync", s.handleSync)

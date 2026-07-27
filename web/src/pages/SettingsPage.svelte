@@ -1,5 +1,6 @@
 <script lang="ts">
   import { syncState } from "../lib/sync.svelte";
+  import { logout } from "../lib/session.svelte";
   import type { User } from "../lib/types";
 
   interface APIToken {
@@ -59,6 +60,8 @@
       <div>{user.name}</div>
       <div class="muted">{user.email}</div>
     </div>
+    <span class="spacer"></span>
+    <button onclick={() => logout()}>Sign out</button>
   </div>
 {/if}
 

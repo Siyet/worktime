@@ -74,3 +74,25 @@ export async function getCursor(): Promise<number> {
 export async function setCursor(seq: number): Promise<void> {
   await (await db()).put("meta", seq, "cursor");
 }
+
+export async function getMeta<Value>(key: string): Promise<Value | undefined> {
+  return (await db()).get("meta", key);
+}
+
+export async function setMeta(key: string, value: unknown): Promise<void> {
+  await (await db()).put("meta", value, key);
+}
+
+// wipeLocalData drops the whole local database. Used on logout and when a
+// different account signs in on the same browser.
+export async function wipeLocalData(): Promise<void> {
+  const database = await db();
+  database.close();
+  dbPromise = null;
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase("worktime");
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => resolve();
+  });
+}

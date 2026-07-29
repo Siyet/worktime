@@ -1,0 +1,78 @@
+<!-- @dsCard group="Pages" name="Timer page (current)" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Timer page</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+  .shell { max-width: 46rem; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 1rem; padding: 0.8rem 0; flex-wrap: wrap; }
+  .logo { font-weight: 700; font-size: 1.1rem; }
+  nav { display: flex; gap: 0.2rem; flex: 1; }
+  nav a { color: var(--text-dim); text-decoration: none; padding: 0.3rem 0.7rem; border-radius: var(--radius); }
+  nav a.active { color: var(--text); background: var(--surface); border: 1px solid var(--border); }
+  .status { font-size: 0.8rem; color: var(--text-dim); }
+  .elapsed { font-size: 1.05rem; font-weight: 600; }
+  .project-select { position: relative; display: inline-flex; align-items: center; }
+  .project-select .dot { position: absolute; left: 0.6rem; pointer-events: none; }
+  .project-select select { padding-left: 1.6rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <span class="logo">WorkTime</span>
+    <nav>
+      <a class="active" href="#">Timer</a><a href="#">Projects</a><a href="#">Time off</a><a href="#">Reports</a><a href="#">Settings</a>
+    </nav>
+    <span class="status">synced</span>
+  </header>
+  <div class="card row">
+    <input style="flex: 1" placeholder="What are you working on?" />
+    <span class="project-select">
+      <span class="dot" style="background: #3f51b5"></span>
+      <select><option>MySky</option></select>
+    </span>
+    <button class="primary">Start</button>
+  </div>
+  <div class="card">
+    <h3>Running</h3>
+    <div class="row item">
+      <span class="dot" style="background: #ff0000"></span>
+      <span>AIM Daily</span>
+      <span class="muted">PT</span>
+      <span class="spacer"></span>
+      <span class="mono elapsed">5:09:19</span>
+      <button>Stop</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="row">
+      <h3>Tue, Jul 29</h3>
+      <span class="spacer"></span>
+      <span class="muted mono">7h 58m</span>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: #3f51b5"></span>
+      <span>AIM V2 обсуждение с командой</span>
+      <span class="muted">MySky</span>
+      <span class="spacer"></span>
+      <span class="muted mono">11:00 AM-12:04 PM</span>
+      <span class="mono">1h 04m</span>
+      <button class="danger" title="Delete entry">&times;</button>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: #3f51b5"></span>
+      <span>Доработка топологии + AIM V2 epic</span>
+      <span class="muted">MySky</span>
+      <span class="spacer"></span>
+      <span class="muted mono">9:15 AM-11:00 AM</span>
+      <span class="mono">1h 45m</span>
+      <button class="danger" title="Delete entry">&times;</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!-- @dsCard group="Components" name="Inputs & selects" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Inputs</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+  .project-select { position: relative; display: inline-flex; align-items: center; }
+  .project-select .dot { position: absolute; left: 0.6rem; pointer-events: none; }
+  .project-select select { padding-left: 1.6rem; }
+  .stack { display: flex; flex-direction: column; gap: 0.75rem; max-width: 26rem; }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <input placeholder="What are you working on?" />
+    <span class="project-select">
+      <span class="dot" style="background: #3f51b5"></span>
+      <select><option>MySky</option><option>No project</option><option>PT</option></select>
+    </span>
+    <div class="row">
+      <select><option>Vacation</option><option>Sick leave</option></select>
+      <input type="date" value="2026-07-29" />
+      <span class="muted">-</span>
+      <input type="date" value="2026-08-05" />
+    </div>
+    <div class="row">
+      <input type="color" value="#3f51b5" aria-label="Project color" />
+      <input placeholder="New project name" style="flex: 1" />
+      <button class="primary">Add</button>
+    </div>
+  </div>
+</body>
+</html>

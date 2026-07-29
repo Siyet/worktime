@@ -1,0 +1,59 @@
+<!-- @dsCard group="Components" name="Timer rows & day groups" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Timer rows</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+  .elapsed { font-size: 1.05rem; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h3>Running</h3>
+    <div class="row item">
+      <span class="dot" style="background: #3f51b5"></span>
+      <span>AIM V2 epic review</span>
+      <span class="muted">MySky</span>
+      <span class="spacer"></span>
+      <span class="mono elapsed">1:42:07</span>
+      <button>Stop</button>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: var(--border)"></span>
+      <span>Code review</span>
+      <span class="spacer"></span>
+      <span class="mono elapsed">0:12:33</span>
+      <button>Stop</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <h3>Tue, Jul 29</h3>
+      <span class="spacer"></span>
+      <span class="muted mono">6h 40m</span>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: #3f51b5"></span>
+      <span>Доработка топологии</span>
+      <span class="muted">MySky</span>
+      <span class="spacer"></span>
+      <span class="muted mono">9:15 AM-11:00 AM</span>
+      <span class="mono">1h 45m</span>
+      <button class="danger" title="Delete entry">&times;</button>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: #ff0000"></span>
+      <span>Weekly</span>
+      <span class="muted">PT</span>
+      <span class="spacer"></span>
+      <span class="muted mono">11:00 AM-11:54 AM</span>
+      <span class="mono">54m</span>
+      <button class="danger" title="Delete entry">&times;</button>
+    </div>
+  </div>
+</body>
+</html>

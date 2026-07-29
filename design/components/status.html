@@ -1,0 +1,32 @@
+<!-- @dsCard group="Components" name="Sync status & badges" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Status</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+  .status { font-size: 0.8rem; color: var(--text-dim); }
+  .status.bad { color: var(--danger); }
+  .badge { font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); }
+  .badge.vacation { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  .badge.sick { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+  .demo { display: flex; flex-direction: column; gap: 0.5rem; }
+</style>
+</head>
+<body>
+  <div class="demo">
+    <div><span class="status">synced</span> <span class="muted">- all changes on the server</span></div>
+    <div><span class="status">syncing</span> <span class="muted">- push/pull in flight</span></div>
+    <div><span class="status">offline (2)</span> <span class="muted">- no network, 2 pending changes</span></div>
+    <div><span class="status bad">sync error (1)</span> <span class="muted">- server rejected or unreachable</span></div>
+    <div><span class="status bad">signed out</span> <span class="muted">- session expired</span></div>
+  </div>
+  <div class="row" style="margin-top: 1rem">
+    <span class="badge vacation">Vacation</span>
+    <span class="badge sick">Sick</span>
+  </div>
+  <div class="card muted" style="margin-top: 1rem">Today is marked as vacation - timers still work.</div>
+</body>
+</html>

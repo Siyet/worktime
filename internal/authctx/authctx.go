@@ -6,7 +6,7 @@ package authctx
 import (
 	"context"
 
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 type contextKey int

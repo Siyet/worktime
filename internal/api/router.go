@@ -7,10 +7,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"worktime/internal/config"
-	"worktime/internal/mcpserver"
-	"worktime/internal/store"
-	"worktime/web"
+	"github.com/Siyet/worktime/internal/config"
+	"github.com/Siyet/worktime/internal/mcpserver"
+	"github.com/Siyet/worktime/internal/store"
+	"github.com/Siyet/worktime/web"
 )
 
 type server struct {

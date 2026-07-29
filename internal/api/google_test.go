@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"worktime/internal/config"
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/config"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 func newAuthTestServer(t *testing.T, cfg config.Config) *httptest.Server {

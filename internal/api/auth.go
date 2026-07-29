@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"worktime/internal/authctx"
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/authctx"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 const sessionCookieName = "wt_session"

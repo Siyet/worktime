@@ -4,9 +4,9 @@ import (
 	"log"
 	"net/http"
 
-	"worktime/internal/api"
-	"worktime/internal/config"
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/api"
+	"github.com/Siyet/worktime/internal/config"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 func main() {

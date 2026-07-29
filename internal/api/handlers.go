@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -10,9 +10,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"worktime/internal/api"
-	"worktime/internal/config"
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/api"
+	"github.com/Siyet/worktime/internal/config"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 // bearerTransport adds the API token to every MCP HTTP request.

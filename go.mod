@@ -1,4 +1,4 @@
-module worktime
+module github.com/Siyet/worktime
 
 go 1.25.1
 

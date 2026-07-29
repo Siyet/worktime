@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"worktime/internal/authctx"
-	"worktime/internal/store"
+	"github.com/Siyet/worktime/internal/authctx"
+	"github.com/Siyet/worktime/internal/store"
 )
 
 const serverVersion = "0.1.0"

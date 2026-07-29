@@ -6,11 +6,10 @@ import {
   getCursor,
   getRow,
   listDirtyMarkers,
-  saveServerRow,
+  mergeServerRows,
   setCursor,
-  TABLES,
 } from "./db";
-import type { SyncChanges, SyncedRow, SyncResponse, TableName } from "./types";
+import type { SyncChanges, SyncedRow, SyncResponse } from "./types";
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "offline" | "error" | "unauthenticated";
 
@@ -97,18 +96,7 @@ async function syncOnce(): Promise<void> {
     }
 
     const payload: SyncResponse = await response.json();
-    let merged = false;
-    for (const table of TABLES) {
-      for (const incoming of payload.changes[table] ?? []) {
-        const local = await getRow(table, incoming.id);
-        // Keep local edits that are newer than what the server returned; they are
-        // still dirty and will win on the next push.
-        if (!local || incoming.updated_at >= local.updated_at) {
-          await saveServerRow(table, incoming);
-          merged = true;
-        }
-      }
-    }
+    const merged = await mergeServerRows(payload.changes);
     await setCursor(payload.seq);
     for (const marker of markers) {
       await clearDirtyMarker(marker);

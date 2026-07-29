@@ -17,6 +17,7 @@
   const activeProjects = $derived(
     appState.projects.filter((project) => !project.archived).sort((a, b) => a.name.localeCompare(b.name)),
   );
+  const selectedProject = $derived(activeProjects.find((project) => project.id === selectedProjectID));
   const running = $derived(runningEntries());
 
   const todayISO = $derived(localDateISO(clock.now));
@@ -67,12 +68,15 @@
     bind:value={description}
     aria-label="Description"
   />
-  <select bind:value={selectedProjectID} aria-label="Project">
-    <option value={null}>No project</option>
-    {#each activeProjects as project (project.id)}
-      <option value={project.id}>{project.name}</option>
-    {/each}
-  </select>
+  <span class="project-select">
+    <span class="dot select-dot" style="background: {selectedProject?.color ?? 'var(--border)'}"></span>
+    <select bind:value={selectedProjectID} aria-label="Project">
+      <option value={null}>No project</option>
+      {#each activeProjects as project (project.id)}
+        <option value={project.id} style="color: {project.color}">{project.name}</option>
+      {/each}
+    </select>
+  </span>
   <button class="primary" type="submit">Start</button>
 </form>
 
@@ -135,5 +139,21 @@
   .elapsed {
     font-size: 1.05rem;
     font-weight: 600;
+  }
+
+  .project-select {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .select-dot {
+    position: absolute;
+    left: 0.6rem;
+    pointer-events: none;
+  }
+
+  .project-select select {
+    padding-left: 1.6rem;
   }
 </style>

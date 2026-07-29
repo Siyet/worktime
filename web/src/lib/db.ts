@@ -50,6 +50,30 @@ export async function saveServerRow(table: TableName, row: SyncedRow): Promise<v
   await (await db()).put(table, row);
 }
 
+// mergeServerRows applies a pulled batch in a single IndexedDB transaction.
+// One transaction per row would take tens of seconds on a 10k-row bootstrap;
+// batching brings it down to well under a second. Rows older than the local
+// version (pending local edits) are kept.
+export async function mergeServerRows(changes: Partial<Record<TableName, SyncedRow[]>>): Promise<boolean> {
+  const database = await db();
+  const transaction = database.transaction(TABLES, "readwrite");
+  let merged = false;
+  for (const table of TABLES) {
+    const incoming = changes[table] ?? [];
+    if (incoming.length === 0) continue;
+    const store = transaction.objectStore(table);
+    for (const row of incoming) {
+      const local = (await store.get(row.id)) as SyncedRow | undefined;
+      if (!local || row.updated_at >= local.updated_at) {
+        void store.put(row);
+        merged = true;
+      }
+    }
+  }
+  await transaction.done;
+  return merged;
+}
+
 export async function listDirtyMarkers(): Promise<DirtyMarker[]> {
   return (await db()).getAll("dirty");
 }

@@ -15,17 +15,18 @@ test.describe("reports", () => {
     });
 
     await page.goto(server.url + "/#/reports");
-    const summary = page.locator(".card").first();
-    await expect(summary).toContainText("2h 00m");
+    await page.getByRole("button", { name: "Week", exact: true }).click();
+    const stats = page.locator(".stats");
+    await expect(stats).toContainText("2.0h");
 
-    const backendRow = page.locator(".item").filter({ hasText: "Backend" });
+    const backendRow = page.locator(".proj-item").filter({ hasText: "Backend" });
     await expect(backendRow).toContainText("1h 30m");
-    const noProjectRow = page.locator(".item").filter({ hasText: "No project" });
+    const noProjectRow = page.locator(".proj-item").filter({ hasText: "No project" });
     await expect(noProjectRow).toContainText("30m");
 
     // All entries started today, so the month view shows the same grand total.
-    await page.getByLabel("Period").selectOption("month");
-    await expect(summary).toContainText("2h 00m");
+    await page.getByRole("button", { name: "Month" }).click();
+    await expect(stats).toContainText("2.0h");
   });
 
   test("period boundaries: old entries leave this week but stay in last 30 days and leave the Timer feed", async ({
@@ -40,12 +41,13 @@ test.describe("reports", () => {
     });
 
     await page.goto(server.url + "/#/reports");
-    const summary = page.locator(".card").first();
-    await expect(summary).toContainText("30m");
-    await expect(summary).not.toContainText("2h 30m");
+    await page.getByRole("button", { name: "Week", exact: true }).click();
+    const stats = page.locator(".stats");
+    await expect(stats).toContainText("0.5h");
+    await expect(stats).not.toContainText("2.5h");
 
-    await page.getByLabel("Period").selectOption("30days");
-    await expect(summary).toContainText("2h 30m");
+    await page.getByRole("button", { name: "30 days" }).click();
+    await expect(stats).toContainText("2.5h");
 
     // The Timer feed shows only the last 7 days.
     await page.goto(server.url + "/#/");
@@ -63,8 +65,8 @@ test.describe("reports", () => {
     });
 
     await page.goto(server.url + "/#/reports");
-    await page.getByLabel("Period").selectOption("30days");
-    await expect(page.getByText("2d vacation")).toBeVisible();
+    await page.getByRole("button", { name: "30 days" }).click();
+    await expect(page.locator(".stats")).toContainText("2 vac");
   });
 });
 
@@ -115,6 +117,6 @@ test.describe("pwa", () => {
     await expect(page.locator(".item").filter({ hasText: "finished offline" })).toBeVisible();
 
     await page.goto(server.url + "/#/reports");
-    await expect(page.locator(".card").first()).toContainText("1h 0");
+    await expect(page.locator(".stats")).toContainText("1.0h");
   });
 });

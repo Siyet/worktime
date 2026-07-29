@@ -5,6 +5,8 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 ## Architecture (load-bearing decisions)
 
 - **Local-first**: the browser works only with IndexedDB (database `worktime`); a background engine syncs with the server. A running timer is a `time_entries` row with `stopped_at IS NULL` - elapsed is computed client-side from the timestamp, which is why offline "just works". Multiple concurrent running timers are a feature.
+- **Theme**: dark amber is the default (`:root` in `web/src/app.css`); light is the `prefers-color-scheme: light` branch. Time off kinds: `sick` (red), `vacation` (teal), `dayoff` (purple).
+- **Reports**: computed fully client-side from IndexedDB (`web/src/lib/report.ts`), so they work offline. `#/reports/print?from=&to=&projects=&print=1` renders the printable Russian report (light sheet via the `<doc-page>` web component in `lib/print/`).
 - **Sync protocol**: single `POST /api/sync` does push + pull in one transaction. Pull cursor is `server_seq` (global monotonic counter, server-side). Conflicts resolve by last-write-wins on `updated_at` (client clock). Deletes are soft (`deleted_at` tombstones). IDs are client-generated UUIDv7. All timestamps are unix **milliseconds** UTC.
 - **Auth**: Google OIDC -> session cookie; API tokens (`wt_` prefix, sha256-hashed) for MCP/scripts; `WORKTIME_DEV_AUTH=1` auto-signs in a local dev user (dev/e2e only).
 - **MCP**: `/mcp`, streamable HTTP, stateless mode; a per-user server instance is built per request from the Bearer token. Tools call the store directly and write through `store.Sync` so changes reach clients via the normal pull path.
@@ -19,7 +21,7 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 | `internal/store` | SQLite: migrations (`user_version`-based), sync, queries, reports |
 | `internal/api` | chi router, handlers, auth middleware, Google OIDC |
 | `internal/mcpserver` | MCP tools |
-| `web/src` | Svelte 5 app: `lib/db.ts` (IndexedDB), `lib/sync.svelte.ts` (engine), `lib/state/` (runes stores), `pages/` |
+| `web/src` | Svelte 5 app: `lib/db.ts` (IndexedDB), `lib/sync.svelte.ts` (engine), `lib/state/` (runes stores), `lib/report.ts` (report math, shared by Reports and print), `lib/components/` (Logo, ProjectSelect, Seg, DailyChart, TrashIcon), `pages/` |
 | `web/e2e` | Playwright suite (34+ tests) |
 | `design/` | design-system previews, synced with the claude.ai/design "WorkTime" project via DesignSync |
 | `data/` | gitignored: local DBs and personal exports |
@@ -34,7 +36,7 @@ make test       # go test ./...
 make e2e        # builds the binary, then npx playwright test (e2e runs against bin/worktime!)
 ```
 
-Always run before finishing: `go vet ./...`, `cd web && npm run check`, `go test ./...`, and the e2e suite if frontend/sync/API changed. **e2e tests run against the embedded build** - rebuild `bin/worktime` (`make build`) after frontend changes or Playwright will test stale UI.
+Always run before finishing: `go vet ./...`, `cd web && npm run check`, `go test ./...`, and the e2e suite if frontend/sync/API changed. **e2e tests run against the embedded build** - rebuild `bin/worktime` (`make build`) after frontend changes or Playwright will test stale UI. On Windows the e2e fixture launches `bin/worktime.exe` - the Makefile picks the right name via `$(OS)`; a stray extension-less `bin/worktime` next to an old `.exe` means the suite silently tests the old build.
 
 ## Conventions
 

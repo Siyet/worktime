@@ -13,7 +13,8 @@ test.describe("projects", () => {
     await expect(page.locator("input[aria-label='Name']")).toHaveValue("Website");
 
     await page.goto(server.url + "/#/");
-    await expect(page.getByLabel("Project")).toContainText("Website");
+    await page.getByLabel("Project", { exact: true }).click();
+    await expect(page.getByRole("option", { name: "Website" })).toBeVisible();
   });
 
   test("rename persists across reload", async ({ page, server }) => {
@@ -36,13 +37,16 @@ test.describe("projects", () => {
     await expect(page.getByRole("button", { name: "Unarchive" })).toBeVisible();
 
     await page.goto(server.url + "/#/");
-    await expect(page.getByLabel("Project")).not.toContainText("Seasonal");
+    await page.getByLabel("Project", { exact: true }).click();
+    await expect(page.getByRole("option", { name: "No project" })).toBeVisible();
+    await expect(page.getByRole("option", { name: "Seasonal" })).toHaveCount(0);
 
     await page.goto(server.url + "/#/projects");
     await page.getByRole("button", { name: "Unarchive" }).click();
     await expect(page.getByRole("button", { name: "Archive" })).toBeVisible();
     await page.goto(server.url + "/#/");
-    await expect(page.getByLabel("Project")).toContainText("Seasonal");
+    await page.getByLabel("Project", { exact: true }).click();
+    await expect(page.getByRole("option", { name: "Seasonal" })).toBeVisible();
   });
 
   test("deleting a project keeps its time entries but strips the label", async ({ page, server }) => {
@@ -50,7 +54,8 @@ test.describe("projects", () => {
     await addProject(page, "Doomed");
 
     await page.goto(server.url + "/#/");
-    await page.getByLabel("Project").selectOption({ label: "Doomed" });
+    await page.getByLabel("Project", { exact: true }).click();
+    await page.getByRole("option", { name: "Doomed" }).click();
     await page.getByPlaceholder("What are you working on?").fill("labeled work");
     await page.getByRole("button", { name: "Start" }).click();
     const row = page.locator(".item").filter({ hasText: "labeled work" });
@@ -132,5 +137,19 @@ test.describe("time off", () => {
     await page.getByRole("button", { name: "Add" }).click();
     await page.goto(server.url + "/#/");
     await expect(page.getByText(/Today is marked as sick leave - timers still work/)).toBeVisible();
+  });
+
+  test("day off: badge in the list, banner on Timer, counted in the report", async ({ page, server }) => {
+    await page.goto(server.url + "/#/timeoff");
+    await page.getByLabel("Kind").selectOption("Day off");
+    // Date inputs default to today.
+    await page.getByRole("button", { name: "Add" }).click();
+    await expect(page.locator(".item").filter({ hasText: "Day off" })).toBeVisible();
+
+    await page.goto(server.url + "/#/");
+    await expect(page.getByText(/Today is marked as a day off - timers still work/)).toBeVisible();
+
+    await page.goto(server.url + "/#/reports");
+    await expect(page.locator(".stats")).toContainText("1 dayoff");
   });
 });

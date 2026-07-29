@@ -147,7 +147,7 @@ test.describe("offline and sync", () => {
 
     await context.setOffline(true);
     await page.goto(server.url + "/#/reports");
-    await expect(page.locator(".card").first()).toContainText("1h 00m");
+    await expect(page.locator(".stats")).toContainText("1.0h");
     await expect(status(page)).toContainText("offline");
   });
 });

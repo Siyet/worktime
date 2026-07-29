@@ -94,9 +94,10 @@ test.describe("timers", () => {
     await expect(page.locator("input[aria-label='Name']")).toHaveValue("Backend");
 
     await page.goto(server.url + "/#/");
-    const projectSelect = page.getByLabel("Project");
+    const projectSelect = page.getByLabel("Project", { exact: true });
+    await projectSelect.click();
+    await page.getByRole("option", { name: "Backend" }).click();
     await expect(projectSelect).toContainText("Backend");
-    await projectSelect.selectOption({ label: "Backend" });
     await page.getByPlaceholder("What are you working on?").fill("API work");
     await page.getByRole("button", { name: "Start" }).click();
 

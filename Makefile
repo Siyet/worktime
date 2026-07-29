@@ -9,8 +9,16 @@ dev-web:
 build-web:
 	cd web && npm run build
 
+# The e2e fixture launches bin/worktime.exe on Windows, so the binary name must
+# match the platform.
+ifeq ($(OS),Windows_NT)
+BIN := bin/worktime.exe
+else
+BIN := bin/worktime
+endif
+
 build: build-web
-	go build -ldflags "-s -w" -o bin/worktime ./cmd/worktime
+	go build -ldflags "-s -w" -o $(BIN) ./cmd/worktime
 
 test:
 	go test ./...

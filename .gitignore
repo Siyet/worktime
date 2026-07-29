@@ -22,3 +22,6 @@ web/dist/*
 # Playwright
 web/test-results/
 web/playwright-report/
+
+# Claude working files
+.claude/plans/

@@ -5,16 +5,19 @@ export const LOCALES = ["en", "ru", "es", "de", "fr", "zh"] as const;
 export type Locale = (typeof LOCALES)[number];
 export type LocaleSetting = "auto" | Locale;
 export type TimeFormatSetting = "auto" | "12" | "24";
+// dmy = 31.12.2025, mdy = 12/31/2025, ymd = 2025-12-31.
+export type DateFormatSetting = "auto" | "dmy" | "mdy" | "ymd";
 
 const STORAGE_KEY = "worktime-prefs";
 
 interface Prefs {
   locale: LocaleSetting;
   timeFormat: TimeFormatSetting;
+  dateFormat: DateFormatSetting;
 }
 
 function loadPrefs(): Prefs {
-  const prefs: Prefs = { locale: "auto", timeFormat: "auto" };
+  const prefs: Prefs = { locale: "auto", timeFormat: "auto", dateFormat: "auto" };
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Partial<Prefs>;
     if (raw.locale === "auto" || (LOCALES as readonly string[]).includes(raw.locale ?? "")) {
@@ -22,6 +25,9 @@ function loadPrefs(): Prefs {
     }
     if (raw.timeFormat === "auto" || raw.timeFormat === "12" || raw.timeFormat === "24") {
       prefs.timeFormat = raw.timeFormat;
+    }
+    if (raw.dateFormat === "auto" || raw.dateFormat === "dmy" || raw.dateFormat === "mdy" || raw.dateFormat === "ymd") {
+      prefs.dateFormat = raw.dateFormat;
     }
   } catch {
     // Corrupt storage falls back to defaults.
@@ -33,7 +39,10 @@ export const prefs = $state(loadPrefs());
 
 export function updatePrefs(patch: Partial<Prefs>): void {
   Object.assign(prefs, patch);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ locale: prefs.locale, timeFormat: prefs.timeFormat }));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ locale: prefs.locale, timeFormat: prefs.timeFormat, dateFormat: prefs.dateFormat }),
+  );
 }
 
 // The UI language: explicit choice, or the closest browser language, or English.

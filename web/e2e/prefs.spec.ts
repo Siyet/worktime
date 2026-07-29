@@ -22,6 +22,23 @@ test.describe("preferences", () => {
     await expect(page.getByRole("link", { name: "Timer" })).toBeVisible();
   });
 
+  test("date format switches time off dates between styles", async ({ page, server }) => {
+    await seedServer(server.url, {
+      timeOff: [{ kind: "vacation", dateFrom: "2026-07-01", dateTo: "2026-07-03" }],
+    });
+
+    await page.goto(server.url + "/#/settings");
+    await page.getByLabel("Date format").selectOption("dmy");
+    await page.goto(server.url + "/#/timeoff");
+    const row = page.locator(".item").filter({ hasText: "Vacation" });
+    await expect(row).toContainText("01.07.2026 - 03.07.2026");
+
+    await page.goto(server.url + "/#/settings");
+    await page.getByLabel("Date format").selectOption("ymd");
+    await page.goto(server.url + "/#/timeoff");
+    await expect(row).toContainText("2026-07-01 - 2026-07-03");
+  });
+
   test("time format switches finished entries between 24h and AM/PM", async ({ page, server }) => {
     // A finished entry today at 15:00-15:30 local time.
     const start = new Date();

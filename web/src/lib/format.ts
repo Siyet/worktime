@@ -1,4 +1,4 @@
-import { formattingLocale, hourCycle } from "./settings.svelte";
+import { formattingLocale, hourCycle, prefs } from "./settings.svelte";
 
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -27,6 +27,32 @@ export function formatTime(ms: number): string {
 
 export function formatDay(ms: number): string {
   return new Date(ms).toLocaleDateString(formattingLocale(), { weekday: "short", month: "short", day: "numeric" });
+}
+
+// Full numeric date, honoring the date-format preference.
+export function formatDate(ms: number): string {
+  const date = new Date(ms);
+  return formatDateParts(date.getFullYear(), date.getMonth() + 1, date.getDate(), ms);
+}
+
+// Same, for YYYY-MM-DD strings (time off ranges) without a timezone round-trip.
+export function formatDateISO(dayISO: string): string {
+  const [year, month, day] = dayISO.split("-").map(Number);
+  return formatDateParts(year!, month!, day!, new Date(dayISO + "T12:00").getTime());
+}
+
+function formatDateParts(year: number, month: number, day: number, ms: number): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  switch (prefs.dateFormat) {
+    case "dmy":
+      return `${pad(day)}.${pad(month)}.${year}`;
+    case "mdy":
+      return `${pad(month)}/${pad(day)}/${year}`;
+    case "ymd":
+      return `${year}-${pad(month)}-${pad(day)}`;
+    default:
+      return new Date(ms).toLocaleDateString(formattingLocale());
+  }
 }
 
 // localDateISO renders a timestamp as YYYY-MM-DD in the user's local timezone.

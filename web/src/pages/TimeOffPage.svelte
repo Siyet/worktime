@@ -1,6 +1,6 @@
 <script lang="ts">
   import { appState, addTimeOff, deleteTimeOff } from "../lib/state/app.svelte";
-  import { localDateISO } from "../lib/format";
+  import { formatDateISO, localDateISO } from "../lib/format";
   import { t } from "../lib/i18n";
   import Seg from "../lib/components/Seg.svelte";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
@@ -53,7 +53,7 @@
       <span class="badge" data-kind={timeOff.kind}>
         {t(timeOff.kind === "sick" ? "Sick" : timeOff.kind === "dayoff" ? "Day off" : "Vacation")}
       </span>
-      <span class="mono">{timeOff.date_from} - {timeOff.date_to}</span>
+      <span class="mono">{formatDateISO(timeOff.date_from)} - {formatDateISO(timeOff.date_to)}</span>
       <span class="muted">{inclusiveDays(timeOff.date_from, timeOff.date_to)}d</span>
       {#if timeOff.note}<span class="muted">{timeOff.note}</span>{/if}
       <span class="spacer"></span>

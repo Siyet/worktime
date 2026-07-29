@@ -1,8 +1,15 @@
 <script lang="ts">
   import { syncState } from "../lib/sync.svelte";
   import { logout } from "../lib/session.svelte";
-  import { prefs, updatePrefs, type LocaleSetting, type TimeFormatSetting } from "../lib/settings.svelte";
+  import {
+    prefs,
+    updatePrefs,
+    type DateFormatSetting,
+    type LocaleSetting,
+    type TimeFormatSetting,
+  } from "../lib/settings.svelte";
   import { t } from "../lib/i18n";
+  import { formatDate } from "../lib/format";
   import type { User } from "../lib/types";
 
   // Language names are shown in their own language on purpose.
@@ -106,6 +113,20 @@
       <option value="24">{t("24-hour")}</option>
     </select>
   </div>
+  <div class="row pref">
+    <label for="date-format">{t("Date format")}</label>
+    <span class="spacer"></span>
+    <select
+      id="date-format"
+      value={prefs.dateFormat}
+      onchange={(event) => updatePrefs({ dateFormat: event.currentTarget.value as DateFormatSetting })}
+    >
+      <option value="auto">{t("Auto")}</option>
+      <option value="dmy">31.12.2025</option>
+      <option value="mdy">12/31/2025</option>
+      <option value="ymd">2025-12-31</option>
+    </select>
+  </div>
 </div>
 
 <div class="card">
@@ -127,7 +148,7 @@
   {#each tokens as token (token.id)}
     <div class="row item">
       <span>{token.name}</span>
-      <span class="muted">{t("created {date}", { date: new Date(token.created_at).toLocaleDateString() })}</span>
+      <span class="muted">{t("created {date}", { date: formatDate(token.created_at) })}</span>
       <span class="spacer"></span>
       <button class="danger" onclick={() => deleteToken(token.id)}>{t("Revoke")}</button>
     </div>

@@ -2,26 +2,48 @@
   box-sizing: border-box;
 }
 
+/* Dark amber theme is the default; light is the media-query branch. */
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --text: #1a202c;
-  --text-dim: #64748b;
-  --border: #e2e8f0;
-  --accent: #2563eb;
-  --accent-text: #ffffff;
-  --danger: #dc2626;
+  --bg: #151a24;
+  --surface: #1b2130;
+  --text: #dbe2ef;
+  --text-dim: #8a93a8;
+  --border: #2a3245;
+  --accent: #e8a33d;
+  --accent-text: #16120a;
+  --danger: #e05252;
+  --teal: #40bec4;
+  --purple: #b57de8;
+  --green: #46b478;
+  --blue: #607dbe;
+  --grid: rgba(255, 255, 255, 0.07);
+  --axis: rgba(255, 255, 255, 0.35);
+  --hover: rgba(255, 255, 255, 0.06);
   --radius: 8px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: #0f172a;
-    --surface: #1e293b;
-    --text: #e2e8f0;
-    --text-dim: #94a3b8;
-    --border: #334155;
-    --accent: #3b82f6;
+    --bg: #f5f3ee;
+    --surface: #ffffff;
+    --text: #232936;
+    --text-dim: #6b7386;
+    --border: #e3e0d8;
+    --accent: #cd8a26;
+    --accent-text: #ffffff;
+    --danger: #d24343;
+    --teal: #2ba3a9;
+    --purple: #9a5fd0;
+    --green: #35935f;
+    --blue: #5e7bc0;
+    --grid: rgba(20, 26, 40, 0.08);
+    --axis: rgba(20, 26, 40, 0.4);
+    --hover: rgba(20, 26, 40, 0.06);
+  }
+
+  input[type="date"] {
+    color-scheme: light;
   }
 }
 
@@ -29,9 +51,18 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent);
+  filter: brightness(1.15);
 }
 
 button {
@@ -45,17 +76,38 @@ button {
 }
 
 button:hover {
-  border-color: var(--accent);
+  border-color: var(--text-dim);
 }
 
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-text);
+  font-weight: 600;
+}
+
+button.primary:hover {
+  filter: brightness(1.08);
 }
 
 button.danger {
   color: var(--danger);
+}
+
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.5rem;
+}
+
+button.icon svg {
+  display: block;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 input,
@@ -68,11 +120,45 @@ select {
   padding: 0.4rem 0.6rem;
 }
 
+input::placeholder {
+  color: var(--text-dim);
+}
+
+input[type="date"] {
+  color-scheme: dark;
+}
+
 input:focus,
 select:focus,
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.seg button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.35rem 0.85rem;
+  color: var(--text-dim);
+}
+
+.seg button + button {
+  border-left: 1px solid var(--border);
+}
+
+.seg button.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
 .card {
@@ -105,5 +191,30 @@ button:focus-visible {
 }
 
 .mono {
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+}
+
+.stats {
+  display: flex;
+  gap: 1.8rem;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+}
+
+.stat b {
+  display: block;
+  font-size: 1.25rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stat.hi b {
+  color: var(--accent);
+}
+
+.stat i {
+  font-style: normal;
+  font-size: 0.76rem;
+  color: var(--text-dim);
 }

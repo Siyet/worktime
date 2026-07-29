@@ -10,8 +10,9 @@
   .status { font-size: 0.8rem; color: var(--text-dim); }
   .status.bad { color: var(--danger); }
   .badge { font-size: 0.8rem; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); }
-  .badge.vacation { background: color-mix(in srgb, var(--accent) 15%, transparent); }
-  .badge.sick { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+  .badge.vacation { background: color-mix(in srgb, var(--teal) 20%, transparent); border-color: var(--teal); }
+  .badge.sick { background: color-mix(in srgb, var(--danger) 20%, transparent); border-color: var(--danger); }
+  .badge.dayoff { background: color-mix(in srgb, var(--purple) 20%, transparent); border-color: var(--purple); }
   .demo { display: flex; flex-direction: column; gap: 0.5rem; }
 </style>
 </head>
@@ -26,6 +27,7 @@
   <div class="row" style="margin-top: 1rem">
     <span class="badge vacation">Vacation</span>
     <span class="badge sick">Sick</span>
+    <span class="badge dayoff">Day off</span>
   </div>
   <div class="card muted" style="margin-top: 1rem">Today is marked as vacation - timers still work.</div>
 </body>

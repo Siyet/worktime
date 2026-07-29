@@ -1,0 +1,143 @@
+<!-- @dsCard group="Pages" name="Report — PDF export" subtitle="Dark reference stylistics, print-ready" -->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>WorkTime — отчёт за июль 2026</title>
+<style>
+doc-page:not(:defined){visibility:hidden}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;font-family:system-ui,"Segoe UI",Roboto,sans-serif;font-size:10pt;line-height:1.5;color:#232936}
+a{color:#cd8a26}a:hover{color:#cd8a26}
+.sheet{background:#ffffff;padding:0.55in 0.6in;min-height:100%}
+h1{margin:0 0 3px;font-size:15pt;letter-spacing:0.2px}
+h1 span{color:#cd8a26}
+.sub{color:#6b7386;font-size:8.5pt}
+.stats{display:flex;gap:22px;flex-wrap:wrap;margin:14px 0 4px;font-family:ui-monospace,Menlo,Consolas,monospace;break-inside:avoid}
+.stat b{display:block;font-size:13pt;font-weight:600}
+.stat.hi b{color:#b97a1e}
+.stat i{font-style:normal;font-size:7.5pt;color:#6b7386}
+h2{font-size:9pt;margin:16px 0 6px;text-transform:uppercase;letter-spacing:0.06em;color:#6b7386}
+.figure{break-inside:avoid}
+svg{display:block;width:100%}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:5px;font-size:7.5pt;color:#6b7386;align-items:center}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2.5px;margin-right:4px;vertical-align:-1.5px}
+table{width:100%;border-collapse:collapse;font-size:8.5pt}
+th{text-align:left;font-size:6.8pt;text-transform:uppercase;letter-spacing:0.05em;color:#6b7386;padding:3px 5px;border-bottom:1.2px solid #232936}
+td{padding:3.5px 5px;border-bottom:1px solid #e3e0d8}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+tr.group td{font-weight:600;background:rgba(20,26,40,0.04)}
+tr.entry td:first-child{padding-left:16px;color:#6b7386}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
+.pbar{height:4px;border-radius:2px;background:#e9e6df;overflow:hidden;width:100%}
+.pbar div{height:100%;border-radius:2px}
+.note{color:#6b7386;font-size:7.5pt;line-height:1.5;margin-top:14px}
+.foot{font-size:7.5pt;color:#6b7386;text-align:center;background:#ffffff;padding:4px 0}
+</style>
+</head>
+<body>
+<doc-page margin="0">
+  <div slot="footer" class="foot">WT · отчёт · 1–29 июля 2026</div>
+  <div class="sheet">
+  <h1 style="display:flex;align-items:center;gap:8px"><svg width="22" height="22" viewBox="0 0 76 76" fill="none" aria-label="WT logo"><line x1="38" y1="40" x2="38" y2="12" stroke="#cd8a26" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="40" x2="60" y2="52" stroke="#cd8a26" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="12" x2="60" y2="52" stroke="#cd8a26" stroke-width="2.5" stroke-linecap="round" opacity="0.35"></line><circle cx="38" cy="12" r="6" fill="#cd8a26"></circle><circle cx="60" cy="52" r="5.5" fill="#cd8a26"></circle><circle cx="14" cy="30" r="3.5" fill="#cd8a26" opacity="0.35"></circle><circle cx="20" cy="60" r="3" fill="#cd8a26" opacity="0.25"></circle><circle cx="38" cy="40" r="7" fill="#232936"></circle></svg>WT · <span>отчёт по времени</span> · июль 2026</h1>
+  <div class="sub">Период: 1–29 июля 2026 · все проекты · сформировано 29.07.2026</div>
+  <div class="stats" id="stats"></div>
+  <div class="figure">
+    <h2>Часы по дням</h2>
+    <svg id="chart" viewBox="0 0 760 250" font-family="ui-monospace,Menlo,Consolas,monospace"></svg>
+    <div class="legend">
+      <span><span class="sw" style="background:#e8a33d"></span>часы за день</span>
+      <span><span class="sw" style="background:rgba(96,125,190,.35)"></span>выходной</span>
+      <span><span class="sw" style="background:rgba(64,190,196,.4)"></span>отпуск</span>
+      <span><span class="sw" style="background:rgba(224,82,82,.35);border:1px solid #e05252"></span>больничный</span>
+      <span><span class="sw" style="background:rgba(181,125,232,.45)"></span>дей-офф</span>
+    </div>
+  </div>
+  <div class="figure">
+    <h2>По проектам</h2>
+    <table id="byproj"><thead><tr><th style="width:8rem">Проект</th><th></th><th class="num" style="width:5rem">Время</th><th class="num" style="width:2.6rem">%</th></tr></thead><tbody></tbody></table>
+  </div>
+  <h2>Детализация</h2>
+  <table id="detail"><thead><tr><th>Описание</th><th style="width:5.5rem">Дата</th><th style="width:4.5rem">Начало</th><th class="num" style="width:4.5rem">Время</th></tr></thead><tbody></tbody></table>
+  <div class="note">Среднее считается по всем затреканным часам, делённым на количество рабочих дней в периоде (без выходных, отпуска, дей-оффов и больничных). Отсутствия в периоде: отпуск 6–8 июля, больничный 16–17 июля, дей-оффы 20–21 июля.</div>
+  </div>
+</doc-page>
+<script src="./doc-page.js"></script>
+<script>
+const PROJECTS={MySky:'#e8a33d',PT:'#607dbe',IV:'#d76a9b'};
+const OFFC={vacation:'rgba(64,190,196,.15)',dayoff:'rgba(181,125,232,.17)'};
+const OFF={'2026-06-25':'vacation','2026-06-26':'vacation','2026-07-06':'vacation','2026-07-07':'vacation','2026-07-08':'vacation','2026-07-16':'sick','2026-07-17':'sick','2026-07-20':'dayoff','2026-07-21':'dayoff'};
+const DESCS={MySky:['AIM V2 epic','Доработка топологии','Code review','Планирование спринта'],PT:['AIM Daily','Синк с командой'],IV:['Интервью кандидатов','Скрининг резюме']};
+let seed=42;const rnd=()=>(seed=(seed*1103515245+12345)&0x7fffffff)/0x7fffffff;
+const entries=[];
+for(let d=new Date(2026,5,15);d<=new Date(2026,6,29);d.setDate(d.getDate()+1)){
+  const iso=d.toISOString().slice(0,10),dow=d.getDay(),off=OFF[iso];
+  if(off==='vacation'||off==='dayoff')continue;
+  if((dow===0||dow===6)&&rnd()<0.8)continue;
+  const n=off==='sick'?1:1+Math.floor(rnd()*4);let t=9*60+Math.floor(rnd()*60);
+  for(let i=0;i<n;i++){
+    const r=rnd();const p=r<0.68?'MySky':r<0.87?'PT':'IV';
+    const mins=off==='sick'?15+Math.floor(rnd()*60):20+Math.floor(rnd()*140);
+    entries.push({date:iso,project:p,desc:DESCS[p][Math.floor(rnd()*DESCS[p].length)],mins,start:t});
+    t+=mins+Math.floor(rnd()*45);
+  }
+}
+const es=entries.filter(e=>e.date>='2026-07-01'&&e.date<='2026-07-29');
+const fmt=m=>Math.floor(m/60)+'ч '+String(Math.round(m%60)).padStart(2,'0')+'м';
+const fmtH=m=>(m/60).toFixed(1)+' ч';
+const fmtT=m=>{let h=Math.floor(m/60)%24,mm=String(m%60).padStart(2,'0');return h+':'+mm};
+const dayLbl=iso=>{const[y,mo,dd]=iso.split('-');return +dd+'.'+mo};
+const isWknd=iso=>{const d=new Date(iso+'T12:00').getDay();return d===0||d===6};
+const days=[];for(let d=new Date(2026,6,1);d<=new Date(2026,6,29);d.setDate(d.getDate()+1))days.push(d.toISOString().slice(0,10));
+const total=es.reduce((s,e)=>s+e.mins,0);
+const workDays=days.filter(d=>!isWknd(d)&&!OFF[d]);
+const byDay={};days.forEach(d=>byDay[d]=0);es.forEach(e=>byDay[e.date]+=e.mins);
+const peak=days.slice().sort((a,b)=>byDay[b]-byDay[a])[0];
+const wknd=es.filter(e=>isWknd(e.date)).reduce((s,e)=>s+e.mins,0);
+const offCnt={vacation:0,sick:0,dayoff:0};days.forEach(d=>{if(OFF[d])offCnt[OFF[d]]++});
+const perP={};es.forEach(e=>perP[e.project]=(perP[e.project]||0)+e.mins);
+const topP=Object.entries(perP).sort((a,b)=>b[1]-a[1]);
+document.getElementById('stats').innerHTML=[
+  [fmtH(total),'всего за период',''],
+  [fmtH(total/workDays.length),'в среднем на рабочий день ('+workDays.length+' дн.)','hi'],
+  [fmtH(byDay[peak]),'максимум за день · '+dayLbl(peak),''],
+  [fmtH(wknd),'в выходные ('+Math.round(wknd/total*100)+'%)',''],
+  [(offCnt.vacation+offCnt.sick+offCnt.dayoff)+' дн.','отсутствия: '+offCnt.vacation+' отпуск · '+offCnt.sick+' больничный · '+offCnt.dayoff+' дей-офф','']
+].map(([v,l,c])=>`<div class="stat ${c}"><b>${v}</b><i>${l}</i></div>`).join('');
+// chart
+const byDayP={};days.forEach(d=>byDayP[d]={});es.forEach(e=>byDayP[e.date][e.project]=(byDayP[e.date][e.project]||0)+e.mins);
+const max=Math.max(120,...days.map(d=>byDay[d]));
+const yMax=Math.ceil(max/120)*120,W=760,H=250,padL=34,padT=12,padB=18,cw=(W-padL)/days.length,bw=Math.min(cw*0.72,22);
+const y0=H-padB,ph=y0-padT,yOf=m=>y0-ph*m/yMax;
+let s='<defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="rgba(224,82,82,0.10)"></rect><line x1="0" y1="0" x2="0" y2="7" stroke="rgba(224,82,82,0.38)" stroke-width="1.6"></line></pattern></defs>';
+days.forEach((d,i)=>{const x=padL+i*cw;
+  if(OFF[d]==='sick')s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="url(#hatch)"></rect>`;
+  else if(OFF[d])s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="${OFFC[OFF[d]]}"></rect>`;
+  else if(isWknd(d))s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="rgba(96,125,190,0.14)"></rect>`;});
+for(let g=0;g<=yMax;g+=120){const y=yOf(g);
+  s+=`<line x1="${padL}" y1="${y}" x2="${W}" y2="${y}" stroke="rgba(20,26,40,0.09)"></line>`;
+  if(g)s+=`<text x="${padL-6}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#6b7386">${g/60}ч</text>`;}
+days.forEach((d,i)=>{
+  let y=y0;const x=padL+i*cw+(cw-bw)/2;
+  for(const p of Object.keys(PROJECTS)){const m=byDayP[d][p];if(!m)continue;
+    const h=ph*m/yMax;y-=h;
+    s+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1.5" fill="${PROJECTS[p]}"></rect>`;}
+  if(i%2===0)s+=`<text x="${x+bw/2}" y="${H-4}" text-anchor="middle" font-size="9.5" fill="#6b7386">${+d.slice(8)}</text>`;});
+const avg=total/workDays.length,yA=yOf(avg);
+s+=`<line x1="${padL}" y1="${yA}" x2="${W}" y2="${yA}" stroke="#b97a1e" stroke-width="1.3" stroke-dasharray="6 5" opacity="0.75"></line>`;
+s+=`<text x="${W-4}" y="${yA-5}" text-anchor="end" font-size="10" fill="#b97a1e">среднее ${(avg/60).toFixed(1)}ч / раб. день</text>`;
+s+=`<line x1="${padL}" y1="${y0}" x2="${W}" y2="${y0}" stroke="rgba(20,26,40,0.4)"></line>`;
+document.getElementById('chart').innerHTML=s;
+// by project
+document.querySelector('#byproj tbody').innerHTML=topP.map(([p,m])=>
+  `<tr><td><span class="dot" style="background:${PROJECTS[p]}"></span>${p}</td><td><div class="pbar"><div style="width:${Math.round(m/total*100)}%;background:${PROJECTS[p]}"></div></div></td><td class="num">${fmt(m)}</td><td class="num">${Math.round(m/total*100)}%</td></tr>`).join('');
+// detail grouped by project
+let html='';
+for(const[p,m]of topP){
+  html+=`<tr class="group"><td colspan="3"><span class="dot" style="background:${PROJECTS[p]}"></span>${p}</td><td class="num">${fmt(m)}</td></tr>`;
+  es.filter(e=>e.project===p).sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start)
+    .forEach(e=>html+=`<tr class="entry"><td>${e.desc}</td><td class="num">${dayLbl(e.date)}</td><td class="num">${fmtT(e.start)}</td><td class="num">${fmt(e.mins)}</td></tr>`);}
+document.querySelector('#detail tbody').innerHTML=html;
+</script>
+</body>
+</html>

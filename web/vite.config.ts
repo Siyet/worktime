@@ -11,8 +11,8 @@ export default defineConfig({
         name: "WorkTime",
         short_name: "WorkTime",
         description: "Free, open-source, offline-first time tracker",
-        theme_color: "#2563eb",
-        background_color: "#0f172a",
+        theme_color: "#151a24",
+        background_color: "#151a24",
         display: "standalone",
         start_url: "/",
         icons: [

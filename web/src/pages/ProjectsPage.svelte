@@ -1,8 +1,12 @@
 <script lang="ts">
   import { appState, createProject, deleteProject, updateProject } from "../lib/state/app.svelte";
+  import TrashIcon from "../lib/components/TrashIcon.svelte";
+
+  // Design palette defaults: new projects cycle through these instead of a single blue.
+  const paletteColors = ["#e8a33d", "#607dbe", "#d76a9b", "#40bec4", "#b57de8", "#46b478"];
 
   let newName = $state("");
-  let newColor = $state("#2563eb");
+  let newColor = $state(paletteColors[0]!);
 
   const sorted = $derived(
     [...appState.projects].sort((left, right) => {
@@ -17,6 +21,7 @@
     if (!name) return;
     newName = "";
     await createProject(name, newColor);
+    newColor = paletteColors[appState.projects.length % paletteColors.length]!;
   }
 </script>
 
@@ -47,7 +52,7 @@
       <button onclick={() => updateProject({ ...project, archived: !project.archived })}>
         {project.archived ? "Unarchive" : "Archive"}
       </button>
-      <button class="danger" title="Delete project" onclick={() => deleteProject(project.id)}>×</button>
+      <button class="danger icon" title="Delete project" onclick={() => deleteProject(project.id)}><TrashIcon /></button>
     </div>
   {:else}
     <p class="muted">No projects yet.</p>

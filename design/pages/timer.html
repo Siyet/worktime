@@ -15,15 +15,19 @@
   nav a.active { color: var(--text); background: var(--surface); border: 1px solid var(--border); }
   .status { font-size: 0.8rem; color: var(--text-dim); }
   .elapsed { font-size: 1.05rem; font-weight: 600; }
-  .project-select { position: relative; display: inline-flex; align-items: center; }
-  .project-select .dot { position: absolute; left: 0.6rem; pointer-events: none; }
-  .project-select select { padding-left: 1.6rem; }
+  .pselect { position: relative; }
+  .pselect > button { display: inline-flex; align-items: center; gap: 0.5rem; }
+  .pselect .caret { color: var(--text-dim); font-size: 0.7rem; }
+  .pselect .menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.25rem; display: none; z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .pselect.open .menu { display: block; }
+  .pselect .menu button { display: flex; align-items: center; gap: 0.5rem; width: 100%; border: none; background: transparent; text-align: left; padding: 0.35rem 0.6rem; border-radius: 5px; white-space: nowrap; }
+  .pselect .menu button:hover { background: var(--hover); }
 </style>
 </head>
 <body>
 <div class="shell">
   <header>
-    <span class="logo">WorkTime</span>
+    <span class="logo" style="display:inline-flex;align-items:center;gap:0.45rem"><svg width="26" height="26" viewBox="0 0 76 76" fill="none" aria-label="WT logo"><line x1="38" y1="40" x2="38" y2="12" stroke="var(--accent)" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="40" x2="60" y2="52" stroke="var(--accent)" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="12" x2="60" y2="52" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"></line><circle cx="38" cy="12" r="6" fill="var(--accent)"></circle><circle cx="60" cy="52" r="5.5" fill="var(--accent)"></circle><circle cx="14" cy="30" r="3.5" fill="var(--accent)" opacity="0.35"></circle><circle cx="20" cy="60" r="3" fill="var(--accent)" opacity="0.25"></circle><circle cx="38" cy="40" r="7" fill="var(--text)"></circle></svg>W<span style="color: var(--accent)">T</span></span>
     <nav>
       <a class="active" href="#">Timer</a><a href="#">Projects</a><a href="#">Time off</a><a href="#">Reports</a><a href="#">Settings</a>
     </nav>
@@ -31,16 +35,21 @@
   </header>
   <div class="card row">
     <input style="flex: 1" placeholder="What are you working on?" />
-    <span class="project-select">
-      <span class="dot" style="background: #3f51b5"></span>
-      <select><option>MySky</option></select>
+    <span class="pselect" id="psel">
+      <button type="button"><span class="dot" style="background: var(--accent)"></span><span class="plabel">MySky</span><span class="caret">▾</span></button>
+      <span class="menu">
+        <button type="button" data-c="var(--accent)"><span class="dot" style="background: var(--accent)"></span>MySky</button>
+        <button type="button" data-c="var(--blue)"><span class="dot" style="background: var(--blue)"></span>PT</button>
+        <button type="button" data-c="#d76a9b"><span class="dot" style="background: #d76a9b"></span>IV</button>
+        <button type="button" data-c="var(--border)"><span class="dot" style="background: var(--border)"></span>No project</button>
+      </span>
     </span>
     <button class="primary">Start</button>
   </div>
   <div class="card">
     <h3>Running</h3>
     <div class="row item">
-      <span class="dot" style="background: #ff0000"></span>
+      <span class="dot" style="background: var(--blue)"></span>
       <span>AIM Daily</span>
       <span class="muted">PT</span>
       <span class="spacer"></span>
@@ -55,24 +64,33 @@
       <span class="muted mono">7h 58m</span>
     </div>
     <div class="row item">
-      <span class="dot" style="background: #3f51b5"></span>
+      <span class="dot" style="background: var(--accent)"></span>
       <span>AIM V2 обсуждение с командой</span>
       <span class="muted">MySky</span>
       <span class="spacer"></span>
       <span class="muted mono">11:00 AM-12:04 PM</span>
       <span class="mono">1h 04m</span>
-      <button class="danger" title="Delete entry">&times;</button>
+      <button class="danger icon" title="Delete entry"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
     </div>
     <div class="row item">
-      <span class="dot" style="background: #3f51b5"></span>
+      <span class="dot" style="background: var(--accent)"></span>
       <span>Доработка топологии + AIM V2 epic</span>
       <span class="muted">MySky</span>
       <span class="spacer"></span>
       <span class="muted mono">9:15 AM-11:00 AM</span>
       <span class="mono">1h 45m</span>
-      <button class="danger" title="Delete entry">&times;</button>
+      <button class="danger icon" title="Delete entry"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
     </div>
   </div>
 </div>
+<script>
+const ps=document.getElementById('psel');
+ps.querySelector(':scope > button').onclick=()=>ps.classList.toggle('open');
+ps.querySelectorAll('.menu button').forEach(b=>b.onclick=()=>{
+  ps.querySelector('.plabel').textContent=b.textContent;
+  ps.querySelector(':scope > button .dot').style.background=b.dataset.c;
+  ps.classList.remove('open');});
+document.addEventListener('click',e=>{if(!ps.contains(e.target))ps.classList.remove('open')});
+</script>
 </body>
 </html>

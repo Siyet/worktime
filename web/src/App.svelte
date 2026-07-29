@@ -4,6 +4,7 @@
   import { startSyncEngine } from "./lib/sync.svelte";
   import { appState, loadStateFromDB } from "./lib/state/app.svelte";
   import { initSession, session } from "./lib/session.svelte";
+  import Logo from "./lib/components/Logo.svelte";
   import TimerPage from "./pages/TimerPage.svelte";
   import ProjectsPage from "./pages/ProjectsPage.svelte";
   import TimeOffPage from "./pages/TimeOffPage.svelte";
@@ -38,7 +39,7 @@
 
 <div class="shell">
   <header>
-    <span class="logo">WorkTime</span>
+    <span class="logo"><Logo />W<span class="logo-accent">T</span></span>
     <nav>
       {#each tabs as tab (tab.path)}
         <a href={"#" + tab.path} class:active={route.path === tab.path}>{tab.label}</a>
@@ -94,8 +95,15 @@
   }
 
   .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
     font-weight: 700;
     font-size: 1.1rem;
+  }
+
+  .logo-accent {
+    color: var(--accent);
   }
 
   nav {

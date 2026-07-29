@@ -1,0 +1,282 @@
+<!-- @dsCard group="Pages" name="Reports page (v3 — dark, interactive)" subtitle="Reference stylistics: amber bars, day bands, time off" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Reports</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+.shell{max-width:68rem;margin:0 auto}
+header{display:flex;align-items:center;gap:1rem;padding:0.8rem 0;flex-wrap:wrap}
+.logo{font-weight:700;font-size:1.1rem}
+.logo span{color:var(--accent)}
+nav{display:flex;gap:0.2rem;flex:1}
+nav a{color:var(--text-dim);text-decoration:none;padding:0.3rem 0.7rem;border-radius:var(--radius)}
+nav a.active{color:var(--text);background:var(--surface);border:1px solid var(--border)}
+.toolbar{display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:2.2fr 1fr;gap:1rem;align-items:start}
+@media(max-width:860px){.grid2{grid-template-columns:1fr}}
+.chip{display:inline-flex;align-items:center;gap:0.4rem;border:1px solid var(--border);border-radius:99px;padding:0.2rem 0.7rem;cursor:pointer;font-size:0.85rem;background:var(--surface);user-select:none}
+.chip.off{opacity:0.4}
+.chip .dot{width:8px;height:8px}
+#chart{width:100%;display:block}
+.tip{position:fixed;pointer-events:none;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:0.45rem 0.65rem;border-radius:8px;font-family:var(--mono);font-size:0.78rem;line-height:1.45;z-index:10;display:none;white-space:nowrap;box-shadow:0 6px 22px rgba(0,0,0,.45)}
+.legend{display:flex;gap:1.1rem;flex-wrap:wrap;margin-top:0.6rem;font-size:0.78rem;color:var(--text-dim);align-items:center}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+table{width:100%;border-collapse:collapse;font-size:0.9rem}
+th{text-align:left;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);padding:0.4rem 0.5rem;border-bottom:1px solid var(--border)}
+td{padding:0.45rem 0.5rem;border-bottom:1px solid var(--border)}
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tr.group td{font-weight:600;background:var(--hover)}
+tr.entry td:first-child{padding-left:1.6rem;color:var(--text-dim)}
+.builder{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:0.9rem}
+.builder h4{margin:0 0 0.4rem;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim)}
+.builder label{display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;padding:0.15rem 0;cursor:pointer}
+.filterpill{background:var(--accent);color:var(--accent-text);border:none;border-radius:99px;padding:0.15rem 0.6rem;font-size:0.78rem;cursor:pointer;display:none;font-weight:600}
+.pbar{height:5px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:0.2rem}
+.pbar div{height:100%;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <span class="logo" style="display:inline-flex;align-items:center;gap:0.45rem"><svg width="26" height="26" viewBox="0 0 76 76" fill="none" aria-label="WT logo"><line x1="38" y1="40" x2="38" y2="12" stroke="var(--accent)" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="40" x2="60" y2="52" stroke="var(--accent)" stroke-width="5" stroke-linecap="round"></line><line x1="38" y1="12" x2="60" y2="52" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" opacity="0.35"></line><circle cx="38" cy="12" r="6" fill="var(--accent)"></circle><circle cx="60" cy="52" r="5.5" fill="var(--accent)"></circle><circle cx="14" cy="30" r="3.5" fill="var(--accent)" opacity="0.35"></circle><circle cx="20" cy="60" r="3" fill="var(--accent)" opacity="0.25"></circle><circle cx="38" cy="40" r="7" fill="var(--text)"></circle></svg>W<span>T</span></span>
+    <nav><a href="timer.html">Timer</a><a href="#">Projects</a><a href="#">Time off</a><a class="active" href="#">Reports</a><a href="#">Settings</a></nav>
+    <span class="muted" style="font-size:0.8rem">synced</span>
+  </header>
+
+  <div class="card toolbar">
+    <span class="seg" id="preset">
+      <button data-r="week">Week</button><button data-r="lastweek">Last week</button><button data-r="month" class="on">Month</button><button data-r="30">30 days</button>
+    </span>
+    <input type="date" id="from" value="2026-07-01" />
+    <span class="muted">–</span>
+    <input type="date" id="to" value="2026-07-29" />
+    <span id="projchips" class="row" style="gap:0.4rem"></span>
+    <button class="filterpill" id="daypill"></button>
+    <span class="spacer"></span>
+    <button id="csv">Export CSV</button>
+    <a href="reports-v2-print.html"><button class="primary">PDF report</button></a>
+  </div>
+
+  <div class="card stats">
+    <div class="stat"><b id="kTotal">—</b><i id="kTotalSub">total tracked</i></div>
+    <div class="stat hi"><b id="kAvg">—</b><i id="kAvgSub">avg per work day</i></div>
+    <div class="stat"><b id="kPeak">—</b><i id="kPeakSub">peak day</i></div>
+    <div class="stat"><b id="kWknd">—</b><i>on weekends</i></div>
+    <div class="stat"><b id="kOff">—</b><i id="kOffSub">time off</i></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="row"><h3>Daily hours</h3><span class="spacer"></span><span class="muted" style="font-size:0.78rem">click a day to filter the table</span></div>
+      <svg id="chart" viewBox="0 0 760 260" font-family="ui-monospace,Menlo,Consolas,monospace"></svg>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--accent)"></span>tracked hours</span>
+        <span><span class="sw" style="background:rgba(96,125,190,.3)"></span>weekend</span>
+        <span><span class="sw" style="background:rgba(64,190,196,.35)"></span>vacation</span>
+        <span><span class="sw" style="background:rgba(224,82,82,.35);border:1px solid #e05252"></span>sick leave</span>
+        <span><span class="sw" style="background:rgba(181,125,232,.4)"></span>day off</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>By project</h3>
+      <div id="projlist"></div>
+      <div class="muted" style="font-size:0.78rem;margin-top:0.6rem">toggle projects with the chips above</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Custom report</h3>
+    <div class="builder">
+      <div><h4>Group by</h4>
+        <span class="seg" id="gb" style="display:inline-flex;flex-direction:column;align-items:stretch">
+          <button data-g="project" class="on">Project</button><button data-g="day">Day</button><button data-g="description">Description</button>
+        </span>
+      </div>
+      <div><h4>Columns</h4>
+        <label><input type="checkbox" data-col="duration" checked /> Duration</label>
+        <label><input type="checkbox" data-col="pct" checked /> % of total</label>
+        <label><input type="checkbox" data-col="entries" checked /> Entries</label>
+        <label><input type="checkbox" data-col="avg" /> Avg / entry</label>
+      </div>
+      <div><h4>Detail</h4>
+        <label><input type="checkbox" id="showEntries" /> Show individual entries</label>
+        <h4 style="margin-top:0.7rem">Rounding</h4>
+        <span class="seg" id="rounding"><button data-r="0" class="on">Off</button><button data-r="15">15m</button><button data-r="30">30m</button><button data-r="60">1h</button></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row"><h3 id="tableTitle">Report</h3><span class="spacer"></span><span class="muted mono" id="tableTotal"></span></div>
+    <table id="report"><thead></thead><tbody></tbody></table>
+  </div>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const PROJECTS={MySky:'#e8a33d',PT:'#607dbe',IV:'#d76a9b'};
+const OFFC={vacation:'rgba(64,190,196,.15)',dayoff:'rgba(181,125,232,.17)'};
+const OFFN={vacation:'vacation',sick:'sick leave',dayoff:'day off'};
+const OFF={'2026-06-25':'vacation','2026-06-26':'vacation','2026-07-06':'vacation','2026-07-07':'vacation','2026-07-08':'vacation','2026-07-16':'sick','2026-07-17':'sick','2026-07-20':'dayoff','2026-07-21':'dayoff'};
+const DESCS={MySky:['AIM V2 epic','Доработка топологии','Code review','Планирование спринта'],PT:['AIM Daily','Синк с командой'],IV:['Интервью кандидатов','Скрининг резюме']};
+let seed=42;const rnd=()=>(seed=(seed*1103515245+12345)&0x7fffffff)/0x7fffffff;
+const entries=[];
+for(let d=new Date(2026,5,15);d<=new Date(2026,6,29);d.setDate(d.getDate()+1)){
+  const iso=d.toISOString().slice(0,10),dow=d.getDay(),off=OFF[iso];
+  if(off==='vacation'||off==='dayoff')continue;
+  if((dow===0||dow===6)&&rnd()<0.8)continue;
+  const n=off==='sick'?1:1+Math.floor(rnd()*4);let t=9*60+Math.floor(rnd()*60);
+  for(let i=0;i<n;i++){
+    const r=rnd();const p=r<0.68?'MySky':r<0.87?'PT':'IV';
+    const mins=off==='sick'?15+Math.floor(rnd()*60):20+Math.floor(rnd()*140);
+    entries.push({date:iso,project:p,desc:DESCS[p][Math.floor(rnd()*DESCS[p].length)],mins,start:t});
+    t+=mins+Math.floor(rnd()*45);
+  }
+}
+const state={active:new Set(Object.keys(PROJECTS)),day:null,gb:'project',round:0};
+const $=id=>document.getElementById(id);
+const fmt=m=>Math.floor(m/60)+'h '+String(Math.round(m%60)).padStart(2,'0')+'m';
+const fmtH=m=>(m/60).toFixed(1)+'h';
+const fmtT=m=>{let h=Math.floor(m/60)%24,mm=String(m%60).padStart(2,'0'),ap=h>=12?'PM':'AM';h=h%12||12;return h+':'+mm+' '+ap};
+const dayLbl=iso=>new Date(iso+'T12:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+const roundM=m=>state.round?Math.max(state.round,Math.round(m/state.round)*state.round):m;
+const isWknd=iso=>{const d=new Date(iso+'T12:00').getDay();return d===0||d===6};
+function daysIn(){const out=[];for(let d=new Date($('from').value+'T12:00'),t=new Date($('to').value+'T12:00');d<=t;d.setDate(d.getDate()+1))out.push(d.toISOString().slice(0,10));return out}
+function rangeEntries(){const f=$('from').value,t=$('to').value;return entries.filter(e=>e.date>=f&&e.date<=t&&state.active.has(e.project))}
+function filtered(){return rangeEntries().filter(e=>!state.day||e.date===state.day)}
+
+function render(){
+  const es=rangeEntries(),days=daysIn();
+  const total=es.reduce((s,e)=>s+e.mins,0);
+  const workDays=days.filter(d=>!isWknd(d)&&!OFF[d]);
+  const byDay={};days.forEach(d=>byDay[d]=0);es.forEach(e=>byDay[e.date]+=e.mins);
+  const peak=days.slice().sort((a,b)=>byDay[b]-byDay[a])[0];
+  const wknd=es.filter(e=>isWknd(e.date)).reduce((s,e)=>s+e.mins,0);
+  const offCnt={vacation:0,sick:0,dayoff:0};days.forEach(d=>{if(OFF[d])offCnt[OFF[d]]++});
+  $('kTotal').textContent=fmtH(total);
+  $('kAvg').textContent=workDays.length?fmtH(total/workDays.length):'—';
+  $('kAvgSub').textContent='avg per work day ('+workDays.length+'d)';
+  $('kPeak').textContent=peak&&byDay[peak]?fmtH(byDay[peak]):'—';
+  $('kPeakSub').textContent='peak day'+(peak&&byDay[peak]?' · '+dayLbl(peak):'');
+  $('kWknd').textContent=fmtH(wknd)+(total?' ('+Math.round(wknd/total*100)+'%)':'');
+  const offTotal=offCnt.vacation+offCnt.sick+offCnt.dayoff;
+  $('kOff').textContent=offTotal+'d';
+  $('kOffSub').textContent='time off ('+offCnt.vacation+' vac · '+offCnt.sick+' sick · '+offCnt.dayoff+' dayoff)';
+  drawChart(es,days);drawProjects(es,total);drawTable();
+  $('daypill').style.display=state.day?'inline-block':'none';
+  if(state.day)$('daypill').textContent=dayLbl(state.day)+'  ✕';
+}
+
+function drawChart(es,days){
+  const byDayP={};days.forEach(d=>byDayP[d]={});es.forEach(e=>byDayP[e.date][e.project]=(byDayP[e.date][e.project]||0)+e.mins);
+  const tot=d=>Object.values(byDayP[d]).reduce((a,b)=>a+b,0);
+  const max=Math.max(120,...days.map(tot));
+  const yMax=Math.ceil(max/120)*120;
+  const W=760,H=260,padL=36,padT=14,padB=20,cw=(W-padL)/days.length,bw=Math.min(cw*0.72,22);
+  const y0=H-padB,ph=y0-padT,yOf=m=>y0-ph*m/yMax;
+  let s='<defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="rgba(224,82,82,0.10)"></rect><line x1="0" y1="0" x2="0" y2="7" stroke="rgba(224,82,82,0.38)" stroke-width="1.6"></line></pattern></defs>';
+  days.forEach((d,i)=>{const x=padL+i*cw;
+    if(OFF[d]==='sick')s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="url(#hatch)"></rect>`;
+    else if(OFF[d])s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="${OFFC[OFF[d]]}"></rect>`;
+    else if(isWknd(d))s+=`<rect x="${x}" y="${padT}" width="${cw}" height="${ph}" fill="rgba(96,125,190,0.13)"></rect>`;});
+  for(let g=0;g<=yMax;g+=120){const y=yOf(g);
+    s+=`<line x1="${padL}" y1="${y}" x2="${W}" y2="${y}" stroke="var(--grid)"></line>`;
+    if(g)s+=`<text x="${padL-6}" y="${y+3.5}" text-anchor="end" font-size="10" fill="var(--text-dim)">${g/60}ч</text>`;}
+  days.forEach((d,i)=>{
+    let y=y0;const x=padL+i*cw+(cw-bw)/2;
+    for(const p of Object.keys(PROJECTS)){const m=byDayP[d][p];if(!m)continue;
+      const h=ph*m/yMax;y-=h;
+      s+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1.5" fill="${PROJECTS[p]}"></rect>`;}
+    const step=Math.max(1,Math.ceil(days.length/14));
+    if(i%step===0)s+=`<text x="${x+bw/2}" y="${H-5}" text-anchor="middle" font-size="9.5" fill="var(--text-dim)">${+d.slice(8)}</text>`;
+    if(state.day===d)s+=`<rect x="${padL+i*cw+0.5}" y="${padT}" width="${cw-1}" height="${ph}" fill="none" stroke="var(--accent)" stroke-width="1.4" rx="3"></rect>`;});
+  const workDays=days.filter(d=>!isWknd(d)&&!OFF[d]);
+  const avg=workDays.length?es.reduce((s2,e)=>s2+e.mins,0)/workDays.length:0;
+  if(avg){const y=yOf(avg);
+    s+=`<line x1="${padL}" y1="${y}" x2="${W}" y2="${y}" stroke="var(--accent)" stroke-width="1.3" stroke-dasharray="6 5" opacity="0.75"></line>`;
+    s+=`<text x="${W-4}" y="${y-5}" text-anchor="end" font-size="10" fill="var(--accent)">avg ${(avg/60).toFixed(1)}ч / work day</text>`;}
+  s+=`<line x1="${padL}" y1="${y0}" x2="${W}" y2="${y0}" stroke="var(--axis)"></line>`;
+  days.forEach((d,i)=>{s+=`<rect class="hit" x="${padL+i*cw}" y="${padT}" width="${cw}" height="${ph}" fill="transparent" data-d="${d}" style="cursor:pointer"></rect>`});
+  $('chart').innerHTML=s;
+  $('chart').dataset.byday=JSON.stringify(byDayP);
+}
+
+function drawProjects(es,total){
+  const perP={};es.forEach(e=>perP[e.project]=(perP[e.project]||0)+e.mins);
+  $('projlist').innerHTML=Object.entries(perP).sort((a,b)=>b[1]-a[1]).map(([p,m])=>
+    `<div class="item"><div class="row"><span class="dot" style="background:${PROJECTS[p]}"></span><span>${p}</span><span class="spacer"></span><span class="mono">${fmt(m)}</span><span class="muted mono" style="width:2.6rem;text-align:right">${total?Math.round(m/total*100):0}%</span></div><div class="pbar"><div style="width:${total?m/total*100:0}%;background:${PROJECTS[p]}"></div></div></div>`).join('')||'<div class="muted">No data</div>';
+}
+
+function drawTable(){
+  const es=filtered();const gb=state.gb;
+  const cols=[...document.querySelectorAll('[data-col]')].filter(c=>c.checked).map(c=>c.dataset.col);
+  const total=es.reduce((s,e)=>s+roundM(e.mins),0);
+  const key=e=>gb==='project'?e.project:gb==='day'?e.date:e.desc;
+  const groups={};es.forEach(e=>{(groups[key(e)]=groups[key(e)]||[]).push(e)});
+  const label=k=>gb==='day'?dayLbl(k):k;
+  const heads={duration:'Duration',pct:'%',entries:'Entries',avg:'Avg / entry'};
+  $('report').querySelector('thead').innerHTML='<tr><th>'+(gb==='day'?'Day':gb==='project'?'Project':'Description')+'</th>'+cols.map(c=>`<th class="num">${heads[c]}</th>`).join('')+'</tr>';
+  const rows=Object.entries(groups).sort((a,b)=>gb==='day'?a[0].localeCompare(b[0]):b[1].reduce((s,e)=>s+e.mins,0)-a[1].reduce((s,e)=>s+e.mins,0));
+  let html='';
+  for(const[k,list]of rows){
+    const m=list.reduce((s,e)=>s+roundM(e.mins),0);
+    const cell=c=>c==='duration'?fmt(m):c==='pct'?(total?Math.round(m/total*100):0)+'%':c==='entries'?list.length:fmt(m/list.length);
+    const dot=gb==='project'?`<span class="dot" style="background:${PROJECTS[k]};display:inline-block;margin-right:0.4rem"></span>`:'';
+    html+=`<tr class="group"><td>${dot}${label(k)}</td>`+cols.map(c=>`<td class="num">${cell(c)}</td>`).join('')+'</tr>';
+    if($('showEntries').checked)for(const e of list.slice().sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start))
+      html+=`<tr class="entry"><td>${e.desc} <span class="muted">· ${e.project} · ${dayLbl(e.date)} ${fmtT(e.start)}</span></td>`+cols.map(c=>`<td class="num muted">${c==='duration'?fmt(roundM(e.mins)):''}</td>`).join('')+'</tr>';
+  }
+  $('report').querySelector('tbody').innerHTML=html||'<tr><td colspan="9" class="muted">No entries in range</td></tr>';
+  $('tableTitle').textContent='Report — by '+gb+(state.day?' · '+dayLbl(state.day):'');
+  $('tableTotal').textContent=fmt(total);
+}
+
+$('projchips').innerHTML=Object.keys(PROJECTS).map(p=>`<span class="chip" data-p="${p}"><span class="dot" style="background:${PROJECTS[p]}"></span>${p}</span>`).join('');
+document.querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{
+  const p=ch.dataset.p;
+  state.active.has(p)&&state.active.size>1?state.active.delete(p):state.active.add(p);
+  ch.classList.toggle('off',!state.active.has(p));render();});
+
+function segWire(id,fn){$(id).querySelectorAll('button').forEach(b=>b.onclick=()=>{$(id).querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');fn(b)})}
+segWire('preset',b=>{
+  const v=b.dataset.r,today=new Date(2026,6,29);const iso=d=>d.toISOString().slice(0,10);
+  let f,t=new Date(today);
+  if(v==='week'){f=new Date(today);f.setDate(f.getDate()-((f.getDay()+6)%7))}
+  else if(v==='lastweek'){f=new Date(today);f.setDate(f.getDate()-((f.getDay()+6)%7)-7);t=new Date(f);t.setDate(t.getDate()+6)}
+  else if(v==='month')f=new Date(2026,6,1);
+  else{f=new Date(today);f.setDate(f.getDate()-29)}
+  $('from').value=iso(f);$('to').value=iso(t);state.day=null;render();});
+segWire('gb',b=>{state.gb=b.dataset.g;drawTable()});
+segWire('rounding',b=>{state.round=+b.dataset.r;drawTable()});
+$('from').onchange=$('to').onchange=()=>{$('preset').querySelectorAll('button').forEach(x=>x.classList.remove('on'));state.day=null;render()};
+
+const tip=$('tip');
+$('chart').addEventListener('mousemove',e=>{
+  const r=e.target.closest('.hit');if(!r){tip.style.display='none';return}
+  const d=r.dataset.d,byDayP=JSON.parse($('chart').dataset.byday);
+  const parts=Object.entries(byDayP[d]||{});
+  const tm=parts.reduce((s,[,m])=>s+m,0);
+  let kind=OFF[d]?OFFN[OFF[d]]:isWknd(d)?'weekend':'work day';
+  tip.innerHTML=`<b>${dayLbl(d)}</b><br>${tm?fmt(tm):'no tracking'}${parts.length>1?'<br>'+parts.map(([p,m])=>p+': '+fmt(m)).join('<br>'):''}<br><span style="color:var(--text-dim)">${kind}</span>`;
+  tip.style.display='block';
+  tip.style.left=Math.min(e.clientX+14,innerWidth-200)+'px';tip.style.top=e.clientY+16+'px';});
+$('chart').addEventListener('mouseleave',()=>tip.style.display='none');
+$('chart').addEventListener('click',e=>{
+  const r=e.target.closest('.hit');if(!r)return;
+  state.day=state.day===r.dataset.d?null:r.dataset.d;render();});
+$('daypill').onclick=()=>{state.day=null;render()};
+
+document.querySelectorAll('[data-col],#showEntries').forEach(el=>el.onchange=drawTable);
+$('csv').onclick=()=>{
+  const es=filtered();
+  const lines=[['Date','Project','Description','Start','Duration (min)'].join(',')];
+  es.sort((a,b)=>a.date.localeCompare(b.date)||a.start-b.start).forEach(e=>lines.push([e.date,e.project,'"'+e.desc.replace(/"/g,'""')+'"',fmtT(e.start),roundM(e.mins)].join(',')));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));a.download='worktime-report.csv';a.click();};
+
+render();
+</script>
+</body>
+</html>

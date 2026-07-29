@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState, addTimeOff, deleteTimeOff } from "../lib/state/app.svelte";
   import { localDateISO } from "../lib/format";
+  import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeOffKind } from "../lib/types";
 
   let kind = $state<TimeOffKind>("vacation");
@@ -48,7 +49,7 @@
       <span class="muted">{inclusiveDays(timeOff.date_from, timeOff.date_to)}d</span>
       {#if timeOff.note}<span class="muted">{timeOff.note}</span>{/if}
       <span class="spacer"></span>
-      <button class="danger" title="Delete" onclick={() => deleteTimeOff(timeOff.id)}>×</button>
+      <button class="danger icon" title="Delete" onclick={() => deleteTimeOff(timeOff.id)}><TrashIcon /></button>
     </div>
   {:else}
     <p class="muted">No sick leaves or vacations recorded.</p>

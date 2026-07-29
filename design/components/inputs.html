@@ -7,30 +7,48 @@
 <title>WorkTime - Inputs</title>
 <link rel="stylesheet" href="../_shared.css" />
 <style>
-  .project-select { position: relative; display: inline-flex; align-items: center; }
-  .project-select .dot { position: absolute; left: 0.6rem; pointer-events: none; }
-  .project-select select { padding-left: 1.6rem; }
+  .pselect { position: relative; display: inline-block; }
+  .pselect > button { display: inline-flex; align-items: center; gap: 0.5rem; }
+  .pselect .caret { color: var(--text-dim); font-size: 0.7rem; }
+  .pselect .menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.25rem; display: none; z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .pselect.open .menu { display: block; }
+  .pselect .menu button { display: flex; align-items: center; gap: 0.5rem; width: 100%; border: none; background: transparent; text-align: left; padding: 0.35rem 0.6rem; border-radius: 5px; white-space: nowrap; }
+  .pselect .menu button:hover { background: var(--hover); }
   .stack { display: flex; flex-direction: column; gap: 0.75rem; max-width: 26rem; }
 </style>
 </head>
 <body>
   <div class="stack">
     <input placeholder="What are you working on?" />
-    <span class="project-select">
-      <span class="dot" style="background: #3f51b5"></span>
-      <select><option>MySky</option><option>No project</option><option>PT</option></select>
+    <span class="pselect" id="psel">
+      <button type="button"><span class="dot" style="background: var(--accent)"></span><span class="plabel">MySky</span><span class="caret">▾</span></button>
+      <span class="menu">
+        <button type="button" data-c="var(--accent)"><span class="dot" style="background: var(--accent)"></span>MySky</button>
+        <button type="button" data-c="var(--blue)"><span class="dot" style="background: var(--blue)"></span>PT</button>
+        <button type="button" data-c="#d76a9b"><span class="dot" style="background: #d76a9b"></span>IV</button>
+        <button type="button" data-c="var(--border)"><span class="dot" style="background: var(--border)"></span>No project</button>
+      </span>
     </span>
-    <div class="row">
-      <select><option>Vacation</option><option>Sick leave</option></select>
+    <div class="row" style="flex-wrap: wrap">
+      <span class="seg"><button class="on">Vacation</button><button>Sick leave</button><button>Day off</button></span>
       <input type="date" value="2026-07-29" />
       <span class="muted">-</span>
       <input type="date" value="2026-08-05" />
     </div>
     <div class="row">
-      <input type="color" value="#3f51b5" aria-label="Project color" />
+      <input type="color" value="#e8a33d" aria-label="Project color" />
       <input placeholder="New project name" style="flex: 1" />
       <button class="primary">Add</button>
     </div>
   </div>
+<script>
+const ps=document.getElementById('psel');
+ps.querySelector(':scope > button').onclick=()=>ps.classList.toggle('open');
+ps.querySelectorAll('.menu button').forEach(b=>b.onclick=()=>{
+  ps.querySelector('.plabel').textContent=b.textContent;
+  ps.querySelector(':scope > button .dot').style.background=b.dataset.c;
+  ps.classList.remove('open');});
+document.addEventListener('click',e=>{if(!ps.contains(e.target))ps.classList.remove('open')});
+</script>
 </body>
 </html>

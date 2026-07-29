@@ -42,8 +42,11 @@
 
   async function submitStart(event: SubmitEvent) {
     event.preventDefault();
-    await startTimer(description.trim(), selectedProjectID);
+    // Clear the input before the async write so text typed right after
+    // submitting is never wiped by a late reset.
+    const submitted = description.trim();
     description = "";
+    await startTimer(submitted, selectedProjectID);
   }
 
   function dayTotal(entries: TimeEntry[]): number {

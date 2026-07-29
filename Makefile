@@ -1,4 +1,4 @@
-.PHONY: dev-api dev-web build build-web test lint
+.PHONY: dev-api dev-web build build-web test e2e lint
 
 dev-api:
 	go run ./cmd/worktime
@@ -14,6 +14,9 @@ build: build-web
 
 test:
 	go test ./...
+
+e2e: build
+	cd web && npx playwright test
 
 lint:
 	go vet ./...

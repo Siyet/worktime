@@ -15,8 +15,8 @@
     event.preventDefault();
     const name = newName.trim();
     if (!name) return;
-    await createProject(name, newColor);
     newName = "";
+    await createProject(name, newColor);
   }
 </script>
 

@@ -17,8 +17,9 @@
   async function submitAdd(event: SubmitEvent) {
     event.preventDefault();
     if (dateTo < dateFrom) return;
-    await addTimeOff(kind, dateFrom, dateTo, note.trim());
+    const submittedNote = note.trim();
     note = "";
+    await addTimeOff(kind, dateFrom, dateTo, submittedNote);
   }
 </script>
 

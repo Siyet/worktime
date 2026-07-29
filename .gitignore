@@ -18,3 +18,7 @@ web/dist/*
 # Tooling
 .playwright-mcp/
 *.log
+
+# Playwright
+web/test-results/
+web/playwright-report/

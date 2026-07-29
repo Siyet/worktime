@@ -13,11 +13,11 @@ function isoDate(offsetDays: number): string {
 test.describe("reports v3", () => {
   test("CSV export downloads current filter contents", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
+    // 9:00 local keeps the entry inside the default Month range even right after midnight.
+    const todayNine = new Date().setHours(9, 0, 0, 0);
     await seedServer(server.url, {
       projects: [{ id: projectID, name: "Backend" }],
-      entries: [
-        { description: "csv work", startedAt: Date.now() - 3 * HOUR, stoppedAt: Date.now() - 2 * HOUR, projectID },
-      ],
+      entries: [{ description: "csv work", startedAt: todayNine, stoppedAt: todayNine + HOUR, projectID }],
     });
 
     await page.goto(server.url + "/#/reports");
@@ -39,11 +39,14 @@ test.describe("reports v3", () => {
 
   test("clicking a chart day filters the table, clicking again clears it", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
+    // Anchor entries to 9:00 local time so "today" stays today even when the
+    // suite runs shortly after midnight (Date.now() - 2h would cross the date line).
+    const todayNine = new Date().setHours(9, 0, 0, 0);
     await seedServer(server.url, {
       projects: [{ id: projectID, name: "Charted" }],
       entries: [
-        { description: "today work", startedAt: Date.now() - 2 * HOUR, stoppedAt: Date.now() - 1 * HOUR, projectID },
-        { description: "yesterday work", startedAt: Date.now() - DAY - 3 * HOUR, stoppedAt: Date.now() - DAY - 1 * HOUR },
+        { description: "today work", startedAt: todayNine, stoppedAt: todayNine + HOUR, projectID },
+        { description: "yesterday work", startedAt: todayNine - DAY, stoppedAt: todayNine - DAY + 2 * HOUR },
       ],
     });
 

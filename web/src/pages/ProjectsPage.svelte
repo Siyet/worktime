@@ -1,5 +1,6 @@
 <script lang="ts">
   import { appState, createProject, deleteProject, updateProject } from "../lib/state/app.svelte";
+  import { t } from "../lib/i18n";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
 
   // Design palette defaults: new projects cycle through these instead of a single blue.
@@ -26,9 +27,9 @@
 </script>
 
 <form class="card row" onsubmit={submitCreate}>
-  <input type="color" bind:value={newColor} aria-label="Project color" />
-  <input style="flex: 1" placeholder="New project name" bind:value={newName} aria-label="Project name" />
-  <button class="primary" type="submit">Add</button>
+  <input type="color" bind:value={newColor} aria-label={t("Project color")} />
+  <input style="flex: 1" placeholder={t("New project name")} bind:value={newName} aria-label={t("Project name")} />
+  <button class="primary" type="submit">{t("Add")}</button>
 </form>
 
 <div class="card">
@@ -37,25 +38,27 @@
       <input
         type="color"
         value={project.color}
-        aria-label="Color"
+        aria-label={t("Color")}
         onchange={(event) => updateProject({ ...project, color: event.currentTarget.value })}
       />
       <input
         style="flex: 1"
         value={project.name}
-        aria-label="Name"
+        aria-label={t("Name")}
         onchange={(event) => {
           const name = event.currentTarget.value.trim();
           if (name) updateProject({ ...project, name });
         }}
       />
       <button onclick={() => updateProject({ ...project, archived: !project.archived })}>
-        {project.archived ? "Unarchive" : "Archive"}
+        {project.archived ? t("Unarchive") : t("Archive")}
       </button>
-      <button class="danger icon" title="Delete project" onclick={() => deleteProject(project.id)}><TrashIcon /></button>
+      <button class="danger icon" title={t("Delete project")} onclick={() => deleteProject(project.id)}>
+        <TrashIcon />
+      </button>
     </div>
   {:else}
-    <p class="muted">No projects yet.</p>
+    <p class="muted">{t("No projects yet.")}</p>
   {/each}
 </div>
 

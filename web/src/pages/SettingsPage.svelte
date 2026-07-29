@@ -1,7 +1,20 @@
 <script lang="ts">
   import { syncState } from "../lib/sync.svelte";
   import { logout } from "../lib/session.svelte";
+  import { prefs, updatePrefs, type LocaleSetting, type TimeFormatSetting } from "../lib/settings.svelte";
+  import { t } from "../lib/i18n";
   import type { User } from "../lib/types";
+
+  // Language names are shown in their own language on purpose.
+  const languageOptions: { value: LocaleSetting; label: string }[] = [
+    { value: "auto", label: "Auto" },
+    { value: "en", label: "English" },
+    { value: "ru", label: "Русский" },
+    { value: "es", label: "Español" },
+    { value: "de", label: "Deutsch" },
+    { value: "fr", label: "Français" },
+    { value: "zh", label: "中文" },
+  ];
 
   interface APIToken {
     id: string;
@@ -52,7 +65,7 @@
 </script>
 
 {#if loadError}
-  <div class="card muted">Server is unreachable - settings need a connection.</div>
+  <div class="card muted">{t("Server is unreachable - settings need a connection.")}</div>
 {:else if user}
   <div class="card row">
     {#if user.picture_url}<img class="avatar" src={user.picture_url} alt="" />{/if}
@@ -61,43 +74,74 @@
       <div class="muted">{user.email}</div>
     </div>
     <span class="spacer"></span>
-    <button onclick={() => logout()}>Sign out</button>
+    <button onclick={() => logout()}>{t("Sign out")}</button>
   </div>
 {/if}
 
 <div class="card">
-  <h3>API tokens</h3>
+  <h3>{t("Preferences")}</h3>
+  <div class="row pref">
+    <label for="language">{t("Language")}</label>
+    <span class="spacer"></span>
+    <select
+      id="language"
+      value={prefs.locale}
+      onchange={(event) => updatePrefs({ locale: event.currentTarget.value as LocaleSetting })}
+    >
+      {#each languageOptions as option (option.value)}
+        <option value={option.value}>{option.value === "auto" ? t("Auto") : option.label}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="row pref">
+    <label for="time-format">{t("Time format")}</label>
+    <span class="spacer"></span>
+    <select
+      id="time-format"
+      value={prefs.timeFormat}
+      onchange={(event) => updatePrefs({ timeFormat: event.currentTarget.value as TimeFormatSetting })}
+    >
+      <option value="auto">{t("Auto")}</option>
+      <option value="12">{t("12-hour")}</option>
+      <option value="24">{t("24-hour")}</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <h3>{t("API tokens")}</h3>
   <p class="muted">
-    Use tokens to connect MCP clients and scripts: send them as <code>Authorization: Bearer &lt;token&gt;</code>.
+    {t("Use tokens to connect MCP clients and scripts: send them as")}
+    <code>Authorization: Bearer &lt;token&gt;</code>.
   </p>
   <form class="row" onsubmit={createToken}>
-    <input style="flex: 1" placeholder="Token name (e.g. claude-mcp)" bind:value={newTokenName} />
-    <button class="primary" type="submit">Create</button>
+    <input style="flex: 1" placeholder={t("Token name (e.g. claude-mcp)")} bind:value={newTokenName} />
+    <button class="primary" type="submit">{t("Create")}</button>
   </form>
   {#if freshToken}
     <div class="fresh">
-      <p>Copy the token now - it will not be shown again:</p>
+      <p>{t("Copy the token now - it will not be shown again:")}</p>
       <code>{freshToken}</code>
     </div>
   {/if}
   {#each tokens as token (token.id)}
     <div class="row item">
       <span>{token.name}</span>
-      <span class="muted">created {new Date(token.created_at).toLocaleDateString()}</span>
+      <span class="muted">{t("created {date}", { date: new Date(token.created_at).toLocaleDateString() })}</span>
       <span class="spacer"></span>
-      <button class="danger" onclick={() => deleteToken(token.id)}>Revoke</button>
+      <button class="danger" onclick={() => deleteToken(token.id)}>{t("Revoke")}</button>
     </div>
   {:else}
-    <p class="muted">No tokens yet.</p>
+    <p class="muted">{t("No tokens yet.")}</p>
   {/each}
 </div>
 
 <div class="card">
-  <h3>Sync</h3>
+  <h3>{t("Sync")}</h3>
   <p class="muted">
-    Status: {syncState.status}, pending changes: {syncState.pendingCount}
+    {t("Status")}: {syncState.status}, {t("pending changes")}: {syncState.pendingCount}
     {#if syncState.lastSyncedAt}
-      , last synced {new Date(syncState.lastSyncedAt).toLocaleTimeString()}
+      , {t("last synced")} {new Date(syncState.lastSyncedAt).toLocaleTimeString()}
     {/if}
   </p>
 </div>
@@ -118,6 +162,14 @@
     padding: 0.35rem 0;
     border-top: 1px solid var(--border);
     margin-top: 0.5rem;
+  }
+
+  .pref {
+    padding: 0.25rem 0;
+  }
+
+  .pref select {
+    min-width: 11rem;
   }
 
   .fresh {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../i18n";
   import { formatDayISO, isWeekend } from "../report";
   import type { TimeOffKind } from "../types";
 
@@ -75,7 +76,6 @@
     }),
   );
 
-  const KIND_LABELS: Record<TimeOffKind, string> = { vacation: "vacation", sick: "sick leave", dayoff: "day off" };
   const BAND_COLORS: Partial<Record<TimeOffKind, string>> = {
     vacation: "rgba(64,190,196,0.15)",
     dayoff: "rgba(181,125,232,0.17)",
@@ -83,8 +83,8 @@
 
   function dayKindLabel(dayISO: string): string {
     const kind = off.get(dayISO);
-    if (kind) return KIND_LABELS[kind];
-    return isWeekend(dayISO) ? "weekend" : "work day";
+    if (kind) return t(kind === "vacation" ? "vacation" : kind === "sick" ? "sick leave" : "day off");
+    return isWeekend(dayISO) ? t("weekend") : t("work day");
   }
 
   let tip = $state<{ x: number; y: number; index: number } | null>(null);
@@ -103,7 +103,7 @@
   }
 </script>
 
-<svg class="chart" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="Daily tracked hours">
+<svg class="chart" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label={t("Daily tracked hours")}>
   <defs>
     <pattern id={hatchID} width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
       <rect width="7" height="7" fill="rgba(224,82,82,0.10)" />
@@ -195,7 +195,7 @@
         fill="transparent"
         role="button"
         tabindex="0"
-        aria-label="Filter by {formatDayISO(day.date)}"
+        aria-label={t("Filter by {day}", { day: formatDayISO(day.date) })}
         onmousemove={(event) => onMove(event, index)}
         onmouseleave={() => (tip = null)}
         onclick={() => onselect?.(selected === day.date ? null : day.date)}
@@ -216,7 +216,7 @@
   {@const breakdown = tipDay.slices.filter((slice) => slice.minutes > 0)}
   <div class="tip" style="left: {tip.x}px; top: {tip.y}px">
     <b>{formatDayISO(tipDay.date)}</b><br />
-    {tipTotal ? formatMinutes(tipTotal) : "no tracking"}
+    {tipTotal ? formatMinutes(tipTotal) : t("no tracking")}
     {#if breakdown.length > 1}
       {#each breakdown as slice (slice.key)}
         <br />{slice.name}: {formatMinutes(slice.minutes)}

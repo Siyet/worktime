@@ -1,3 +1,5 @@
+import { formattingLocale, hourCycle } from "./settings.svelte";
+
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -16,11 +18,15 @@ export function formatDurationShort(ms: number): string {
 }
 
 export function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(ms).toLocaleTimeString(formattingLocale(), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: hourCycle(),
+  });
 }
 
 export function formatDay(ms: number): string {
-  return new Date(ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return new Date(ms).toLocaleDateString(formattingLocale(), { weekday: "short", month: "short", day: "numeric" });
 }
 
 // localDateISO renders a timestamp as YYYY-MM-DD in the user's local timezone.

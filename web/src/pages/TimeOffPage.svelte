@@ -1,10 +1,12 @@
 <script lang="ts">
   import { appState, addTimeOff, deleteTimeOff } from "../lib/state/app.svelte";
   import { localDateISO } from "../lib/format";
+  import { t } from "../lib/i18n";
+  import Seg from "../lib/components/Seg.svelte";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeOffKind } from "../lib/types";
 
-  let kind = $state<TimeOffKind>("vacation");
+  let kind = $state<string>("vacation");
   let dateFrom = $state(localDateISO(Date.now()));
   let dateTo = $state(localDateISO(Date.now()));
   let note = $state("");
@@ -20,25 +22,28 @@
     if (dateTo < dateFrom) return;
     const submittedNote = note.trim();
     note = "";
-    await addTimeOff(kind, dateFrom, dateTo, submittedNote);
+    await addTimeOff(kind as TimeOffKind, dateFrom, dateTo, submittedNote);
   }
 </script>
 
 <form class="card" onsubmit={submitAdd}>
   <div class="row wrap">
-    <select bind:value={kind} aria-label="Kind">
-      <option value="vacation">Vacation</option>
-      <option value="sick">Sick leave</option>
-      <option value="dayoff">Day off</option>
-    </select>
-    <input type="date" bind:value={dateFrom} aria-label="From" />
+    <Seg
+      options={[
+        { value: "vacation", label: t("Vacation") },
+        { value: "sick", label: t("Sick leave") },
+        { value: "dayoff", label: t("Day off") },
+      ]}
+      bind:value={kind}
+    />
+    <input type="date" bind:value={dateFrom} aria-label={t("From")} />
     <span class="muted">-</span>
-    <input type="date" bind:value={dateTo} aria-label="To" />
-    <input style="flex: 1; min-width: 8rem" placeholder="Note (optional)" bind:value={note} aria-label="Note" />
-    <button class="primary" type="submit" disabled={dateTo < dateFrom}>Add</button>
+    <input type="date" bind:value={dateTo} aria-label={t("To")} />
+    <input style="flex: 1; min-width: 8rem" placeholder={t("Note (optional)")} bind:value={note} aria-label={t("Note")} />
+    <button class="primary" type="submit" disabled={dateTo < dateFrom}>{t("Add")}</button>
   </div>
   {#if dateTo < dateFrom}
-    <p class="muted">End date is before start date.</p>
+    <p class="muted">{t("End date is before start date.")}</p>
   {/if}
 </form>
 
@@ -46,16 +51,16 @@
   {#each sorted as timeOff (timeOff.id)}
     <div class="row item">
       <span class="badge" data-kind={timeOff.kind}>
-        {timeOff.kind === "sick" ? "Sick" : timeOff.kind === "dayoff" ? "Day off" : "Vacation"}
+        {t(timeOff.kind === "sick" ? "Sick" : timeOff.kind === "dayoff" ? "Day off" : "Vacation")}
       </span>
       <span class="mono">{timeOff.date_from} - {timeOff.date_to}</span>
       <span class="muted">{inclusiveDays(timeOff.date_from, timeOff.date_to)}d</span>
       {#if timeOff.note}<span class="muted">{timeOff.note}</span>{/if}
       <span class="spacer"></span>
-      <button class="danger icon" title="Delete" onclick={() => deleteTimeOff(timeOff.id)}><TrashIcon /></button>
+      <button class="danger icon" title={t("Delete")} onclick={() => deleteTimeOff(timeOff.id)}><TrashIcon /></button>
     </div>
   {:else}
-    <p class="muted">No sick leaves or vacations recorded.</p>
+    <p class="muted">{t("No sick leaves or vacations recorded.")}</p>
   {/each}
 </div>
 

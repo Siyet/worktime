@@ -9,6 +9,7 @@
     stopTimer,
   } from "../lib/state/app.svelte";
   import { formatDay, formatDuration, formatDurationShort, formatTime, localDateISO } from "../lib/format";
+  import { t } from "../lib/i18n";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeEntry } from "../lib/types";
@@ -58,37 +59,35 @@
 
 {#if todayTimeOff}
   <div class="card muted">
-    Today is marked as {todayTimeOff.kind === "sick"
-      ? "sick leave"
-      : todayTimeOff.kind === "dayoff"
-        ? "a day off"
-        : "vacation"} - timers still work.
+    {t("Today is marked as {kind} - timers still work.", {
+      kind: t(todayTimeOff.kind === "sick" ? "sick leave" : todayTimeOff.kind === "dayoff" ? "a day off" : "vacation"),
+    })}
   </div>
 {/if}
 
 <form class="card row" onsubmit={submitStart}>
   <input
     style="flex: 1"
-    placeholder="What are you working on?"
+    placeholder={t("What are you working on?")}
     bind:value={description}
-    aria-label="Description"
+    aria-label={t("Description")}
   />
   <ProjectSelect projects={activeProjects} bind:value={selectedProjectID} />
-  <button class="primary" type="submit">Start</button>
+  <button class="primary" type="submit">{t("Start")}</button>
 </form>
 
 {#if running.length > 0}
   <div class="card">
-    <h3>Running</h3>
+    <h3>{t("Running")}</h3>
     {#each running as entry (entry.id)}
       {@const project = projectByID(entry.project_id)}
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
-        <span>{entry.description || "(no description)"}</span>
+        <span>{entry.description || t("(no description)")}</span>
         {#if project}<span class="muted">{project.name}</span>{/if}
         <span class="spacer"></span>
         <span class="mono elapsed">{formatDuration(clock.now - entry.started_at)}</span>
-        <button onclick={() => stopTimer(entry.id)}>Stop</button>
+        <button onclick={() => stopTimer(entry.id)}>{t("Stop")}</button>
       </div>
     {/each}
   </div>
@@ -105,21 +104,23 @@
       {@const project = projectByID(entry.project_id)}
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
-        <span>{entry.description || "(no description)"}</span>
+        <span>{entry.description || t("(no description)")}</span>
         {#if project}<span class="muted">{project.name}</span>{/if}
         <span class="spacer"></span>
         <span class="muted mono">
           {formatTime(entry.started_at)}-{formatTime(entry.stopped_at!)}
         </span>
         <span class="mono">{formatDurationShort(entry.stopped_at! - entry.started_at)}</span>
-        <button class="danger icon" title="Delete entry" onclick={() => deleteEntry(entry.id)}><TrashIcon /></button>
+        <button class="danger icon" title={t("Delete entry")} onclick={() => deleteEntry(entry.id)}>
+          <TrashIcon />
+        </button>
       </div>
     {/each}
   </div>
 {/each}
 
 {#if running.length === 0 && recentDays.length === 0}
-  <p class="muted">No entries yet. Start your first timer above.</p>
+  <p class="muted">{t("No entries yet. Start your first timer above.")}</p>
 {/if}
 
 <style>

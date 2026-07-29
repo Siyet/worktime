@@ -1,6 +1,7 @@
 // Pure report computations shared by the Reports page and the printable report.
 // All durations are whole minutes; days are local YYYY-MM-DD strings.
 import { localDateISO } from "./format";
+import { formattingLocale } from "./settings.svelte";
 import type { TimeEntry, TimeOff, TimeOffKind } from "./types";
 
 export interface ReportEntry {
@@ -68,7 +69,11 @@ export function roundMinutes(minutes: number, step: number): number {
 }
 
 export function formatDayISO(dayISO: string): string {
-  return new Date(dayISO + "T12:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return new Date(dayISO + "T12:00").toLocaleDateString(formattingLocale(), {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 // CSV of the given entries: Date, Project, Description, Start (24h), Duration (min).

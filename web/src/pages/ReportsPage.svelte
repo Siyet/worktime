@@ -1,6 +1,6 @@
 <script lang="ts">
   import { appState, projectByID } from "../lib/state/app.svelte";
-  import { formatDurationShort, localDateISO } from "../lib/format";
+  import { formatDurationShort, formatTime, localDateISO } from "../lib/format";
   import {
     buildCSV,
     expandTimeOff,
@@ -11,6 +11,7 @@
     toReportEntries,
     type ReportEntry,
   } from "../lib/report";
+  import { t } from "../lib/i18n";
   import DailyChart, { type ChartDay } from "../lib/components/DailyChart.svelte";
   import Seg from "../lib/components/Seg.svelte";
 
@@ -74,7 +75,7 @@
     const projects = [...appState.projects].sort((left, right) => left.name.localeCompare(right.name));
     return [
       ...projects.map((project) => ({ key: project.id, name: project.name, color: project.color })),
-      { key: NO_PROJECT_KEY, name: "No project", color: "var(--border)" },
+      { key: NO_PROJECT_KEY, name: t("No project"), color: "var(--border)" },
     ];
   });
   const activeKeys = $derived(new Set(chips.map((chip) => chip.key).filter((key) => !disabledKeys.has(key))));
@@ -174,13 +175,23 @@
   const visibleColumns = $derived(
     (["duration", "pct", "entries", "avg"] as const).filter((column) => columns[column]),
   );
-  const columnHeads = { duration: "Duration", pct: "%", entries: "Entries", avg: "Avg / entry" };
+
+  function columnHead(column: string): string {
+    if (column === "duration") return t("Duration");
+    if (column === "pct") return "%";
+    if (column === "entries") return t("Entries");
+    return t("Avg / entry");
+  }
 
   const tableTotal = $derived(filteredEntries.reduce((sum, entry) => sum + roundMinutes(entry.minutes, rounding), 0));
 
   const tableGroups = $derived.by(() => {
     const key = (entry: ReportEntry) =>
-      groupBy === "project" ? entryKey(entry) : groupBy === "day" ? entry.date : entry.description || "(no description)";
+      groupBy === "project"
+        ? entryKey(entry)
+        : groupBy === "day"
+          ? entry.date
+          : entry.description || t("(no description)");
     const groups = new Map<string, ReportEntry[]>();
     for (const entry of filteredEntries) {
       const bucket = groups.get(key(entry)) ?? [];
@@ -210,10 +221,6 @@
     return fmtMin(Math.round(group.minutes / Math.max(1, group.entries.length)));
   }
 
-  function formatStart(startedAt: number): string {
-    return new Date(startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-
   // --- actions ---
 
   function exportCSV() {
@@ -238,17 +245,17 @@
 <div class="card toolbar">
   <Seg
     options={[
-      { value: "week", label: "Week" },
-      { value: "lastweek", label: "Last week" },
-      { value: "month", label: "Month" },
-      { value: "30", label: "30 days" },
+      { value: "week", label: t("Week") },
+      { value: "lastweek", label: t("Last week") },
+      { value: "month", label: t("Month") },
+      { value: "30", label: t("30 days") },
     ]}
     bind:value={preset}
     onselect={applyPreset}
   />
-  <input type="date" bind:value={dateFrom} onchange={onManualDate} aria-label="From" />
+  <input type="date" bind:value={dateFrom} onchange={onManualDate} aria-label={t("From")} />
   <span class="muted">–</span>
-  <input type="date" bind:value={dateTo} onchange={onManualDate} aria-label="To" />
+  <input type="date" bind:value={dateTo} onchange={onManualDate} aria-label={t("To")} />
   <span class="chips">
     {#each chips as chip (chip.key)}
       <button type="button" class="chip" class:off={disabledKeys.has(chip.key)} onclick={() => toggleChip(chip.key)}>
@@ -262,55 +269,61 @@
     </button>
   {/if}
   <span class="spacer"></span>
-  <button onclick={exportCSV}>Export CSV</button>
-  <button class="primary" onclick={openPrint}>PDF report</button>
+  <button onclick={exportCSV}>{t("Export CSV")}</button>
+  <button class="primary" onclick={openPrint}>{t("PDF report")}</button>
 </div>
 
 <div class="card stats">
-  <div class="stat"><b>{fmtHours(totalMinutes)}</b><i>total tracked</i></div>
+  <div class="stat"><b>{fmtHours(totalMinutes)}</b><i>{t("total tracked")}</i></div>
   <div class="stat hi">
     <b>{workDays.length ? fmtHours(avgMinutes) : "—"}</b>
-    <i>avg per work day ({workDays.length}d)</i>
+    <i>{t("avg per work day ({n}d)", { n: workDays.length })}</i>
   </div>
   <div class="stat">
     <b>{peakDay ? fmtHours(minutesByDay.get(peakDay) ?? 0) : "—"}</b>
-    <i>peak day{peakDay ? ` · ${formatDayISO(peakDay)}` : ""}</i>
+    <i>{t("peak day")}{peakDay ? ` · ${formatDayISO(peakDay)}` : ""}</i>
   </div>
   <div class="stat">
     <b>{fmtHours(weekendMinutes)}{totalMinutes ? ` (${Math.round((weekendMinutes / totalMinutes) * 100)}%)` : ""}</b>
-    <i>on weekends</i>
+    <i>{t("on weekends")}</i>
   </div>
   <div class="stat">
     <b>{offCounts.vacation + offCounts.sick + offCounts.dayoff}d</b>
-    <i>time off ({offCounts.vacation} vac · {offCounts.sick} sick · {offCounts.dayoff} dayoff)</i>
+    <i>
+      {t("time off ({v} vac · {s} sick · {d} dayoff)", {
+        v: offCounts.vacation,
+        s: offCounts.sick,
+        d: offCounts.dayoff,
+      })}
+    </i>
   </div>
 </div>
 
 <div class="grid2">
   <div class="card">
     <div class="row">
-      <h3>Daily hours</h3>
+      <h3>{t("Daily hours")}</h3>
       <span class="spacer"></span>
-      <span class="muted hint">click a day to filter the table</span>
+      <span class="muted hint">{t("click a day to filter the table")}</span>
     </div>
     <DailyChart
       days={chartDays}
       {off}
       {avgMinutes}
-      avgCaption="avg {(avgMinutes / 60).toFixed(1)}h / work day"
+      avgCaption={t("avg {h}h / work day", { h: (avgMinutes / 60).toFixed(1) })}
       selected={dayFilter}
       onselect={(day) => (dayFilter = day)}
     />
     <div class="legend">
-      <span><span class="sw" style="background: var(--accent)"></span>tracked hours</span>
-      <span><span class="sw" style="background: rgba(96,125,190,0.3)"></span>weekend</span>
-      <span><span class="sw" style="background: rgba(64,190,196,0.35)"></span>vacation</span>
-      <span><span class="sw sick-sw"></span>sick leave</span>
-      <span><span class="sw" style="background: rgba(181,125,232,0.4)"></span>day off</span>
+      <span><span class="sw" style="background: var(--accent)"></span>{t("tracked hours")}</span>
+      <span><span class="sw" style="background: rgba(96,125,190,0.3)"></span>{t("weekend")}</span>
+      <span><span class="sw" style="background: rgba(64,190,196,0.35)"></span>{t("vacation")}</span>
+      <span><span class="sw sick-sw"></span>{t("sick leave")}</span>
+      <span><span class="sw" style="background: rgba(181,125,232,0.4)"></span>{t("day off")}</span>
     </div>
   </div>
   <div class="card">
-    <h3>By project</h3>
+    <h3>{t("By project")}</h3>
     {#each byProject as [key, minutes] (key)}
       <div class="proj-item">
         <div class="row">
@@ -325,41 +338,41 @@
         </div>
       </div>
     {:else}
-      <p class="muted">No data</p>
+      <p class="muted">{t("No data")}</p>
     {/each}
-    <div class="muted hint" style="margin-top: 0.6rem">toggle projects with the chips above</div>
+    <div class="muted hint" style="margin-top: 0.6rem">{t("toggle projects with the chips above")}</div>
   </div>
 </div>
 
 <div class="card">
-  <h3>Custom report</h3>
+  <h3>{t("Custom report")}</h3>
   <div class="builder">
     <div>
-      <h4>Group by</h4>
+      <h4>{t("Group by")}</h4>
       <Seg
         vertical
         options={[
-          { value: "project", label: "Project" },
-          { value: "day", label: "Day" },
-          { value: "description", label: "Description" },
+          { value: "project", label: t("Project") },
+          { value: "day", label: t("Day") },
+          { value: "description", label: t("Description") },
         ]}
         bind:value={groupBy}
       />
     </div>
     <div>
-      <h4>Columns</h4>
-      <label><input type="checkbox" bind:checked={columns.duration} /> Duration</label>
-      <label><input type="checkbox" bind:checked={columns.pct} /> % of total</label>
-      <label><input type="checkbox" bind:checked={columns.entries} /> Entries</label>
-      <label><input type="checkbox" bind:checked={columns.avg} /> Avg / entry</label>
+      <h4>{t("Columns")}</h4>
+      <label><input type="checkbox" bind:checked={columns.duration} /> {t("Duration")}</label>
+      <label><input type="checkbox" bind:checked={columns.pct} /> {t("% of total")}</label>
+      <label><input type="checkbox" bind:checked={columns.entries} /> {t("Entries")}</label>
+      <label><input type="checkbox" bind:checked={columns.avg} /> {t("Avg / entry")}</label>
     </div>
     <div>
-      <h4>Detail</h4>
-      <label><input type="checkbox" bind:checked={showEntries} /> Show individual entries</label>
-      <h4 style="margin-top: 0.7rem">Rounding</h4>
+      <h4>{t("Detail")}</h4>
+      <label><input type="checkbox" bind:checked={showEntries} /> {t("Show individual entries")}</label>
+      <h4 style="margin-top: 0.7rem">{t("Rounding")}</h4>
       <Seg
         options={[
-          { value: "0", label: "Off" },
+          { value: "0", label: t("Off") },
           { value: "15", label: "15m" },
           { value: "30", label: "30m" },
           { value: "60", label: "1h" },
@@ -373,16 +386,16 @@
 
 <div class="card">
   <div class="row">
-    <h3>Report — by {groupBy}{dayFilter ? ` · ${formatDayISO(dayFilter)}` : ""}</h3>
+    <h3>{t("Report")} — {t("by " + groupBy)}{dayFilter ? ` · ${formatDayISO(dayFilter)}` : ""}</h3>
     <span class="spacer"></span>
     <span class="muted mono">{fmtMin(tableTotal)}</span>
   </div>
   <table>
     <thead>
       <tr>
-        <th>{groupBy === "day" ? "Day" : groupBy === "project" ? "Project" : "Description"}</th>
+        <th>{groupBy === "day" ? t("Day") : groupBy === "project" ? t("Project") : t("Description")}</th>
         {#each visibleColumns as column (column)}
-          <th class="num">{columnHeads[column]}</th>
+          <th class="num">{columnHead(column)}</th>
         {/each}
       </tr>
     </thead>
@@ -401,9 +414,9 @@
           {#each group.entries as entry (entry.id)}
             <tr class="entry">
               <td>
-                {entry.description || "(no description)"}
+                {entry.description || t("(no description)")}
                 <span class="muted">
-                  · {chipName(entryKey(entry))} · {formatDayISO(entry.date)} {formatStart(entry.startedAt)}
+                  · {chipName(entryKey(entry))} · {formatDayISO(entry.date)} {formatTime(entry.startedAt)}
                 </span>
               </td>
               {#each visibleColumns as column (column)}
@@ -413,7 +426,7 @@
           {/each}
         {/if}
       {:else}
-        <tr><td colspan="9" class="muted">No entries in range</td></tr>
+        <tr><td colspan="9" class="muted">{t("No entries in range")}</td></tr>
       {/each}
     </tbody>
   </table>

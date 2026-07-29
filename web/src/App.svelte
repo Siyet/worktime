@@ -4,6 +4,7 @@
   import { startSyncEngine } from "./lib/sync.svelte";
   import { appState, loadStateFromDB } from "./lib/state/app.svelte";
   import { initSession, session } from "./lib/session.svelte";
+  import { t } from "./lib/i18n";
   import Logo from "./lib/components/Logo.svelte";
   import TimerPage from "./pages/TimerPage.svelte";
   import ProjectsPage from "./pages/ProjectsPage.svelte";
@@ -31,11 +32,11 @@
   const statusLabel = $derived(
     {
       idle: "…",
-      syncing: "syncing",
-      synced: "synced",
-      offline: "offline",
-      error: "sync error",
-      unauthenticated: "signed out",
+      syncing: t("syncing"),
+      synced: t("synced"),
+      offline: t("offline"),
+      error: t("sync error"),
+      unauthenticated: t("signed out"),
     }[syncState.status],
   );
 </script>
@@ -44,15 +45,15 @@
   {#if appState.loaded}
     <PrintReportPage />
   {:else}
-    <p class="muted">Loading…</p>
+    <p class="muted">{t("Loading…")}</p>
   {/if}
 {:else}
 <div class="shell" class:wide={route.path === "/reports"}>
   <header>
-    <span class="logo"><Logo />W<span class="logo-accent">T</span></span>
+    <span class="logo"><Logo /><span class="wordmark">W<span class="logo-accent">T</span></span></span>
     <nav>
       {#each tabs as tab (tab.path)}
-        <a href={"#" + tab.path} class:active={route.path === tab.path}>{tab.label}</a>
+        <a href={"#" + tab.path} class:active={route.path === tab.path}>{t(tab.label)}</a>
       {/each}
     </nav>
     <span class="status" data-status={syncState.status} title={"sync: " + syncState.status}>
@@ -63,9 +64,9 @@
   <main>
     {#if signedOut}
       <div class="card signin">
-        <h2>Sign in to WorkTime</h2>
+        <h2>{t("Sign in to WorkTime")}</h2>
         {#if session.googleAvailable}
-          <a class="google-button" href="/auth/google">Sign in with Google</a>
+          <a class="google-button" href="/auth/google">{t("Sign in with Google")}</a>
         {:else}
           <p class="muted">
             Google sign-in is not configured. Set WORKTIME_GOOGLE_CLIENT_ID and
@@ -74,7 +75,7 @@
         {/if}
       </div>
     {:else if !appState.loaded}
-      <p class="muted">Loading…</p>
+      <p class="muted">{t("Loading…")}</p>
     {:else if route.path === "/projects"}
       <ProjectsPage />
     {:else if route.path === "/timeoff"}
@@ -115,6 +116,10 @@
     gap: 0.45rem;
     font-weight: 700;
     font-size: 1.1rem;
+  }
+
+  .wordmark {
+    letter-spacing: -0.08em;
   }
 
   .logo-accent {

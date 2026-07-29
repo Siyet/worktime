@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../i18n";
   import type { Project } from "../types";
 
   let {
@@ -19,7 +20,7 @@
 
   // "No project" is always the first option.
   const options = $derived([
-    { id: null as string | null, name: "No project", color: "var(--border)" },
+    { id: null as string | null, name: t("No project"), color: "var(--border)" },
     ...projects.map((project) => ({ id: project.id as string | null, name: project.name, color: project.color })),
   ]);
   const selected = $derived(options.find((option) => option.id === value) ?? options[0]!);
@@ -75,7 +76,7 @@
   <button
     type="button"
     role="combobox"
-    aria-label={label}
+    aria-label={t(label)}
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-controls={menuID}
@@ -87,7 +88,7 @@
     <span class="caret">▾</span>
   </button>
   {#if open}
-    <span class="menu" id={menuID} role="listbox" aria-label="{label} options">
+    <span class="menu" id={menuID} role="listbox" aria-label={t(label)}>
       {#each options as option, index (option.id)}
         <button
           type="button"

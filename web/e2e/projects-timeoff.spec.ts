@@ -121,7 +121,7 @@ test.describe("time off", () => {
     await expect(page.getByText("End date is before start date.")).toBeVisible();
 
     // Valid sick range NOT covering today: recorded, but no banner.
-    await page.getByLabel("Kind").selectOption("Sick leave");
+    await page.getByRole("button", { name: "Sick leave" }).click();
     await page.getByLabel("From").fill(isoDate(-5));
     await page.getByLabel("To").fill(isoDate(-3));
     await page.getByRole("button", { name: "Add" }).click();
@@ -131,7 +131,7 @@ test.describe("time off", () => {
 
     // Sick range covering today: sick-leave banner text.
     await page.goto(server.url + "/#/timeoff");
-    await page.getByLabel("Kind").selectOption("Sick leave");
+    await page.getByRole("button", { name: "Sick leave" }).click();
     await page.getByLabel("From").fill(isoDate(-1));
     await page.getByLabel("To").fill(isoDate(1));
     await page.getByRole("button", { name: "Add" }).click();
@@ -141,7 +141,7 @@ test.describe("time off", () => {
 
   test("day off: badge in the list, banner on Timer, counted in the report", async ({ page, server }) => {
     await page.goto(server.url + "/#/timeoff");
-    await page.getByLabel("Kind").selectOption("Day off");
+    await page.getByRole("button", { name: "Day off" }).click();
     // Date inputs default to today.
     await page.getByRole("button", { name: "Add" }).click();
     await expect(page.locator(".item").filter({ hasText: "Day off" })).toBeVisible();

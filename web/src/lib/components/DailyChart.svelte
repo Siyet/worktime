@@ -134,7 +134,18 @@
 
   {#each bars as bar, index (bar.date)}
     {#each bar.rects as rect (rect.y)}
-      <rect x={bar.x} y={rect.y} width={barWidth} height={rect.height} rx="1.5" fill={rect.color} />
+      <!-- The outline keeps dark project colors readable against the dark background:
+           without it a dark segment inside a stack looks like a gap in the bar. -->
+      <rect
+        x={bar.x}
+        y={rect.y}
+        width={barWidth}
+        height={rect.height}
+        rx="1.5"
+        fill={rect.color}
+        stroke="var(--axis)"
+        stroke-width="0.6"
+      />
     {/each}
     {#if index % labelStep === 0}
       <text x={bar.x + barWidth / 2} y={HEIGHT - 5} text-anchor="middle" font-size="9.5" fill="var(--text-dim)">

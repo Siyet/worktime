@@ -189,7 +189,7 @@ function drawChart(es,days){
     let y=y0;const x=padL+i*cw+(cw-bw)/2;
     for(const p of Object.keys(PROJECTS)){const m=byDayP[d][p];if(!m)continue;
       const h=ph*m/yMax;y-=h;
-      s+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1.5" fill="${PROJECTS[p]}"></rect>`;}
+      s+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1.5" fill="${PROJECTS[p]}" stroke="var(--axis)" stroke-width="0.6"></rect>`;}
     const step=Math.max(1,Math.ceil(days.length/14));
     if(i%step===0)s+=`<text x="${x+bw/2}" y="${H-5}" text-anchor="middle" font-size="9.5" fill="var(--text-dim)">${+d.slice(8)}</text>`;
     if(state.day===d)s+=`<rect x="${padL+i*cw+0.5}" y="${padT}" width="${cw-1}" height="${ph}" fill="none" stroke="var(--accent)" stroke-width="1.4" rx="3"></rect>`;});

@@ -9,6 +9,7 @@
   import ProjectsPage from "./pages/ProjectsPage.svelte";
   import TimeOffPage from "./pages/TimeOffPage.svelte";
   import ReportsPage from "./pages/ReportsPage.svelte";
+  import PrintReportPage from "./pages/PrintReportPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
 
   void loadStateFromDB();
@@ -25,6 +26,8 @@
     { path: "/settings", label: "Settings" },
   ];
 
+  const printRoute = $derived(route.path.startsWith("/reports/print"));
+
   const statusLabel = $derived(
     {
       idle: "…",
@@ -37,7 +40,14 @@
   );
 </script>
 
-<div class="shell">
+{#if printRoute}
+  {#if appState.loaded}
+    <PrintReportPage />
+  {:else}
+    <p class="muted">Loading…</p>
+  {/if}
+{:else}
+<div class="shell" class:wide={route.path === "/reports"}>
   <header>
     <span class="logo"><Logo />W<span class="logo-accent">T</span></span>
     <nav>
@@ -78,12 +88,17 @@
     {/if}
   </main>
 </div>
+{/if}
 
 <style>
   .shell {
     max-width: 46rem;
     margin: 0 auto;
     padding: 0 1rem 3rem;
+  }
+
+  .shell.wide {
+    max-width: 68rem;
   }
 
   header {

@@ -18,6 +18,10 @@
   <img src="https://img.shields.io/badge/license-MIT-e8a33d" alt="MIT" />
 </p>
 
+<p align="center">
+  <a href="https://siyet.github.io/worktime/"><b>Live demo</b></a> — runs entirely in your browser (IndexedDB), no backend, data never leaves the page.
+</p>
+
 ![Reports: daily stacked chart with weekends and time off, KPI row, per-project totals](docs/screenshots/reports.png)
 
 ## Why WorkTime

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { syncState } from "../lib/sync.svelte";
   import { logout } from "../lib/session.svelte";
+  import { DEMO } from "../lib/demo";
   import {
     prefs,
     updatePrefs,
@@ -47,7 +48,7 @@
       loadError = true;
     }
   }
-  void load();
+  if (!DEMO) void load();
 
   async function createToken(event: SubmitEvent) {
     event.preventDefault();
@@ -71,7 +72,9 @@
   }
 </script>
 
-{#if loadError}
+{#if DEMO}
+  <div class="card muted">{t("Demo mode - data is stored only in this browser.")}</div>
+{:else if loadError}
   <div class="card muted">{t("Server is unreachable - settings need a connection.")}</div>
 {:else if user}
   <div class="card row">
@@ -129,6 +132,7 @@
   </div>
 </div>
 
+{#if !DEMO}
 <div class="card">
   <h3>{t("API tokens")}</h3>
   <p class="muted">
@@ -166,6 +170,7 @@
     {/if}
   </p>
 </div>
+{/if}
 
 <style>
   h3 {

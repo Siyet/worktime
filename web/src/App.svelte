@@ -4,6 +4,7 @@
   import { startSyncEngine } from "./lib/sync.svelte";
   import { appState, loadStateFromDB } from "./lib/state/app.svelte";
   import { initSession, session } from "./lib/session.svelte";
+  import { DEMO, seedDemoDataIfEmpty } from "./lib/demo";
   import { t } from "./lib/i18n";
   import Logo from "./lib/components/Logo.svelte";
   import TimerPage from "./pages/TimerPage.svelte";
@@ -13,11 +14,18 @@
   import PrintReportPage from "./pages/PrintReportPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
 
-  void loadStateFromDB();
-  void initSession();
-  startSyncEngine();
+  if (DEMO) {
+    // Backend-less demo: seed local data once, never start sync or auth.
+    void seedDemoDataIfEmpty().then(() => loadStateFromDB());
+  } else {
+    void loadStateFromDB();
+    void initSession();
+    startSyncEngine();
+  }
 
-  const signedOut = $derived(syncState.status === "unauthenticated" && session.checked && session.user === null);
+  const signedOut = $derived(
+    !DEMO && syncState.status === "unauthenticated" && session.checked && session.user === null,
+  );
 
   const tabs = [
     { path: "/", label: "Timer" },
@@ -56,9 +64,13 @@
         <a href={"#" + tab.path} class:active={route.path === tab.path}>{t(tab.label)}</a>
       {/each}
     </nav>
-    <span class="status" data-status={syncState.status} title={"sync: " + syncState.status}>
-      {statusLabel}{syncState.pendingCount > 0 ? ` (${syncState.pendingCount})` : ""}
-    </span>
+    {#if DEMO}
+      <span class="status" data-status="demo" title={t("Demo mode - data is stored only in this browser.")}>demo</span>
+    {:else}
+      <span class="status" data-status={syncState.status} title={"sync: " + syncState.status}>
+        {statusLabel}{syncState.pendingCount > 0 ? ` (${syncState.pendingCount})` : ""}
+      </span>
+    {/if}
   </header>
 
   <main>

@@ -29,6 +29,7 @@
     <select bind:value={kind} aria-label="Kind">
       <option value="vacation">Vacation</option>
       <option value="sick">Sick leave</option>
+      <option value="dayoff">Day off</option>
     </select>
     <input type="date" bind:value={dateFrom} aria-label="From" />
     <span class="muted">-</span>
@@ -44,7 +45,9 @@
 <div class="card">
   {#each sorted as timeOff (timeOff.id)}
     <div class="row item">
-      <span class="badge" data-kind={timeOff.kind}>{timeOff.kind === "sick" ? "Sick" : "Vacation"}</span>
+      <span class="badge" data-kind={timeOff.kind}>
+        {timeOff.kind === "sick" ? "Sick" : timeOff.kind === "dayoff" ? "Day off" : "Vacation"}
+      </span>
       <span class="mono">{timeOff.date_from} - {timeOff.date_to}</span>
       <span class="muted">{inclusiveDays(timeOff.date_from, timeOff.date_to)}d</span>
       {#if timeOff.note}<span class="muted">{timeOff.note}</span>{/if}
@@ -73,10 +76,17 @@
   }
 
   .badge[data-kind="vacation"] {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    background: color-mix(in srgb, var(--teal) 20%, transparent);
+    border-color: var(--teal);
   }
 
   .badge[data-kind="sick"] {
-    background: color-mix(in srgb, var(--danger) 15%, transparent);
+    background: color-mix(in srgb, var(--danger) 20%, transparent);
+    border-color: var(--danger);
+  }
+
+  .badge[data-kind="dayoff"] {
+    background: color-mix(in srgb, var(--purple) 20%, transparent);
+    border-color: var(--purple);
   }
 </style>

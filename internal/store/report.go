@@ -52,7 +52,7 @@ func (s *Store) BuildReport(ctx context.Context, userID string, fromMs, toMs int
 	if err := closeRows(offRows); err != nil {
 		return Report{}, err
 	}
-	for _, kind := range []string{"vacation", "sick"} {
+	for _, kind := range []string{"vacation", "sick", "dayoff"} {
 		if days := daysByKind[kind]; days > 0 {
 			report.TimeOff = append(report.TimeOff, TimeOffReport{Kind: kind, Days: days})
 		}

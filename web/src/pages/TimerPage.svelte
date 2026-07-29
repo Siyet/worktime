@@ -58,7 +58,11 @@
 
 {#if todayTimeOff}
   <div class="card muted">
-    Today is marked as {todayTimeOff.kind === "sick" ? "sick leave" : "vacation"} - timers still work.
+    Today is marked as {todayTimeOff.kind === "sick"
+      ? "sick leave"
+      : todayTimeOff.kind === "dayoff"
+        ? "a day off"
+        : "vacation"} - timers still work.
   </div>
 {/if}
 

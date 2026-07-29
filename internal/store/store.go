@@ -91,6 +91,27 @@ CREATE TABLE sync_state (
 );
 INSERT INTO sync_state (id, seq) VALUES (1, 0);
 `,
+	// 002: allow the 'dayoff' time-off kind. SQLite cannot alter a CHECK
+	// constraint, so the table is recreated and data copied over.
+	`
+CREATE TABLE time_off_new (
+	id         TEXT PRIMARY KEY,
+	user_id    TEXT NOT NULL,
+	kind       TEXT NOT NULL CHECK (kind IN ('sick', 'vacation', 'dayoff')),
+	date_from  TEXT NOT NULL,
+	date_to    TEXT NOT NULL,
+	note       TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	deleted_at INTEGER,
+	server_seq INTEGER NOT NULL
+);
+INSERT INTO time_off_new SELECT id, user_id, kind, date_from, date_to, note, created_at, updated_at, deleted_at, server_seq FROM time_off;
+DROP TABLE time_off;
+ALTER TABLE time_off_new RENAME TO time_off;
+CREATE INDEX idx_time_off_user_seq ON time_off(user_id, server_seq);
+CREATE INDEX idx_time_off_user_dates ON time_off(user_id, date_from);
+`,
 }
 
 type Store struct {

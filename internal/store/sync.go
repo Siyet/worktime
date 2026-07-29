@@ -203,8 +203,8 @@ func validateChanges(changes SyncChanges) error {
 		if err := uuid.Validate(timeOff.ID); err != nil {
 			return fmt.Errorf("time off id %q is not a UUID", timeOff.ID)
 		}
-		if timeOff.Kind != "sick" && timeOff.Kind != "vacation" {
-			return fmt.Errorf("time off %s: kind must be sick or vacation", timeOff.ID)
+		if timeOff.Kind != "sick" && timeOff.Kind != "vacation" && timeOff.Kind != "dayoff" {
+			return fmt.Errorf("time off %s: kind must be sick, vacation or dayoff", timeOff.ID)
 		}
 		fromDate, err := time.Parse(time.DateOnly, timeOff.DateFrom)
 		if err != nil {

@@ -72,11 +72,11 @@ func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
 	}, deps.addTimeEntry)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "add_time_off",
-		Description: "Record sick leave or vacation as an inclusive date range. Does not block time tracking.",
+		Description: "Record sick leave, vacation or a day off as an inclusive date range. Does not block time tracking.",
 	}, deps.addTimeOff)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_time_off",
-		Description: "List recorded sick leaves and vacations.",
+		Description: "List recorded sick leaves, vacations and days off.",
 	}, deps.listTimeOff)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "time_report",
@@ -337,7 +337,7 @@ func (d toolDeps) addTimeEntry(ctx context.Context, req *mcp.CallToolRequest, in
 }
 
 type addTimeOffIn struct {
-	Kind     string `json:"kind" jsonschema:"sick or vacation"`
+	Kind     string `json:"kind" jsonschema:"sick, vacation or dayoff"`
 	DateFrom string `json:"date_from" jsonschema:"first day, YYYY-MM-DD"`
 	DateTo   string `json:"date_to" jsonschema:"last day inclusive, YYYY-MM-DD"`
 	Note     string `json:"note,omitempty" jsonschema:"optional note"`

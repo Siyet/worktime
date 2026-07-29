@@ -126,7 +126,7 @@ export async function seedServer(
   data: {
     projects?: { id: string; name: string; color?: string }[];
     entries?: SeedEntry[];
-    timeOff?: { kind: "sick" | "vacation"; dateFrom: string; dateTo: string }[];
+    timeOff?: { kind: "sick" | "vacation" | "dayoff"; dateFrom: string; dateTo: string }[];
   },
 ): Promise<void> {
   const now = Date.now();

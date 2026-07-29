@@ -23,7 +23,7 @@ export interface TimeEntry {
   server_seq?: number;
 }
 
-export type TimeOffKind = "sick" | "vacation";
+export type TimeOffKind = "sick" | "vacation" | "dayoff";
 
 export interface TimeOff {
   id: string;

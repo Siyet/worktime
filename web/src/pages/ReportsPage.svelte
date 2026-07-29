@@ -35,7 +35,7 @@
   const timeOffDays = $derived.by(() => {
     const fromISO = localDateISO(range.from);
     const toISO = localDateISO(range.to);
-    const days = { vacation: 0, sick: 0 };
+    const days = { vacation: 0, sick: 0, dayoff: 0 };
     for (const timeOff of appState.timeOff) {
       const overlapFrom = timeOff.date_from > fromISO ? timeOff.date_from : fromISO;
       const overlapTo = timeOff.date_to < toISO ? timeOff.date_to : toISO;

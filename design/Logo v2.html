@@ -1,0 +1,94 @@
+<!-- @dsCard group="Brand" name="Logo v2 (contrast rework)" subtitle="Both themes, 72px and 26px header context" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WT - Logo v2</title>
+<link rel="stylesheet" href="_shared.css" />
+<style>
+.intro{max-width:44rem;color:var(--text-dim);font-size:0.88rem;margin-bottom:1.2rem}
+.variant{margin-bottom:1.6rem}
+.variant h3{margin-bottom:0.2rem}
+.variant .why{color:var(--text-dim);font-size:0.82rem;margin:0 0 0.6rem}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;max-width:52rem}
+.swatch{border:1px solid var(--border);border-radius:10px;padding:1.1rem 1.2rem;display:flex;align-items:center;gap:1.6rem}
+.swatch.light{background:#f5f3ee;color:#232936}
+.swatch.dark{background:#151a24;color:#dbe2ef}
+.mini{display:inline-flex;align-items:center;gap:0.45rem;font-weight:700;font-size:1.1rem;letter-spacing:-0.08em;padding:0.3rem 0.7rem;border-radius:8px}
+.swatch.light .mini{background:#ffffff;border:1px solid #e3e0d8}
+.swatch.dark .mini{background:#1b2130;border:1px solid #2a3245}
+.mini .t-light{color:#cd8a26}
+.mini .t-dark{color:#e8a33d}
+</style>
+</head>
+<body>
+<h3>Logo v2 - contrast rework</h3>
+<p class="intro">v1 relied on 25-35% opacity satellites and a var(--text) hub: the faint dots vanish on the light theme, and the hub flips meaning between themes. Every v2 variant keeps the clock-hands metaphor but uses only solid accent shapes, so the mark reads identically on any background and at 26px.</p>
+
+<!-- v2a: ring hub -->
+<div class="variant">
+  <h3>2a — ring hub</h3>
+  <p class="why">Thicker hands, no satellites, hub is an accent ring: the background shows through the middle, so the mark has "air" and stays theme-neutral.</p>
+  <div class="pair">
+    <div class="swatch light">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#cd8a26"/><circle cx="59" cy="52" r="6" fill="#cd8a26"/><circle cx="38" cy="40" r="7" stroke="#cd8a26" stroke-width="4.5" fill="none"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#cd8a26"/><circle cx="59" cy="52" r="6" fill="#cd8a26"/><circle cx="38" cy="40" r="7" stroke="#cd8a26" stroke-width="4.5" fill="none"/></svg>W<span class="t-light">T</span></span>
+    </div>
+    <div class="swatch dark">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#e8a33d"/><circle cx="59" cy="52" r="6" fill="#e8a33d"/><circle cx="38" cy="40" r="7" stroke="#e8a33d" stroke-width="4.5" fill="none"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#e8a33d"/><circle cx="59" cy="52" r="6" fill="#e8a33d"/><circle cx="38" cy="40" r="7" stroke="#e8a33d" stroke-width="4.5" fill="none"/></svg>W<span class="t-dark">T</span></span>
+    </div>
+  </div>
+</div>
+
+<!-- v2b: solid hub -->
+<div class="variant">
+  <h3>2b — solid hub</h3>
+  <p class="why">Same skeleton, solid hub. The most compact silhouette; nothing to lose at 16px favicon sizes.</p>
+  <div class="pair">
+    <div class="swatch light">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#cd8a26"/><circle cx="59" cy="52" r="6" fill="#cd8a26"/><circle cx="38" cy="40" r="8" fill="#cd8a26"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#cd8a26" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#cd8a26"/><circle cx="59" cy="52" r="6" fill="#cd8a26"/><circle cx="38" cy="40" r="8" fill="#cd8a26"/></svg>W<span class="t-light">T</span></span>
+    </div>
+    <div class="swatch dark">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#e8a33d"/><circle cx="59" cy="52" r="6" fill="#e8a33d"/><circle cx="38" cy="40" r="8" fill="#e8a33d"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><line x1="38" y1="40" x2="38" y2="13" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="40" x2="59" y2="52" stroke="#e8a33d" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="13" r="6.5" fill="#e8a33d"/><circle cx="59" cy="52" r="6" fill="#e8a33d"/><circle cx="38" cy="40" r="8" fill="#e8a33d"/></svg>W<span class="t-dark">T</span></span>
+    </div>
+  </div>
+</div>
+
+<!-- v2c: dial -->
+<div class="variant">
+  <h3>2c — dial</h3>
+  <p class="why">Hands inside an accent ring: unmistakably a clock even out of context, at the cost of a busier 26px.</p>
+  <div class="pair">
+    <div class="swatch light">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><circle cx="38" cy="38" r="32" stroke="#cd8a26" stroke-width="5" fill="none"/><line x1="38" y1="38" x2="38" y2="19" stroke="#cd8a26" stroke-width="5.5" stroke-linecap="round"/><line x1="38" y1="38" x2="52" y2="46" stroke="#cd8a26" stroke-width="5.5" stroke-linecap="round"/><circle cx="38" cy="38" r="5" fill="#cd8a26"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><circle cx="38" cy="38" r="32" stroke="#cd8a26" stroke-width="5" fill="none"/><line x1="38" y1="38" x2="38" y2="19" stroke="#cd8a26" stroke-width="5.5" stroke-linecap="round"/><line x1="38" y1="38" x2="52" y2="46" stroke="#cd8a26" stroke-width="5.5" stroke-linecap="round"/><circle cx="38" cy="38" r="5" fill="#cd8a26"/></svg>W<span class="t-light">T</span></span>
+    </div>
+    <div class="swatch dark">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><circle cx="38" cy="38" r="32" stroke="#e8a33d" stroke-width="5" fill="none"/><line x1="38" y1="38" x2="38" y2="19" stroke="#e8a33d" stroke-width="5.5" stroke-linecap="round"/><line x1="38" y1="38" x2="52" y2="46" stroke="#e8a33d" stroke-width="5.5" stroke-linecap="round"/><circle cx="38" cy="38" r="5" fill="#e8a33d"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><circle cx="38" cy="38" r="32" stroke="#e8a33d" stroke-width="5" fill="none"/><line x1="38" y1="38" x2="38" y2="19" stroke="#e8a33d" stroke-width="5.5" stroke-linecap="round"/><line x1="38" y1="38" x2="52" y2="46" stroke="#e8a33d" stroke-width="5.5" stroke-linecap="round"/><circle cx="38" cy="38" r="5" fill="#e8a33d"/></svg>W<span class="t-dark">T</span></span>
+    </div>
+  </div>
+</div>
+
+<!-- v2d: badge -->
+<div class="variant">
+  <h3>2d — badge</h3>
+  <p class="why">Amber tile with dark hands: maximum contrast anywhere, but competes with primary buttons in the header.</p>
+  <div class="pair">
+    <div class="swatch light">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><rect width="76" height="76" rx="18" fill="#cd8a26"/><line x1="38" y1="42" x2="38" y2="16" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="42" x2="58" y2="53" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="42" r="7" fill="#16120a"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><rect width="76" height="76" rx="18" fill="#cd8a26"/><line x1="38" y1="42" x2="38" y2="16" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="42" x2="58" y2="53" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="42" r="7" fill="#16120a"/></svg>W<span class="t-light">T</span></span>
+    </div>
+    <div class="swatch dark">
+      <svg width="72" height="72" viewBox="0 0 76 76" fill="none"><rect width="76" height="76" rx="18" fill="#e8a33d"/><line x1="38" y1="42" x2="38" y2="16" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="42" x2="58" y2="53" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="42" r="7" fill="#16120a"/></svg>
+      <span class="mini"><svg width="26" height="26" viewBox="0 0 76 76" fill="none"><rect width="76" height="76" rx="18" fill="#e8a33d"/><line x1="38" y1="42" x2="38" y2="16" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><line x1="38" y1="42" x2="58" y2="53" stroke="#16120a" stroke-width="6" stroke-linecap="round"/><circle cx="38" cy="42" r="7" fill="#16120a"/></svg>W<span class="t-dark">T</span></span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

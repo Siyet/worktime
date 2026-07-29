@@ -83,7 +83,9 @@ test.describe("timers", () => {
 
     await page.clock.runFor("01:01");
     await expect(row.locator(".elapsed")).toHaveText("0:01:01");
-    await page.clock.runFor("01:00:00");
+    // Jump (not run) through the hour: runFor would replay ~3600 one-second
+    // ticks plus every sync timer and blows past the test timeout.
+    await page.clock.fastForward("01:00:00");
     await expect(row.locator(".elapsed")).toHaveText("1:01:01");
   });
 

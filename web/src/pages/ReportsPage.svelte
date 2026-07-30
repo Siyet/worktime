@@ -1,15 +1,20 @@
 <script lang="ts">
-  import { appState, projectByID } from "../lib/state/app.svelte";
+  import { appState } from "../lib/state/app.svelte";
   import { formatDurationShort, formatTime, localDateISO } from "../lib/format";
   import {
+    apportion,
     buildCSV,
     expandTimeOff,
     formatDayISO,
+    groupKeysOf,
     isWeekend,
     listDays,
+    NO_PROJECT_KEY,
     roundMinutes,
     splitOverlapMinutes,
     toReportEntries,
+    UNTAGGED_KEY,
+    type GroupBy,
     type ReportEntry,
   } from "../lib/report";
   import { t } from "../lib/i18n";
@@ -17,9 +22,6 @@
   import Seg from "../lib/components/Seg.svelte";
 
   type Preset = "week" | "lastweek" | "month" | "30" | "";
-  type GroupBy = "project" | "day" | "description";
-
-  const NO_PROJECT_KEY = "none";
 
   function presetRange(preset: Exclude<Preset, "">): { from: string; to: string } {
     const today = new Date();
@@ -51,8 +53,10 @@
   let dateFrom = $state(presetRange("month").from);
   let dateTo = $state(presetRange("month").to);
   let dayFilter = $state<string | null>(null);
-  // Projects toggled OFF by their chip (default: everything active).
-  let disabledKeys = $state<Set<string>>(new Set());
+  // Chips toggled OFF (default: everything active). Two independent strips;
+  // an entry must pass both filters (AND across strips, any-of within one).
+  let disabledProjects = $state<Set<string>>(new Set());
+  let disabledTags = $state<Set<string>>(new Set());
   let groupBy = $state<GroupBy>("project");
   let showEntries = $state(false);
   let rounding = $state(0);
@@ -60,6 +64,12 @@
   // When on, wall-clock time is split equally between concurrent entries, so
   // an hour spent on two overlapping tasks counts as one hour in every total.
   let overlapOnce = $state(false);
+
+  // Rounding and overlaps-once are mutually exclusive: rounding a share that
+  // was deliberately halved re-inflates the very overlap the option removes
+  // (roundMinutes has a one-step minimum). exportCSV has always forced
+  // rounding to 0 in that mode; the UI follows the same rule.
+  const effectiveRounding = $derived(overlapOnce ? 0 : rounding);
 
   function applyPreset(value: string) {
     const range = presetRange(value as Exclude<Preset, "">);
@@ -82,10 +92,10 @@
       { key: NO_PROJECT_KEY, name: t("No project"), color: "var(--border)" },
     ];
   });
-  const activeKeys = $derived(new Set(chips.map((chip) => chip.key).filter((key) => !disabledKeys.has(key))));
+  const activeProjectKeys = $derived(new Set(chips.map((chip) => chip.key).filter((key) => !disabledProjects.has(key))));
 
-  function toggleChip(key: string) {
-    const next = new Set(disabledKeys);
+  function toggleProject(key: string) {
+    const next = new Set(disabledProjects);
     if (next.has(key)) {
       next.delete(key);
     } else {
@@ -93,7 +103,7 @@
       // Keep at least one project active.
       if (chips.every((chip) => next.has(chip.key))) return;
     }
-    disabledKeys = next;
+    disabledProjects = next;
   }
 
   // --- derived report data ---
@@ -101,17 +111,53 @@
   const off = $derived(expandTimeOff(appState.timeOff));
   const days = $derived(listDays(dateFrom, dateTo));
 
-  const entryKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
+  const projectKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
+  const tagKeysOf = (entry: ReportEntry) => (entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY]);
 
   const dateRangeEntries = $derived(
     toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
   );
-  const rangeEntries = $derived(dateRangeEntries.filter((entry) => activeKeys.has(entryKey(entry))));
+
+  // The tag strip and the By tag panel exist only while the range actually
+  // contains tagged entries - a history with no tags must not grow empty UI.
+  const hasTaggedEntries = $derived(dateRangeEntries.some((entry) => entry.tags.length > 0));
+  const tagChips = $derived.by(() => {
+    if (!hasTaggedEntries) return [];
+    const names = new Set<string>();
+    for (const entry of dateRangeEntries) {
+      for (const tag of entry.tags) names.add(tag);
+    }
+    return [
+      ...[...names].sort().map((name) => ({ key: name, name })),
+      { key: UNTAGGED_KEY, name: t("untagged") },
+    ];
+  });
+  const activeTagKeys = $derived(new Set(tagChips.map((chip) => chip.key).filter((key) => !disabledTags.has(key))));
+
+  function toggleTag(key: string) {
+    const next = new Set(disabledTags);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+      // Keep at least one tag chip active.
+      if (tagChips.every((chip) => next.has(chip.key))) return;
+    }
+    disabledTags = next;
+  }
+
+  const rangeEntries = $derived(
+    dateRangeEntries.filter(
+      (entry) =>
+        activeProjectKeys.has(projectKey(entry)) &&
+        (tagChips.length === 0 || tagKeysOf(entry).some((key) => activeTagKeys.has(key))),
+    ),
+  );
   const filteredEntries = $derived(rangeEntries.filter((entry) => !dayFilter || entry.date === dayFilter));
 
   // Per-entry minutes to aggregate: raw durations, or overlap-adjusted shares.
-  // Shares are computed on the full date range BEFORE the project-chip filter,
-  // so hiding one project never rewrites another project's numbers.
+  // Shares are computed on the full date range BEFORE the chip filters,
+  // so hiding one project or tag never rewrites another's numbers.
   const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(dateRangeEntries) : null);
   const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
 
@@ -157,13 +203,13 @@
     const perDay = new Map<string, Map<string, number>>();
     for (const entry of rangeEntries) {
       const bucket = perDay.get(entry.date) ?? new Map<string, number>();
-      bucket.set(entryKey(entry), (bucket.get(entryKey(entry)) ?? 0) + minutesOf(entry));
+      bucket.set(projectKey(entry), (bucket.get(projectKey(entry)) ?? 0) + minutesOf(entry));
       perDay.set(entry.date, bucket);
     }
     return days.map((day) => ({
       date: day,
       slices: chips
-        .filter((chip) => activeKeys.has(chip.key))
+        .filter((chip) => activeProjectKeys.has(chip.key))
         .map((chip) => ({
           key: chip.key,
           name: chip.name,
@@ -176,7 +222,22 @@
   const byProject = $derived.by(() => {
     const totals = new Map<string, number>();
     for (const entry of rangeEntries) {
-      totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + minutesOf(entry));
+      totals.set(projectKey(entry), (totals.get(projectKey(entry)) ?? 0) + minutesOf(entry));
+    }
+    return [...totals.entries()].sort((left, right) => right[1] - left[1]);
+  });
+
+  // Split shares: an entry with k tags contributes 1/k of its minutes to each,
+  // so Σ By tag = Σ By project = totalMinutes, and the untagged bucket keeps
+  // every untagged entry inside the total.
+  const byTag = $derived.by(() => {
+    if (!hasTaggedEntries) return [];
+    const totals = new Map<string, number>();
+    for (const entry of rangeEntries) {
+      const keys = tagKeysOf(entry);
+      for (const key of keys) {
+        totals.set(key, (totals.get(key) ?? 0) + minutesOf(entry) / keys.length);
+      }
     }
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
   });
@@ -194,65 +255,85 @@
     return t("Avg / entry");
   }
 
+  interface TableRow {
+    entry: ReportEntry;
+    share: number;
+    of: number;
+  }
+
+  // billable(entry) is the single per-entry number every aggregate is built
+  // from; the 1/k weights below always sum to 1 per entry, so the table total
+  // is independent of the grouping.
+  const billableOf = (entry: ReportEntry) =>
+    overlapOnce ? minutesOf(entry) : roundMinutes(entry.minutes, effectiveRounding);
+
   const tableGroups = $derived.by(() => {
-    const key = (entry: ReportEntry) =>
-      groupBy === "project"
-        ? entryKey(entry)
-        : groupBy === "day"
-          ? entry.date
-          : entry.description || t("(no description)");
-    const groups = new Map<string, ReportEntry[]>();
+    const groups = new Map<string, { minutes: number; rows: TableRow[] }>();
     for (const entry of filteredEntries) {
-      const bucket = groups.get(key(entry)) ?? [];
-      bucket.push(entry);
-      groups.set(key(entry), bucket);
+      const keys = groupKeysOf(entry, groupBy);
+      const share = billableOf(entry) / keys.length;
+      for (const key of keys) {
+        const bucket = groups.get(key) ?? { minutes: 0, rows: [] };
+        bucket.minutes += share;
+        bucket.rows.push({ entry, share, of: keys.length });
+        groups.set(key, bucket);
+      }
     }
     const rows = [...groups.entries()];
     if (groupBy === "day") {
       rows.sort((left, right) => left[0].localeCompare(right[0]));
     } else {
-      const total = (entries: ReportEntry[]) => entries.reduce((sum, entry) => sum + minutesOf(entry), 0);
-      rows.sort((left, right) => total(right[1]) - total(left[1]));
+      rows.sort((left, right) => right[1].minutes - left[1].minutes);
     }
-    return rows.map(([groupKey, entries]) => ({
-      key: groupKey,
-      label: groupBy === "day" ? formatDayISO(groupKey) : groupBy === "project" ? chipName(groupKey) : groupKey,
-      color: groupBy === "project" ? chipColor(groupKey) : null,
-      // With overlaps-once on, rounding applies to the group sum: per-share
-      // rounding would clamp each fraction up to a full step and re-inflate
-      // the very overlap the option removes.
-      minutes: overlapOnce
-        ? roundMinutes(
-            entries.reduce((sum, entry) => sum + minutesOf(entry), 0),
-            rounding,
-          )
-        : entries.reduce((sum, entry) => sum + roundMinutes(entry.minutes, rounding), 0),
-      entries: [...entries].sort((left, right) => left.startedAt - right.startedAt),
+    return rows.map(([key, bucket]) => ({
+      key,
+      label:
+        groupBy === "day"
+          ? formatDayISO(key)
+          : groupBy === "project"
+            ? chipName(key)
+            : groupBy === "description"
+              ? key || t("(no description)")
+              : key,
+      color: groupBy === "project" ? chipColor(key) : null,
+      minutes: bucket.minutes,
+      rows: bucket.rows.sort((left, right) => left.entry.startedAt - right.entry.startedAt),
     }));
   });
 
   // The header total is the sum of the visible groups, so table and header can
-  // never disagree regardless of rounding mode.
+  // never disagree; the 1/k weights make it equal Σ billable over entries.
   const tableTotal = $derived(tableGroups.reduce((sum, group) => sum + group.minutes, 0));
 
-  function cellValue(group: { minutes: number; entries: ReportEntry[] }, column: string): string {
+  // Entries is a count, not a sum: a multi-tag entry is one entry in each of
+  // its tag groups, so the Total row shows the distinct count instead.
+  const distinctEntryCount = $derived(filteredEntries.length);
+  const multiTagCount = $derived(filteredEntries.filter((entry) => entry.tags.length > 1).length);
+
+  // Largest-remainder percentages: they sum to exactly 100 under every grouping.
+  const pctByKey = $derived.by(() => {
+    const shares = apportion(
+      tableGroups.map((group) => group.minutes),
+      tableTotal > 0 ? 100 : 0,
+    );
+    return new Map(tableGroups.map((group, index) => [group.key, shares[index]!]));
+  });
+
+  function cellValue(group: (typeof tableGroups)[number], column: string): string {
     if (column === "duration") return fmtMin(group.minutes);
-    if (column === "pct") return (tableTotal ? Math.round((group.minutes / tableTotal) * 100) : 0) + "%";
-    if (column === "entries") return String(group.entries.length);
-    return fmtMin(Math.round(group.minutes / Math.max(1, group.entries.length)));
+    if (column === "pct") return (pctByKey.get(group.key) ?? 0) + "%";
+    if (column === "entries") return String(group.rows.length);
+    return fmtMin(Math.round(group.minutes / Math.max(1, group.rows.length)));
   }
 
   // --- actions ---
 
   function exportCSV() {
-    // With overlaps-once on, per-row rounding would clamp fractional shares
-    // back up to a full step, so the CSV exports the raw shares instead.
-    const csv = buildCSV(
-      filteredEntries,
-      (projectID) => chipName(projectID ?? NO_PROJECT_KEY),
-      overlapOnce ? 0 : rounding,
-      minutesOf,
-    );
+    // A CSV row is an entry, not a group: it carries the entry's full billable
+    // minutes and never a tag share. With overlaps-once on, per-row rounding
+    // would clamp fractional shares back up to a full step, so it exports the
+    // raw shares instead.
+    const csv = buildCSV(filteredEntries, (projectID) => chipName(projectID ?? NO_PROJECT_KEY), effectiveRounding, minutesOf);
     const blobURL = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const anchor = document.createElement("a");
     anchor.href = blobURL;
@@ -263,8 +344,13 @@
 
   function openPrint() {
     const params = new URLSearchParams({ from: dateFrom, to: dateTo });
-    if (disabledKeys.size > 0) {
-      params.set("projects", [...activeKeys].join(","));
+    if (disabledProjects.size > 0) {
+      params.set("projects", [...activeProjectKeys].join(","));
+    }
+    // The tag filter must travel too, or the sheet prints different numbers
+    // than the screen it was printed from.
+    if (disabledTags.size > 0 && tagChips.length > 0) {
+      params.set("tags", [...activeTagKeys].join(","));
     }
     if (overlapOnce) {
       params.set("overlap", "1");
@@ -287,13 +373,35 @@
   <input type="date" bind:value={dateFrom} onchange={onManualDate} aria-label={t("From")} />
   <span class="muted">–</span>
   <input type="date" bind:value={dateTo} onchange={onManualDate} aria-label={t("To")} />
-  <span class="chips">
+  <span class="chipstrip">
+    <span class="caption">{t("Projects")}</span>
     {#each chips as chip (chip.key)}
-      <button type="button" class="chip" class:off={disabledKeys.has(chip.key)} onclick={() => toggleChip(chip.key)}>
+      <button
+        type="button"
+        class="chip"
+        class:off={disabledProjects.has(chip.key)}
+        aria-pressed={!disabledProjects.has(chip.key)}
+        onclick={() => toggleProject(chip.key)}
+      >
         <span class="dot" style="background: {chip.color}"></span>{chip.name}
       </button>
     {/each}
   </span>
+  {#if tagChips.length > 0}
+    <span class="chipstrip">
+      <span class="caption">{t("Tags")}</span>
+      {#each tagChips as chip (chip.key)}
+        <button
+          type="button"
+          class="chip tagchip"
+          class:untagged={chip.key === UNTAGGED_KEY}
+          class:off={disabledTags.has(chip.key)}
+          aria-pressed={!disabledTags.has(chip.key)}
+          onclick={() => toggleTag(chip.key)}
+        >{chip.name}</button>
+      {/each}
+    </span>
+  {/if}
   {#if dayFilter}
     <button type="button" class="filterpill" onclick={() => (dayFilter = null)}>
       {formatDayISO(dayFilter)}&nbsp;&nbsp;✕
@@ -360,25 +468,54 @@
       <span><span class="sw" style="background: rgba(181,125,232,0.4)"></span>{t("day off")}</span>
     </div>
   </div>
-  <div class="card">
-    <h3>{t("By project")}</h3>
-    {#each byProject as [key, minutes] (key)}
-      <div class="proj-item">
-        <div class="row">
-          <span class="dot" style="background: {chipColor(key)}"></span>
-          <span>{chipName(key)}</span>
-          <span class="spacer"></span>
-          <span class="mono">{fmtMin(minutes)}</span>
-          <span class="muted mono pct">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</span>
+  <div class="side">
+    <div class="card">
+      <h3>{t("By project")}</h3>
+      {#each byProject as [key, minutes] (key)}
+        <div class="proj-item">
+          <div class="row">
+            <span class="dot" style="background: {chipColor(key)}"></span>
+            <span>{chipName(key)}</span>
+            <span class="spacer"></span>
+            <span class="mono">{fmtMin(minutes)}</span>
+            <span class="muted mono pct">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</span>
+          </div>
+          <div class="pbar">
+            <div style="width: {totalMinutes ? (minutes / totalMinutes) * 100 : 0}%; background: {chipColor(key)}"></div>
+          </div>
         </div>
-        <div class="pbar">
-          <div style="width: {totalMinutes ? (minutes / totalMinutes) * 100 : 0}%; background: {chipColor(key)}"></div>
-        </div>
+      {:else}
+        <p class="muted">{t("No data")}</p>
+      {/each}
+      <div class="muted hint" style="margin-top: 0.6rem">{t("toggle projects with the chips above")}</div>
+    </div>
+    {#if byTag.length > 0}
+      <div class="card">
+        <h3>{t("By tag")}</h3>
+        {#each byTag as [key, minutes] (key)}
+          <div class="proj-item">
+            <div class="row">
+              {#if key === UNTAGGED_KEY}
+                <span class="untaglabel">{t("untagged")}</span>
+              {:else}
+                <span>{key}</span>
+              {/if}
+              <span class="spacer"></span>
+              <span class="mono">{fmtMin(minutes)}</span>
+              <span class="muted mono pct">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</span>
+            </div>
+            <!-- One ink for every bar: length ranks, hue would collide with the
+                 project dots one card above. -->
+            <div class="pbar">
+              <div style="width: {totalMinutes ? (minutes / totalMinutes) * 100 : 0}%; background: var(--accent)"></div>
+            </div>
+          </div>
+        {/each}
+        <p class="reconcile">
+          {t("An entry with several tags splits its time equally between them, so this adds up to the same total as By project.")}
+        </p>
       </div>
-    {:else}
-      <p class="muted">{t("No data")}</p>
-    {/each}
-    <div class="muted hint" style="margin-top: 0.6rem">{t("toggle projects with the chips above")}</div>
+    {/if}
   </div>
 </div>
 
@@ -391,6 +528,7 @@
         vertical
         options={[
           { value: "project", label: t("Project") },
+          { value: "tag", label: t("Tag") },
           { value: "day", label: t("Day") },
           { value: "description", label: t("Description") },
         ]}
@@ -409,15 +547,21 @@
       <label><input type="checkbox" bind:checked={showEntries} /> {t("Show individual entries")}</label>
       <h4 style="margin-top: 0.7rem">{t("Rounding")}</h4>
       <Seg
+        disabled={overlapOnce}
         options={[
           { value: "0", label: t("Off") },
           { value: "15", label: "15m" },
           { value: "30", label: "30m" },
           { value: "60", label: "1h" },
         ]}
-        value={String(rounding)}
+        value={overlapOnce ? "0" : String(rounding)}
         onselect={(value) => (rounding = Number(value))}
       />
+      {#if overlapOnce}
+        <p class="reconcile">
+          {t("Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.")}
+        </p>
+      {/if}
     </div>
   </div>
 </div>
@@ -431,7 +575,15 @@
   <table>
     <thead>
       <tr>
-        <th>{groupBy === "day" ? t("Day") : groupBy === "project" ? t("Project") : t("Description")}</th>
+        <th>
+          {groupBy === "day"
+            ? t("Day")
+            : groupBy === "project"
+              ? t("Project")
+              : groupBy === "tag"
+                ? t("Tag")
+                : t("Description")}
+        </th>
         {#each visibleColumns as column (column)}
           <th class="num">{columnHead(column)}</th>
         {/each}
@@ -442,26 +594,36 @@
         <tr class="group">
           <td>
             {#if group.color}<span class="dot inline-dot" style="background: {group.color}"></span>{/if}
-            {group.label}
+            {#if group.key === UNTAGGED_KEY && groupBy === "tag"}
+              <span class="untaglabel">{t("untagged")}</span>
+            {:else}
+              {group.label}
+            {/if}
           </td>
           {#each visibleColumns as column (column)}
             <td class="num">{cellValue(group, column)}</td>
           {/each}
         </tr>
         {#if showEntries}
-          {#each group.entries as entry (entry.id)}
+          {#each group.rows as row (row.entry.id)}
             <tr class="entry">
               <td>
-                {entry.description || t("(no description)")}
+                {row.entry.description || t("(no description)")}
                 <span class="muted">
-                  · {chipName(entryKey(entry))} · {formatDayISO(entry.date)} {formatTime(entry.startedAt)}
+                  · {chipName(projectKey(row.entry))} · {formatDayISO(row.entry.date)} {formatTime(row.entry.startedAt)}
                 </span>
               </td>
               {#each visibleColumns as column (column)}
                 <td class="num muted">
-                  {column === "duration"
-                    ? fmtMin(overlapOnce ? minutesOf(entry) : roundMinutes(entry.minutes, rounding))
-                    : ""}
+                  {#if column === "duration"}
+                    <!-- row.share, not the full duration: detail rows must sum
+                         to their group header. The 1/k marker says why it is
+                         smaller than the entry itself. -->
+                    {fmtMin(row.share)}
+                    {#if row.of > 1}
+                      <span class="splitmark" title={t("shared with {n} tags", { n: row.of })}>1/{row.of}</span>
+                    {/if}
+                  {/if}
                 </td>
               {/each}
             </tr>
@@ -470,8 +632,32 @@
       {:else}
         <tr><td colspan="9" class="muted">{t("No entries in range")}</td></tr>
       {/each}
+      {#if tableGroups.length > 0}
+        <tr class="total">
+          <td>{t("Total")}</td>
+          {#each visibleColumns as column (column)}
+            <td class="num">
+              {column === "duration"
+                ? fmtMin(tableTotal)
+                : column === "pct"
+                  ? "100%"
+                  : column === "entries"
+                    ? String(distinctEntryCount)
+                    : fmtMin(Math.round(tableTotal / Math.max(1, distinctEntryCount)))}
+            </td>
+          {/each}
+        </tr>
+      {/if}
     </tbody>
   </table>
+  {#if groupBy === "tag" && multiTagCount > 0}
+    <p class="reconcile">
+      {t(
+        "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.",
+        { n: multiTagCount, total: distinctEntryCount },
+      )}
+    </p>
+  {/if}
 </div>
 
 <style>
@@ -504,11 +690,18 @@
     font-size: 0.78rem;
   }
 
-  .chips {
+  .chipstrip {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
     flex-wrap: wrap;
+  }
+
+  .chipstrip > .caption {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
   }
 
   .chip {
@@ -531,6 +724,16 @@
   .chip .dot {
     width: 8px;
     height: 8px;
+  }
+
+  /* Tag filter chip: the .chip idiom minus the dot. */
+  .chip.tagchip {
+    padding: 0.2rem 0.7rem;
+  }
+
+  .chip.tagchip.untagged {
+    border-style: dashed;
+    font-style: italic;
   }
 
   .filterpill {
@@ -582,9 +785,25 @@
     border: 1px solid #e05252;
   }
 
+  /* Right column is a stack now: By project + By tag. */
+  .side {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+  }
+
+  .side .card {
+    margin-bottom: 0;
+  }
+
   .proj-item {
     padding: 0.35rem 0;
     border-top: 1px solid var(--border);
+  }
+
+  .untaglabel {
+    font-style: italic;
+    color: var(--text-dim);
   }
 
   .pct {
@@ -663,6 +882,27 @@
 
   tr.entry td:first-child {
     padding-left: 1.6rem;
+    color: var(--text-dim);
+  }
+
+  /* Proof row: Duration and % add up to the header, in the table itself. */
+  tr.total td {
+    font-weight: 600;
+    border-top: 1.5px solid var(--text-dim);
+    border-bottom: none;
+  }
+
+  /* Weighted contribution of a multi-tag entry under one tag group. */
+  .splitmark {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-left: 0.35rem;
+  }
+
+  .reconcile {
+    margin: 0.6rem 0 0;
+    font-size: 0.78rem;
     color: var(--text-dim);
   }
 

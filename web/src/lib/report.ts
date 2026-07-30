@@ -9,9 +9,20 @@ export interface ReportEntry {
   date: string;
   projectID: string | null;
   description: string;
+  // Always a concrete array: the optional field on TimeEntry is resolved here
+  // once, so nothing downstream ever handles undefined.
+  tags: string[];
   startedAt: number;
   minutes: number;
 }
+
+export const NO_PROJECT_KEY = "none";
+
+// The bucket for entries with no tags. User tags are normalised to lowercase
+// and the server rejects a leading underscore, so no collision is possible.
+export const UNTAGGED_KEY = "__untagged";
+
+export type GroupBy = "project" | "tag" | "day" | "description";
 
 // Finished entries only; running timers never enter reports.
 export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {
@@ -23,9 +34,49 @@ export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {
       date: localDateISO(entry.started_at),
       projectID: entry.project_id,
       description: entry.description,
+      tags: entry.tags ?? [],
       startedAt: entry.started_at,
       minutes: Math.round((entry.stopped_at - entry.started_at) / 60000),
     });
+  }
+  return result;
+}
+
+// The group keys an entry belongs to. Exactly one key for project/day/
+// description; for tag grouping an entry lands in every one of its tags, or in
+// the untagged bucket. Every entry has at least one key under every grouping,
+// and an entry's weight inside one of its groups is billable / keys.length, so
+// Σ groups = Σ entries regardless of the grouping.
+export function groupKeysOf(entry: ReportEntry, groupBy: GroupBy): string[] {
+  if (groupBy === "project") return [entry.projectID ?? NO_PROJECT_KEY];
+  if (groupBy === "day") return [entry.date];
+  if (groupBy === "description") return [entry.description];
+  return entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY];
+}
+
+// Largest-remainder allocation: integer parts of `values` scaled to sum to
+// exactly Math.round(targetTotal). Display rounds each group independently, so
+// without this the printed Итого row and a 17%+17%+17% percentage column would
+// visibly fail the arithmetic they invite.
+export function apportion(values: number[], targetTotal: number): number[] {
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const target = Math.round(targetTotal);
+  if (total <= 0 || values.length === 0) return values.map(() => 0);
+  const raw = values.map((value) => (value / total) * target);
+  const result = raw.map(Math.floor);
+  let remainder = target - result.reduce((sum, value) => sum + value, 0);
+  const byFraction = raw
+    .map((value, index) => ({ fraction: value - Math.floor(value), index }))
+    .sort((left, right) => right.fraction - left.fraction);
+  // Hand out the missing units to the largest fractions; float drift can in
+  // principle leave a negative remainder, taken back from the smallest ones.
+  for (let position = 0; remainder > 0 && position < byFraction.length; position++, remainder--) {
+    const index = byFraction[position]!.index;
+    result[index] = result[index]! + 1;
+  }
+  for (let position = byFraction.length - 1; remainder < 0 && position >= 0; position--, remainder++) {
+    const index = byFraction[position]!.index;
+    result[index] = result[index]! - 1;
   }
   return result;
 }
@@ -117,22 +168,26 @@ export function formatDayISO(dayISO: string): string {
   });
 }
 
-// CSV of the given entries: Date, Project, Description, Start (24h), Duration (min).
-// minutesFor lets the caller substitute overlap-adjusted durations for raw ones.
+// CSV of the given entries: Date, Project, Description, Tags, Start (24h),
+// Duration (min). minutesFor lets the caller substitute overlap-adjusted
+// durations for raw ones; it is billable-per-entry - a CSV row is an entry,
+// not a group, so tag shares never appear here and with rounding off
+// Σ Duration equals the report total exactly.
 export function buildCSV(
   entries: ReportEntry[],
   projectName: (projectID: string | null) => string,
   roundingStep: number,
   minutesFor: (entry: ReportEntry) => number = (entry) => entry.minutes,
 ): string {
-  const lines = [["Date", "Project", "Description", "Start", "Duration (min)"].join(",")];
+  const lines = [["Date", "Project", "Description", "Tags", "Start", "Duration (min)"].join(",")];
   const sorted = [...entries].sort((left, right) => left.startedAt - right.startedAt);
   for (const entry of sorted) {
     const started = new Date(entry.startedAt);
     const start = `${String(started.getHours()).padStart(2, "0")}:${String(started.getMinutes()).padStart(2, "0")}`;
     const description = `"${entry.description.replaceAll('"', '""')}"`;
+    const tags = `"${(entry.tags.length > 0 ? entry.tags.join(";") : "(untagged)").replaceAll('"', '""')}"`;
     const minutes = Math.round(roundMinutes(minutesFor(entry), roundingStep));
-    lines.push([entry.date, projectName(entry.projectID), description, start, minutes].join(","));
+    lines.push([entry.date, projectName(entry.projectID), description, tags, start, minutes].join(","));
   }
   return lines.join("\n");
 }

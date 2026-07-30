@@ -118,6 +118,7 @@ interface SeedEntry {
   startedAt: number;
   stoppedAt: number | null;
   projectID?: string;
+  tags?: string[];
 }
 
 /** Seeds data directly through the server sync endpoint (dev-auth instance). */
@@ -144,6 +145,7 @@ export async function seedServer(
       id: crypto.randomUUID(),
       project_id: entry.projectID ?? null,
       description: entry.description,
+      tags: entry.tags ?? [],
       started_at: entry.startedAt,
       stopped_at: entry.stoppedAt,
       created_at: entry.startedAt,

@@ -31,8 +31,9 @@ test.describe("reports v3", () => {
     const savedPath = path.join(test.info().outputDir, "report.csv");
     await download.saveAs(savedPath);
     const csv = readFileSync(savedPath, "utf8");
-    expect(csv).toContain("Date,Project,Description,Start,Duration (min)");
+    expect(csv).toContain("Date,Project,Description,Tags,Start,Duration (min)");
     expect(csv).toContain('"csv work"');
+    expect(csv).toContain('"(untagged)"');
     expect(csv).toContain("Backend");
     expect(csv).toContain(",60");
   });
@@ -95,6 +96,121 @@ test.describe("reports v3", () => {
 
     await page.getByLabel("Overlaps once").uncheck();
     await expect(totalStat).toContainText("2.0h");
+  });
+
+  test("switching Group by never changes the report total", async ({ page, server }) => {
+    const projectID = crypto.randomUUID();
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      projects: [{ id: projectID, name: "Tagged" }],
+      entries: [
+        { description: "dual", startedAt: todayNine, stoppedAt: todayNine + HOUR, projectID, tags: ["development", "review"] },
+        { description: "solo", startedAt: todayNine + HOUR, stoppedAt: todayNine + 2 * HOUR, tags: ["development"] },
+        { description: "plain", startedAt: todayNine + 2 * HOUR, stoppedAt: todayNine + 2.5 * HOUR },
+      ],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    const reportCard = page.locator(".card").filter({ has: page.locator("tbody") });
+    const total = reportCard.locator(".row .muted.mono");
+    await expect(total).toHaveText("2h 30m");
+
+    for (const grouping of ["Tag", "Day", "Description", "Project"]) {
+      await page.getByRole("button", { name: grouping, exact: true }).click();
+      await expect(total).toHaveText("2h 30m");
+      await expect(reportCard.locator("tr.total")).toContainText("2h 30m");
+    }
+  });
+
+  test("a two-tag entry shows a 1/2 share in the detail rows that sums to the group header", async ({ page, server }) => {
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      entries: [
+        { description: "dual", startedAt: todayNine, stoppedAt: todayNine + HOUR, tags: ["development", "review"] },
+        { description: "solo", startedAt: todayNine + HOUR, stoppedAt: todayNine + 2 * HOUR, tags: ["development"] },
+      ],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    await page.getByRole("button", { name: "Tag", exact: true }).click();
+    await page.getByLabel("Show individual entries").check();
+
+    // development = 60/2 + 60 = 1h 30m; review = 30m; the dual entry's detail
+    // row carries its half share with the 1/k marker.
+    const developmentGroup = page.locator("tr.group").filter({ hasText: "development" });
+    await expect(developmentGroup).toContainText("1h 30m");
+    await expect(page.locator("tr.group").filter({ hasText: "review" })).toContainText("30m");
+    const dualDetail = page.locator("tr.entry").filter({ hasText: "dual" }).first();
+    await expect(dualDetail).toContainText("30m");
+    await expect(dualDetail.locator(".splitmark")).toHaveText("1/2");
+  });
+
+  test("the untagged bucket filters and never falls out of the totals", async ({ page, server }) => {
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      entries: [
+        { description: "tagged work", startedAt: todayNine, stoppedAt: todayNine + HOUR, tags: ["development"] },
+        { description: "plain work", startedAt: todayNine + HOUR, stoppedAt: todayNine + 1.5 * HOUR },
+      ],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    await page.getByRole("button", { name: "Tag", exact: true }).click();
+    const reportCard = page.locator(".card").filter({ has: page.locator("tbody") });
+    await expect(reportCard.locator("tr.group").filter({ hasText: "untagged" })).toBeVisible();
+    await expect(reportCard.locator(".row .muted.mono")).toHaveText("1h 30m");
+
+    // Switching the development chip off leaves only the untagged entry, and
+    // the untagged bucket still carries it in every total.
+    await page.getByRole("button", { name: "development", exact: true }).click();
+    await expect(reportCard.locator(".row .muted.mono")).toHaveText("30m");
+    await expect(reportCard.locator("tr.group").filter({ hasText: "untagged" })).toContainText("30m");
+    await expect(page.locator(".stat").first()).toContainText("0.5h");
+  });
+
+  test("rounding is locked while overlaps-once is on", async ({ page, server }) => {
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      entries: [{ description: "some work", startedAt: todayNine, stoppedAt: todayNine + HOUR }],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    const roundingButton = page.getByRole("button", { name: "15m", exact: true });
+    await expect(roundingButton).toBeEnabled();
+
+    await page.getByLabel("Overlaps once").check();
+    await expect(roundingButton).toBeDisabled();
+    await expect(page.getByText(/Rounding is off while overlaps/)).toBeVisible();
+
+    await page.getByLabel("Overlaps once").uncheck();
+    await expect(roundingButton).toBeEnabled();
+  });
+
+  test("printable report renders По тегам with Итого, and skips it for an untagged range", async ({ page, server }) => {
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    const oldDay = todayNine - 10 * DAY;
+    await seedServer(server.url, {
+      entries: [
+        { description: "tagged print", startedAt: todayNine, stoppedAt: todayNine + HOUR, tags: ["development", "review"] },
+        { description: "plain print", startedAt: todayNine + HOUR, stoppedAt: todayNine + 2 * HOUR },
+        { description: "old plain", startedAt: oldDay, stoppedAt: oldDay + HOUR },
+      ],
+    });
+
+    await page.goto(server.url + `/#/reports/print?from=${isoDate(0)}&to=${isoDate(0)}`);
+    await expect(page.getByRole("heading", { name: "По тегам" })).toBeVisible();
+    await expect(page.getByText("без тега")).toBeVisible();
+    await expect(page.getByText("development").first()).toBeVisible();
+    // Итого appears on both tables and their displayed values are apportioned
+    // against the same 2h total.
+    await expect(page.locator("tr.sumrow")).toHaveCount(2);
+    await expect(page.getByText(/делит своё время/)).toBeVisible();
+
+    // A range with no tagged entries must not grow an empty section.
+    await page.goto(server.url + `/#/reports/print?from=${isoDate(-10)}&to=${isoDate(-10)}`);
+    await expect(page.getByText("old plain")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "По тегам" })).toHaveCount(0);
+    await expect(page.locator("tr.sumrow")).toHaveCount(1);
   });
 
   test("printable report route renders Russian report with real data", async ({ page, server }) => {

@@ -4,24 +4,32 @@
   import { route } from "../lib/router.svelte";
   import { localDateISO } from "../lib/format";
   import {
+    apportion,
     expandTimeOff,
     isWeekend,
     listDays,
+    NO_PROJECT_KEY,
     splitOverlapMinutes,
     toReportEntries,
+    UNTAGGED_KEY,
     type ReportEntry,
   } from "../lib/report";
   import DailyChart, { type ChartDay } from "../lib/components/DailyChart.svelte";
   import Logo from "../lib/components/Logo.svelte";
 
-  const NO_PROJECT_KEY = "none";
-
-  // The route carries the report parameters: #/reports/print?from=...&to=...&projects=...&print=1
+  // The route carries the report parameters:
+  // #/reports/print?from=...&to=...&projects=...&tags=...&print=1
   const params = $derived(new URLSearchParams(route.path.split("?")[1] ?? ""));
   const dateFrom = $derived(params.get("from") ?? localDateISO(Date.now()));
   const dateTo = $derived(params.get("to") ?? localDateISO(Date.now()));
   const projectFilter = $derived.by(() => {
     const raw = params.get("projects");
+    return raw ? new Set(raw.split(",")) : null;
+  });
+  // Same any-of match as projects=, with UNTAGGED_KEY as the literal token
+  // "__untagged" - user tags cannot start with an underscore, so no collision.
+  const tagFilter = $derived.by(() => {
+    const raw = params.get("tags");
     return raw ? new Set(raw.split(",")) : null;
   });
 
@@ -42,7 +50,14 @@
   const dateRangeEntries = $derived(
     toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
   );
-  const entries = $derived(dateRangeEntries.filter((entry) => !projectFilter || projectFilter.has(entryKey(entry))));
+  const tagKeysOf = (entry: ReportEntry) => (entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY]);
+  const entries = $derived(
+    dateRangeEntries.filter(
+      (entry) =>
+        (!projectFilter || projectFilter.has(entryKey(entry))) &&
+        (!tagFilter || tagKeysOf(entry).some((key) => tagFilter.has(key))),
+    ),
+  );
 
   const overlapOnce = $derived(params.get("overlap") === "1");
   // Shares come from the full date range, so a single-project report still
@@ -82,6 +97,49 @@
     for (const entry of entries) totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + minutesOf(entry));
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
   });
+
+  // Split shares: an entry with k tags contributes 1/k of its minutes to each,
+  // so По тегам adds up to the same Итого as По проектам. Suppressed entirely
+  // when nothing in the range is tagged - historical reports must not grow an
+  // empty section. "без тега" is always last: italic, hatched, ordered - three
+  // cues that survive greyscale and disabled background graphics.
+  const byTag = $derived.by(() => {
+    if (!entries.some((entry) => entry.tags.length > 0)) return [];
+    const totals = new Map<string, number>();
+    for (const entry of entries) {
+      const keys = tagKeysOf(entry);
+      for (const key of keys) totals.set(key, (totals.get(key) ?? 0) + minutesOf(entry) / keys.length);
+    }
+    const rows = [...totals.entries()].sort((left, right) => right[1] - left[1]);
+    const untaggedIndex = rows.findIndex(([key]) => key === UNTAGGED_KEY);
+    if (untaggedIndex >= 0) rows.push(...rows.splice(untaggedIndex, 1));
+    return rows;
+  });
+
+  // The Итого row invites the reader to add the column up, so the displayed
+  // values must actually sum to it: largest-remainder allocation instead of
+  // rounding each group independently (which drifts minutes and renders three
+  // equal groups as 17%+17%+17%).
+  interface DisplayRow {
+    key: string;
+    minutes: number;
+    pct: number;
+  }
+
+  function displayRows(rows: [string, number][]): DisplayRow[] {
+    const minutes = apportion(
+      rows.map(([, value]) => value),
+      totalMinutes,
+    );
+    const pcts = apportion(
+      rows.map(([, value]) => value),
+      totalMinutes > 0 ? 100 : 0,
+    );
+    return rows.map(([key], index) => ({ key, minutes: minutes[index]!, pct: pcts[index]! }));
+  }
+
+  const byProjectDisplay = $derived(displayRows(byProject));
+  const byTagDisplay = $derived(displayRows(byTag));
 
   const chartDays = $derived.by((): ChartDay[] => {
     const keys = byProject.map(([key]) => key);
@@ -261,27 +319,71 @@
             </tr>
           </thead>
           <tbody>
-            {#each byProject as [key, minutes] (key)}
+            {#each byProjectDisplay as row (row.key)}
               <tr>
-                <td><span class="dot" style="background: {projectColor(key)}"></span>{projectName(key)}</td>
+                <td><span class="dot" style="background: {projectColor(row.key)}"></span>{projectName(row.key)}</td>
                 <td>
                   <div class="pbar">
-                    <div
-                      style="width: {totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%; background: {projectColor(
-                        key,
-                      )}"
-                    ></div>
+                    <div style="width: {row.pct}%; background: {projectColor(row.key)}"></div>
                   </div>
                 </td>
-                <td class="num">{fmtRu(minutes)}</td>
-                <td class="num">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</td>
+                <td class="num">{fmtRu(row.minutes)}</td>
+                <td class="num">{row.pct}%</td>
               </tr>
             {:else}
               <tr><td colspan="4" class="empty">Нет данных за период</td></tr>
             {/each}
+            {#if byProjectDisplay.length > 0}
+              <tr class="sumrow">
+                <td>Итого</td>
+                <td></td>
+                <td class="num">{fmtRu(totalMinutes)}</td>
+                <td class="num">100%</td>
+              </tr>
+            {/if}
           </tbody>
         </table>
       </div>
+
+      {#if byTagDisplay.length > 0}
+        <div class="figure">
+          <h2>По тегам</h2>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 8rem">Тег</th>
+                <th aria-label="Доля"></th>
+                <th class="num" style="width: 5rem">Время</th>
+                <th class="num" style="width: 2.6rem">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each byTagDisplay as row (row.key)}
+                <tr>
+                  <td class:untagged-label={row.key === UNTAGGED_KEY}>
+                    {row.key === UNTAGGED_KEY ? "без тега" : row.key}
+                  </td>
+                  <td>
+                    <!-- Single ink for every bar: length is the only channel
+                         that survives a greyscale office laser. -->
+                    <div class="pbar">
+                      <div class={row.key === UNTAGGED_KEY ? "hatch" : "ink"} style="width: {row.pct}%"></div>
+                    </div>
+                  </td>
+                  <td class="num">{fmtRu(row.minutes)}</td>
+                  <td class="num">{row.pct}%</td>
+                </tr>
+              {/each}
+              <tr class="sumrow">
+                <td>Итого</td>
+                <td></td>
+                <td class="num">{fmtRu(totalMinutes)}</td>
+                <td class="num">100%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      {/if}
 
       <h2>Детализация</h2>
       <table>
@@ -301,7 +403,10 @@
             </tr>
             {#each detailEntries(key) as entry (entry.id)}
               <tr class="entry">
-                <td>{entry.description || "(без описания)"}</td>
+                <td>
+                  {entry.description || "(без описания)"}
+                  {#if entry.tags.length > 0}<span class="tagtrail">{entry.tags.join(" · ")}</span>{/if}
+                </td>
                 <td class="num">{dayShort(entry.date)}</td>
                 <td class="num">{startTime(entry.startedAt)}</td>
                 <td class="num">{fmtRu(minutesOf(entry))}</td>
@@ -318,6 +423,10 @@
         отпуска, дей-оффов и больничных).
         {#if overlapOnce}
           Пересекающиеся записи учтены один раз: одновременная работа делит затраченное время поровну.
+        {/if}
+        {#if byTagDisplay.length > 0}
+          Запись с несколькими тегами делит своё время между ними поровну, поэтому суммы по тегам и по проектам
+          совпадают с общим итогом; в детализации записи показаны целиком.
         {/if}
         {#if absences.length > 0}
           Отсутствия в периоде: {absences.join(", ")}.
@@ -519,6 +628,43 @@
   .pbar div {
     height: 100%;
     border-radius: 2px;
+  }
+
+  /* All tag bars share one ink, so the only variable is length - the channel
+     that survives a greyscale laser. */
+  .pbar div.ink {
+    background: rgba(20, 26, 40, 0.55);
+  }
+
+  /* Redundant reinforcement for "no tag": hatch plus an italic label plus last
+     position. If background graphics are off in the print dialog, the label
+     and the ordering still carry it. */
+  .pbar div.hatch {
+    background: repeating-linear-gradient(
+      45deg,
+      rgba(20, 26, 40, 0.55) 0 2px,
+      rgba(20, 26, 40, 0.12) 2px 4px
+    );
+  }
+
+  td.untagged-label {
+    font-style: italic;
+  }
+
+  tr.sumrow td {
+    font-weight: 600;
+    border-top: 1.2px solid #232936;
+    border-bottom: none;
+    background: transparent;
+  }
+
+  .tagtrail {
+    color: var(--text-dim);
+    font-size: 7.5pt;
+  }
+
+  .tagtrail::before {
+    content: " · ";
   }
 
   .note {

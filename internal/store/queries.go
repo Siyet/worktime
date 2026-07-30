@@ -30,7 +30,7 @@ func (s *Store) ListProjects(ctx context.Context, userID string) ([]Project, err
 // ListRunningEntries returns entries without stopped_at, newest first.
 func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, description, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
+		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
 		FROM time_entries
 		WHERE user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL
 		ORDER BY started_at DESC`, userID)
@@ -40,7 +40,7 @@ func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEn
 	entries := []TimeEntry{}
 	for rows.Next() {
 		var entry TimeEntry
-		if err := rows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.StartedAt, &entry.StoppedAt,
+		if err := rows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
 			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq); err != nil {
 			rows.Close()
 			return nil, err
@@ -54,9 +54,9 @@ func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEn
 func (s *Store) GetTimeEntry(ctx context.Context, userID, entryID string) (TimeEntry, error) {
 	var entry TimeEntry
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, project_id, description, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
+		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
 		FROM time_entries WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, entryID, userID,
-	).Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.StartedAt, &entry.StoppedAt,
+	).Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
 		&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TimeEntry{}, ErrNotFound

@@ -3,16 +3,20 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
 const (
-	maxTextLength  = 2000
-	maxNameLength  = 200
-	maxColorLength = 32
-	maxBatchRows   = 10000
+	maxTextLength   = 2000
+	maxNameLength   = 200
+	maxColorLength  = 32
+	maxBatchRows    = 10000
+	maxTagsPerEntry = 8
+	maxTagLength    = 24
 )
 
 // Sync applies client changes (last-write-wins by updated_at) and returns all rows
@@ -60,15 +64,15 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	}
 	for _, entry := range request.Changes.TimeEntries {
 		_, err := transaction.ExecContext(ctx, `
-			INSERT INTO time_entries (id, user_id, project_id, description, started_at, stopped_at,
+			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
 			                          created_at, updated_at, deleted_at, server_seq)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
-				project_id = excluded.project_id, description = excluded.description,
+				project_id = excluded.project_id, description = excluded.description, tags = excluded.tags,
 				started_at = excluded.started_at, stopped_at = excluded.stopped_at,
 				updated_at = excluded.updated_at, deleted_at = excluded.deleted_at, server_seq = excluded.server_seq
 			WHERE excluded.updated_at >= time_entries.updated_at AND time_entries.user_id = excluded.user_id`,
-			entry.ID, userID, entry.ProjectID, entry.Description, entry.StartedAt, entry.StoppedAt,
+			entry.ID, userID, entry.ProjectID, entry.Description, entry.Tags, entry.StartedAt, entry.StoppedAt,
 			entry.CreatedAt, entry.UpdatedAt, entry.DeletedAt, nextSeq)
 		if err != nil {
 			return SyncResponse{}, err
@@ -115,14 +119,14 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	}
 
 	entryRows, err := transaction.QueryContext(ctx, `
-		SELECT id, project_id, description, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
+		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
 		FROM time_entries WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
 	if err != nil {
 		return SyncResponse{}, err
 	}
 	for entryRows.Next() {
 		var entry TimeEntry
-		if err := entryRows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.StartedAt, &entry.StoppedAt,
+		if err := entryRows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
 			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq); err != nil {
 			entryRows.Close()
 			return SyncResponse{}, err
@@ -161,6 +165,39 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	return response, nil
 }
 
+// validateTags enforces the tag rules server-side. Three writers reach this endpoint -
+// the PWA, the MCP server and raw API tokens - so the limits cannot live in the client.
+// Names are values here, not ids, which is what makes rename and merge possible at all,
+// and it is also why the normalised form has to be enforced rather than assumed.
+func validateTags(tags TagList) error {
+	if len(tags) > maxTagsPerEntry {
+		return fmt.Errorf("at most %d tags allowed, got %d", maxTagsPerEntry, len(tags))
+	}
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		length := utf8.RuneCountInString(tag)
+		if length == 0 || length > maxTagLength {
+			return fmt.Errorf("tag %q must be 1..%d characters", tag, maxTagLength)
+		}
+		if tag != strings.TrimSpace(tag) {
+			return fmt.Errorf("tag %q must be trimmed", tag)
+		}
+		if tag != strings.ToLower(tag) {
+			return fmt.Errorf("tag %q must be lowercase", tag)
+		}
+		// The reports use "__untagged" as the bucket for entries with no tags, so the
+		// underscore prefix stays reserved and a user tag can never collide with it.
+		if strings.HasPrefix(tag, "_") {
+			return fmt.Errorf("tag %q must not start with an underscore", tag)
+		}
+		if seen[tag] {
+			return fmt.Errorf("tag %q is duplicated", tag)
+		}
+		seen[tag] = true
+	}
+	return nil
+}
+
 func validateChanges(changes SyncChanges) error {
 	total := len(changes.Projects) + len(changes.TimeEntries) + len(changes.TimeOff)
 	if total > maxBatchRows {
@@ -197,6 +234,9 @@ func validateChanges(changes SyncChanges) error {
 		}
 		if entry.StoppedAt != nil && *entry.StoppedAt < entry.StartedAt {
 			return fmt.Errorf("time entry %s: stopped_at is before started_at", entry.ID)
+		}
+		if err := validateTags(entry.Tags); err != nil {
+			return fmt.Errorf("time entry %s: %w", entry.ID, err)
 		}
 	}
 	for _, timeOff := range changes.TimeOff {

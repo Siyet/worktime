@@ -112,6 +112,12 @@ ALTER TABLE time_off_new RENAME TO time_off;
 CREATE INDEX idx_time_off_user_seq ON time_off(user_id, server_seq);
 CREATE INDEX idx_time_off_user_dates ON time_off(user_id, date_from);
 `,
+	// 003: tags on time entries, stored as a JSON array in one column. NOT NULL with a
+	// default so rows written before this migration, and the ON CONFLICT upsert path,
+	// both see a valid empty list instead of NULL.
+	`
+ALTER TABLE time_entries ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+`,
 }
 
 type Store struct {

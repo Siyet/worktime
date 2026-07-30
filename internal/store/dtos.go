@@ -1,5 +1,66 @@
 package store
 
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
+)
+
+// TagList is a set of tag names stored in a single TEXT column as a JSON array.
+// Tags deliberately live on the entry row rather than in a table of their own: sync
+// resolves last-write-wins per row, so a tag edit has to be the same single row write
+// as editing a description, and a fourth synced table would break the sequence
+// allocation in Sync, which reserves a block sized by hand from three slices.
+type TagList []string
+
+// Value encodes the list for SQLite. An empty list is stored as "[]" rather than
+// NULL so the column can stay NOT NULL for rows written before the tags migration.
+func (list TagList) Value() (driver.Value, error) {
+	if len(list) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal([]string(list))
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
+}
+
+// Scan decodes the column. NULL and an empty string both yield an empty, non-nil
+// list, so a scanned entry always marshals its tags as [] and never as null.
+func (list *TagList) Scan(value any) error {
+	*list = TagList{}
+	var raw []byte
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case string:
+		raw = []byte(typed)
+	case []byte:
+		raw = typed
+	default:
+		return fmt.Errorf("tags: cannot scan %T", value)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	decoded := []string{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fmt.Errorf("tags: %w", err)
+	}
+	*list = decoded
+	return nil
+}
+
+// MarshalJSON keeps a nil list on the wire as [] so clients never have to treat
+// null and "no tags" as separate cases.
+func (list TagList) MarshalJSON() ([]byte, error) {
+	if list == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(list))
+}
+
 type User struct {
 	ID         string `json:"id"`
 	Email      string `json:"email"`
@@ -22,6 +83,7 @@ type TimeEntry struct {
 	ID          string  `json:"id"`
 	ProjectID   *string `json:"project_id"`
 	Description string  `json:"description"`
+	Tags        TagList `json:"tags"`
 	StartedAt   int64   `json:"started_at"`
 	StoppedAt   *int64  `json:"stopped_at"`
 	CreatedAt   int64   `json:"created_at"`

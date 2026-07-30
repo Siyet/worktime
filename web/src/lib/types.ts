@@ -15,6 +15,10 @@ export interface TimeEntry {
   id: string;
   project_id: string | null;
   description: string;
+  // Optional on purpose: rows stored before tags shipped, and rows pulled from a
+  // server that has not been migrated yet, carry no such key. Declaring it required
+  // would satisfy the type checker and then throw on the first render.
+  tags?: string[];
   started_at: number;
   stopped_at: number | null;
   created_at: number;

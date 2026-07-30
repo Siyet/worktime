@@ -5,7 +5,7 @@ import type { SyncedRow, TableName } from "./types";
 
 export const TABLES: TableName[] = ["projects", "time_entries", "time_off"];
 
-interface DirtyMarker {
+export interface DirtyMarker {
   table: TableName;
   id: string;
   updated_at: number;
@@ -56,13 +56,20 @@ export async function saveServerRow(table: TableName, row: SyncedRow): Promise<v
 // version (pending local edits) are kept.
 export async function mergeServerRows(changes: Partial<Record<TableName, SyncedRow[]>>): Promise<boolean> {
   const database = await db();
-  const transaction = database.transaction(TABLES, "readwrite");
+  const transaction = database.transaction([...TABLES, "dirty"], "readwrite");
+  const dirty = transaction.objectStore("dirty");
   let merged = false;
   for (const table of TABLES) {
     const incoming = changes[table] ?? [];
     if (incoming.length === 0) continue;
     const store = transaction.objectStore(table);
     for (const row of incoming) {
+      // A row that still holds a dirty marker has a local edit waiting to be pushed.
+      // The server copy arriving here is usually the echo of an earlier push and
+      // carries an identical updated_at, which would win the >= comparison below and
+      // silently revert the newer local edit. The echo never carries information the
+      // client does not already have, so skipping it is always safe.
+      if (await dirty.get(`${table}:${row.id}`)) continue;
       const local = (await store.get(row.id)) as SyncedRow | undefined;
       if (!local || row.updated_at >= local.updated_at) {
         void store.put(row);

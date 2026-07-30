@@ -4,18 +4,28 @@
 import {
   clearDirtyMarker,
   getCursor,
+  getMeta,
   getRow,
   listDirtyMarkers,
   mergeServerRows,
   setCursor,
+  setMeta,
+  type DirtyMarker,
 } from "./db";
 import type { SyncChanges, SyncedRow, SyncResponse } from "./types";
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "offline" | "error" | "unauthenticated";
 
+// The server caps a batch at 10000 rows and validates the whole batch before opening
+// its transaction, so pushes are chunked well under the cap. A tag rename or merge in
+// Settings rewrites every affected entry and is the operation that reaches this size.
+const maxPushRows = 2000;
+const rejectedMetaKey = "rejected";
+
 export const syncState = $state({
   status: "idle" as SyncStatus,
   pendingCount: 0,
+  rejectedCount: 0,
   lastSyncedAt: 0,
 });
 
@@ -65,6 +75,78 @@ export async function syncNow(): Promise<void> {
   }
 }
 
+interface PendingRow {
+  marker: DirtyMarker;
+  row: SyncedRow;
+}
+
+function changesFrom(pending: PendingRow[]): SyncChanges {
+  const changes: SyncChanges = {};
+  for (const item of pending) {
+    const bucket = (changes[item.marker.table] ??= [] as never[]) as SyncedRow[];
+    bucket.push(item.row);
+  }
+  return changes;
+}
+
+async function postSync(changes: SyncChanges): Promise<{ status: number; payload?: SyncResponse }> {
+  const response = await fetch("/api/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ since: await getCursor(), changes }),
+  });
+  if (!response.ok) return { status: response.status };
+  return { status: response.status, payload: (await response.json()) as SyncResponse };
+}
+
+async function applyPayload(payload: SyncResponse): Promise<boolean> {
+  const merged = await mergeServerRows(payload.changes);
+  await setCursor(payload.seq);
+  return merged;
+}
+
+// pushChunk sends one batch and, on a 400, isolates the row the server refuses.
+// Validation runs before the server opens its transaction, so a rejected batch wrote
+// nothing and retrying row by row is safe. Without this a single malformed row blocks
+// every pending change on the device forever and surfaces only as "sync error".
+async function pushChunk(
+  pending: PendingRow[],
+  rejected: Set<string>,
+): Promise<{ merged: boolean; fatalStatus?: number }> {
+  const result = await postSync(changesFrom(pending));
+  if (result.payload) {
+    const merged = await applyPayload(result.payload);
+    for (const item of pending) {
+      await clearDirtyMarker(item.marker);
+    }
+    return { merged };
+  }
+  if (result.status !== 400 || pending.length === 0) {
+    return { merged: false, fatalStatus: result.status };
+  }
+
+  const onlyRow = pending.length === 1 ? pending[0] : undefined;
+  if (onlyRow) {
+    rejected.add(`${onlyRow.marker.table}:${onlyRow.marker.id}`);
+    await clearDirtyMarker(onlyRow.marker);
+    return { merged: false };
+  }
+
+  let merged = false;
+  for (const item of pending) {
+    const single = await postSync(changesFrom([item]));
+    if (single.payload) {
+      merged = (await applyPayload(single.payload)) || merged;
+      await clearDirtyMarker(item.marker);
+      continue;
+    }
+    if (single.status !== 400) return { merged, fatalStatus: single.status };
+    rejected.add(`${item.marker.table}:${item.marker.id}`);
+    await clearDirtyMarker(item.marker);
+  }
+  return { merged };
+}
+
 async function syncOnce(): Promise<void> {
   if (!navigator.onLine) {
     syncState.status = "offline";
@@ -73,34 +155,41 @@ async function syncOnce(): Promise<void> {
   syncState.status = "syncing";
 
   try {
-    const markers = await listDirtyMarkers();
-    const changes: SyncChanges = {};
-    for (const marker of markers) {
+    const rejected = new Set((await getMeta<string[]>(rejectedMetaKey)) ?? []);
+    const rejectedBefore = rejected.size;
+
+    const pending: PendingRow[] = [];
+    for (const marker of await listDirtyMarkers()) {
+      if (rejected.has(`${marker.table}:${marker.id}`)) continue;
       const row = await getRow(marker.table, marker.id);
       if (!row) continue;
-      const bucket = (changes[marker.table] ??= [] as never[]) as SyncedRow[];
-      bucket.push(row);
+      pending.push({ marker, row });
     }
 
-    const response = await fetch("/api/sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ since: await getCursor(), changes }),
-    });
-    if (response.status === 401) {
-      syncState.status = "unauthenticated";
-      return;
+    const chunks: PendingRow[][] = [];
+    for (let index = 0; index < pending.length; index += maxPushRows) {
+      chunks.push(pending.slice(index, index + maxPushRows));
     }
-    if (!response.ok) {
-      throw new Error(`sync failed: ${response.status}`);
+    // With nothing to push we still make one request, because that is also the pull.
+    if (chunks.length === 0) chunks.push([]);
+
+    let merged = false;
+    for (const chunk of chunks) {
+      const result = await pushChunk(chunk, rejected);
+      merged = result.merged || merged;
+      if (result.fatalStatus !== undefined) {
+        if (result.fatalStatus === 401) {
+          syncState.status = "unauthenticated";
+          return;
+        }
+        throw new Error(`sync failed: ${result.fatalStatus}`);
+      }
     }
 
-    const payload: SyncResponse = await response.json();
-    const merged = await mergeServerRows(payload.changes);
-    await setCursor(payload.seq);
-    for (const marker of markers) {
-      await clearDirtyMarker(marker);
+    if (rejected.size !== rejectedBefore) {
+      await setMeta(rejectedMetaKey, [...rejected]);
     }
+    syncState.rejectedCount = rejected.size;
     await refreshPendingCount();
 
     syncState.status = "synced";

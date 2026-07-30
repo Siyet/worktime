@@ -3,11 +3,15 @@
 :root{--bg:#151a24;--surface:#1b2130;--text:#dbe2ef;--text-dim:#8a93a8;--border:#2a3245;--accent:#e8a33d;--accent-text:#16120a;--danger:#e05252;--teal:#40bec4;--purple:#b57de8;--green:#46b478;--blue:#607dbe;--grid:rgba(255,255,255,0.07);--axis:rgba(255,255,255,0.35);--hover:rgba(255,255,255,0.06);--radius:8px;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace /* @kind font */}
 @media (prefers-color-scheme: light){:root{--bg:#f5f3ee;--surface:#ffffff;--text:#232936;--text-dim:#6b7386;--border:#e3e0d8;--accent:#cd8a26;--accent-text:#ffffff;--danger:#d24343;--teal:#2ba3a9;--purple:#9a5fd0;--green:#35935f;--blue:#5e7bc0;--grid:rgba(20,26,40,0.08);--axis:rgba(20,26,40,0.4);--hover:rgba(20,26,40,0.06)}input[type=date]{color-scheme:light}}
 body{margin:0;padding:1rem;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
-a{color:var(--accent)}a:hover{color:var(--accent);filter:brightness(1.15)}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;-webkit-tap-highlight-color:transparent}
+a{color:var(--accent)}
 button{font:inherit;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:var(--radius);padding:0.4rem 0.9rem;cursor:pointer}
-button:hover{border-color:var(--text-dim)}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-text);font-weight:600}
-button.primary:hover{filter:brightness(1.08)}
+/* Hover only where hover exists; press feedback via :active. */
+@media (hover:hover){a:hover{color:var(--accent);filter:brightness(1.15)}button:hover{border-color:var(--text-dim)}button.primary:hover{filter:brightness(1.08)}}
+button:active{background:var(--hover)}
+button.primary:active{background:var(--accent);filter:brightness(0.92)}
+button,a,input,select{touch-action:manipulation}
 button.danger{color:var(--danger)}
 button.icon{display:inline-flex;align-items:center;justify-content:center;padding:0.35rem 0.5rem}
 button.icon svg{display:block}
@@ -20,6 +24,7 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);ou
 .seg button{border:none;border-radius:0;background:transparent;padding:0.35rem 0.85rem;color:var(--text-dim)}
 .seg button+button{border-left:1px solid var(--border)}
 .seg button.on{background:var(--accent);color:var(--accent-text);font-weight:600}
+.seg.disabled{opacity:0.45}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1rem}
 .muted{color:var(--text-dim)}
 .row{display:flex;align-items:center;gap:0.6rem}
@@ -32,3 +37,23 @@ h3{margin:0 0 0.5rem;font-size:0.95rem}
 .stat b{display:block;font-size:1.25rem;color:var(--text);font-weight:600}
 .stat.hi b{color:var(--accent)}
 .stat i{font-style:normal;font-size:0.76rem;color:var(--text-dim)}
+/* --- mobile (mirror of the app.css mobile pass, docs/mobile-design.md) --- */
+@media (max-width:34rem){
+  input,select{font-size:1rem}
+  .timefield{font-size:1rem;width:5.5rem}
+  .tagpick-add input,.tagpick-filter{font-size:1rem}
+  .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.8rem 1rem}
+  .rowmenu{animation:sheet-up 160ms ease-out}
+  dialog.sheet[open]{animation:sheet-up 200ms ease-out}
+  dialog.sheet::backdrop{animation:fade-in 200ms ease-out}
+  .menu-scrim{animation:fade-in 160ms ease-out;overscroll-behavior:contain}
+}
+@media (pointer:coarse){
+  button{min-height:2.75rem}
+  .seg button{min-height:2.6rem}
+  .chip{min-height:2.1rem}
+  input:not([type=checkbox]):not([type=radio]):not([type=color]),select{min-height:2.75rem}
+}
+@keyframes sheet-up{from{transform:translateY(1.5rem);opacity:0.5}}
+@keyframes fade-in{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.rowmenu,dialog.sheet[open],dialog.sheet::backdrop,.menu-scrim{animation:none}}

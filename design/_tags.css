@@ -138,11 +138,16 @@ button.tag:focus-visible {
     flex-direction: column;
     align-items: flex-end;
     gap: 0;
+    font-size: 0.85rem;
   }
 
   /* The end time is derivable from the next row's start; it goes first. */
   .item .when .to {
     display: none;
+  }
+
+  .item .when .dur {
+    min-width: 0;
   }
 
   .item .desc {
@@ -151,6 +156,23 @@ button.tag:focus-visible {
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+
+  /* One-truncation law: only .proj may ellipsize (the dot already encodes the
+     project). Chips and the +N counter are atomic; when project + chips don't
+     fit, the tag block wraps to its own line with full labels. */
+  .item .meta {
+    flex-wrap: wrap;
+    row-gap: 0.1rem;
+  }
+
+  .item .meta .tags {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+
+  .item .meta .tags .tag {
+    flex: 0 0 auto;
   }
 }
 
@@ -165,9 +187,11 @@ button.tag:focus-visible {
   border-color: transparent;
 }
 
-.kebab:hover {
-  color: var(--text);
-  border-color: var(--border);
+@media (hover: hover) {
+  .kebab:hover {
+    color: var(--text);
+    border-color: var(--border);
+  }
 }
 
 /* Open state must read without hover - mobile has none. */
@@ -305,6 +329,21 @@ button.tag:focus-visible {
 }
 
 /* --- entry editor: native dialog, sheet below 34rem, card above ----------- */
+/* display:flex below would override the UA's display:none for a closed dialog,
+   so the closed state must be restated explicitly. */
+dialog.sheet:not([open]) {
+  display: none;
+}
+
+/* dialog.sheet is the flex column, but its only child is the <form>: without
+   making the form itself a min-height:0 flex column, .ed-body's flex/overflow
+   rules are inert and the footer scrolls out of view. */
+.sheet form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 dialog.sheet {
   position: fixed;
   inset: auto 0 0 0;
@@ -358,6 +397,7 @@ dialog.sheet::backdrop {
   padding: 0.3rem 1rem 0.9rem;
   display: grid;
   gap: 0.75rem;
+  scroll-padding-block: 3rem;
 }
 
 .sheet .ed-foot {

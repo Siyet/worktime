@@ -3,9 +3,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>WorkTime - Timer rows</title>
 <link rel="stylesheet" href="../_shared.css" />
+<link rel="stylesheet" href="../_tags.css" />
 <style>
   .elapsed { font-size: 1.05rem; font-weight: 600; }
 </style>
@@ -15,17 +16,27 @@
     <h3>Running</h3>
     <div class="row item">
       <span class="dot" style="background: var(--accent)"></span>
-      <span>AIM V2 epic review</span>
-      <span class="muted">MySky</span>
-      <span class="spacer"></span>
-      <span class="mono elapsed">1:42:07</span>
+      <span class="main">
+        <button type="button" class="desc">AIM V2 epic review</button>
+        <span class="meta muted">
+          <span class="proj">MySky</span>
+          <span class="tags"><span class="tag">development</span></span>
+        </span>
+      </span>
+      <span class="when">
+        <span class="dur elapsed">1:42:07</span>
+      </span>
       <button>Stop</button>
     </div>
     <div class="row item">
       <span class="dot" style="background: var(--border)"></span>
-      <span>Code review</span>
-      <span class="spacer"></span>
-      <span class="mono elapsed">0:12:33</span>
+      <span class="main">
+        <button type="button" class="desc">Code review</button>
+        <span class="meta muted"></span>
+      </span>
+      <span class="when">
+        <span class="dur elapsed">0:12:33</span>
+      </span>
       <button>Stop</button>
     </div>
   </div>
@@ -38,21 +49,48 @@
     </div>
     <div class="row item">
       <span class="dot" style="background: var(--accent)"></span>
-      <span>Доработка топологии</span>
-      <span class="muted">MySky</span>
-      <span class="spacer"></span>
-      <span class="muted mono">9:15 AM-11:00 AM</span>
-      <span class="mono">1h 45m</span>
-      <button class="danger icon" title="Delete entry"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
+      <span class="main">
+        <button type="button" class="desc">Доработка топологии</button>
+        <span class="meta muted">
+          <span class="proj">MySky</span>
+          <span class="tags">
+            <span class="tag">development</span>
+            <span class="tag">+1</span>
+          </span>
+        </span>
+      </span>
+      <span class="when">
+        <span class="dur">1h 45m</span>
+        <span class="range muted"><span class="from">09:15</span><span class="to">-11:00</span></span>
+      </span>
+      <span class="menu-wrap">
+        <button type="button" class="kebab icon" aria-label="Entry actions" aria-expanded="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+          </svg>
+        </button>
+      </span>
     </div>
     <div class="row item">
       <span class="dot" style="background: var(--blue)"></span>
-      <span>Weekly</span>
-      <span class="muted">PT</span>
-      <span class="spacer"></span>
-      <span class="muted mono">11:00 AM-11:54 AM</span>
-      <span class="mono">54m</span>
-      <button class="danger icon" title="Delete entry"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M6 6l1 14h10l1-14"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
+      <span class="main">
+        <button type="button" class="desc">Weekly</button>
+        <span class="meta muted">
+          <span class="proj">PT</span>
+          <span class="tags"><span class="tag">meeting</span></span>
+        </span>
+      </span>
+      <span class="when">
+        <span class="dur">54m</span>
+        <span class="range muted"><span class="from">11:00</span><span class="to">-11:54</span></span>
+      </span>
+      <span class="menu-wrap">
+        <button type="button" class="kebab icon" aria-label="Entry actions" aria-expanded="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+          </svg>
+        </button>
+      </span>
     </div>
   </div>
 </body>

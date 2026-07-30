@@ -162,6 +162,12 @@
 </div>
 
 <div class="card">
+  <h3>{t("Export")}</h3>
+  <p class="muted">{t("Your projects, entries and time off as a standalone SQLite database.")}</p>
+  <a class="export-link" href="/api/export.sqlite" download>{t("Download .sqlite")}</a>
+</div>
+
+<div class="card">
   <h3>{t("Sync")}</h3>
   <p class="muted">
     {t("Status")}: {syncState.status}, {t("pending changes")}: {syncState.pendingCount}
@@ -204,5 +210,21 @@
     border: 1px dashed var(--accent);
     border-radius: var(--radius);
     word-break: break-all;
+  }
+
+  /* An anchor dressed as a button: the download is a plain same-origin GET,
+     so a real link keeps middle-click and "save link as" working. */
+  .export-link {
+    display: inline-block;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    text-decoration: none;
+    background: var(--surface);
+  }
+
+  .export-link:hover {
+    background: var(--hover);
   }
 </style>

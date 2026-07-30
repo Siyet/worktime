@@ -78,6 +78,22 @@ func (s *server) handlePull(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleExport streams a standalone SQLite file with the current user's data.
+// The full-database dump stays the server owner's job (copying the DB file);
+// this is the per-user takeout.
+func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
+	path, cleanup, err := s.store.ExportUserDB(r.Context(), currentUser(r).ID)
+	if err != nil {
+		log.Printf("export: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer cleanup()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="worktime-export.sqlite"`)
+	http.ServeFile(w, r, path)
+}
+
 type createTokenRequest struct {
 	Name string `json:"name"`
 }

@@ -68,6 +68,35 @@ test.describe("reports v3", () => {
     await expect(table).toContainText("No project");
   });
 
+  test("overlaps-once option counts concurrent work a single time", async ({ page, server }) => {
+    const projectID = crypto.randomUUID();
+    // Two fully overlapping one-hour entries at 9:00 local: raw total is 2h,
+    // overlap-aware total is 1h (30m attributed to each entry).
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      projects: [{ id: projectID, name: "Overlapped" }],
+      entries: [
+        { description: "task one", startedAt: todayNine, stoppedAt: todayNine + HOUR, projectID },
+        { description: "task two", startedAt: todayNine, stoppedAt: todayNine + HOUR },
+      ],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    // Assert the "total tracked" tile specifically: other KPI tiles (e.g. avg
+    // per work day) could contain the same substring by coincidence.
+    const totalStat = page.locator(".stat").first();
+    await expect(totalStat).toContainText("2.0h");
+
+    await page.getByLabel("Overlaps once").check();
+    await expect(totalStat).toContainText("1.0h");
+    // Each side of the overlap gets half the wall-clock hour.
+    const projectRow = page.locator(".proj-item").filter({ hasText: "Overlapped" });
+    await expect(projectRow).toContainText("30m");
+
+    await page.getByLabel("Overlaps once").uncheck();
+    await expect(totalStat).toContainText("2.0h");
+  });
+
   test("printable report route renders Russian report with real data", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
     await seedServer(server.url, {

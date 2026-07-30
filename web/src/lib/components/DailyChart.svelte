@@ -99,7 +99,9 @@
   }
 
   function formatMinutes(minutes: number): string {
-    return `${Math.floor(minutes / 60)}${hourUnit} ${String(Math.round(minutes % 60)).padStart(2, "0")}m`;
+    // Round once before divmod so fractional overlap shares never show "1h 60m".
+    const total = Math.round(minutes);
+    return `${Math.floor(total / 60)}${hourUnit} ${String(total % 60).padStart(2, "0")}m`;
   }
 </script>
 

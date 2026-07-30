@@ -3,7 +3,14 @@
   import { appState } from "../lib/state/app.svelte";
   import { route } from "../lib/router.svelte";
   import { localDateISO } from "../lib/format";
-  import { expandTimeOff, isWeekend, listDays, toReportEntries, type ReportEntry } from "../lib/report";
+  import {
+    expandTimeOff,
+    isWeekend,
+    listDays,
+    splitOverlapMinutes,
+    toReportEntries,
+    type ReportEntry,
+  } from "../lib/report";
   import DailyChart, { type ChartDay } from "../lib/components/DailyChart.svelte";
   import Logo from "../lib/components/Logo.svelte";
 
@@ -32,19 +39,23 @@
 
   const days = $derived(listDays(dateFrom, dateTo));
   const off = $derived(expandTimeOff(appState.timeOff));
-  const entries = $derived(
-    toReportEntries(appState.entries).filter(
-      (entry) =>
-        entry.date >= dateFrom && entry.date <= dateTo && (!projectFilter || projectFilter.has(entryKey(entry))),
-    ),
+  const dateRangeEntries = $derived(
+    toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
   );
+  const entries = $derived(dateRangeEntries.filter((entry) => !projectFilter || projectFilter.has(entryKey(entry))));
 
-  const totalMinutes = $derived(entries.reduce((sum, entry) => sum + entry.minutes, 0));
+  const overlapOnce = $derived(params.get("overlap") === "1");
+  // Shares come from the full date range, so a single-project report still
+  // counts time shared with other projects' concurrent entries only once.
+  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(dateRangeEntries) : null);
+  const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
+
+  const totalMinutes = $derived(entries.reduce((sum, entry) => sum + minutesOf(entry), 0));
   const workDays = $derived(days.filter((day) => !isWeekend(day) && !off.has(day)));
   const avgMinutes = $derived(workDays.length ? totalMinutes / workDays.length : 0);
   const minutesByDay = $derived.by(() => {
     const totals = new Map<string, number>();
-    for (const entry of entries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + entry.minutes);
+    for (const entry of entries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + minutesOf(entry));
     return totals;
   });
   const peakDay = $derived.by(() => {
@@ -55,7 +66,7 @@
     return best;
   });
   const weekendMinutes = $derived(
-    entries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + entry.minutes, 0),
+    entries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + minutesOf(entry), 0),
   );
   const offCounts = $derived.by(() => {
     const counts = { vacation: 0, sick: 0, dayoff: 0 };
@@ -68,7 +79,7 @@
 
   const byProject = $derived.by(() => {
     const totals = new Map<string, number>();
-    for (const entry of entries) totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + entry.minutes);
+    for (const entry of entries) totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + minutesOf(entry));
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
   });
 
@@ -77,7 +88,7 @@
     const perDay = new Map<string, Map<string, number>>();
     for (const entry of entries) {
       const bucket = perDay.get(entry.date) ?? new Map<string, number>();
-      bucket.set(entryKey(entry), (bucket.get(entryKey(entry)) ?? 0) + entry.minutes);
+      bucket.set(entryKey(entry), (bucket.get(entryKey(entry)) ?? 0) + minutesOf(entry));
       perDay.set(entry.date, bucket);
     }
     return days.map((day) => ({
@@ -123,7 +134,12 @@
   ];
 
   const pad2 = (value: number) => String(value).padStart(2, "0");
-  const fmtRu = (minutes: number) => `${Math.floor(minutes / 60)}ч ${pad2(Math.round(minutes % 60))}м`;
+  // Round once before divmod: overlap shares are fractional, and rounding the
+  // remainder independently would render 59.5 as "0ч 60м".
+  const fmtRu = (minutes: number) => {
+    const total = Math.round(minutes);
+    return `${Math.floor(total / 60)}ч ${pad2(total % 60)}м`;
+  };
   const fmtHoursRu = (minutes: number) => (minutes / 60).toFixed(1) + " ч";
   const dayShort = (dayISO: string) => `${Number(dayISO.slice(8))}.${dayISO.slice(5, 7)}`;
   const monthIndex = (dayISO: string) => Number(dayISO.slice(5, 7)) - 1;
@@ -288,7 +304,7 @@
                 <td>{entry.description || "(без описания)"}</td>
                 <td class="num">{dayShort(entry.date)}</td>
                 <td class="num">{startTime(entry.startedAt)}</td>
-                <td class="num">{fmtRu(entry.minutes)}</td>
+                <td class="num">{fmtRu(minutesOf(entry))}</td>
               </tr>
             {/each}
           {:else}
@@ -300,6 +316,9 @@
       <div class="note">
         Среднее считается по всем затреканным часам, делённым на количество рабочих дней в периоде (без выходных,
         отпуска, дей-оффов и больничных).
+        {#if overlapOnce}
+          Пересекающиеся записи учтены один раз: одновременная работа делит затраченное время поровну.
+        {/if}
         {#if absences.length > 0}
           Отсутствия в периоде: {absences.join(", ")}.
         {:else}

@@ -8,6 +8,7 @@
     isWeekend,
     listDays,
     roundMinutes,
+    splitOverlapMinutes,
     toReportEntries,
     type ReportEntry,
   } from "../lib/report";
@@ -56,6 +57,9 @@
   let showEntries = $state(false);
   let rounding = $state(0);
   let columns = $state({ duration: true, pct: true, entries: true, avg: false });
+  // When on, wall-clock time is split equally between concurrent entries, so
+  // an hour spent on two overlapping tasks counts as one hour in every total.
+  let overlapOnce = $state(false);
 
   function applyPreset(value: string) {
     const range = presetRange(value as Exclude<Preset, "">);
@@ -99,18 +103,23 @@
 
   const entryKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
 
-  const rangeEntries = $derived(
-    toReportEntries(appState.entries).filter(
-      (entry) => entry.date >= dateFrom && entry.date <= dateTo && activeKeys.has(entryKey(entry)),
-    ),
+  const dateRangeEntries = $derived(
+    toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
   );
+  const rangeEntries = $derived(dateRangeEntries.filter((entry) => activeKeys.has(entryKey(entry))));
   const filteredEntries = $derived(rangeEntries.filter((entry) => !dayFilter || entry.date === dayFilter));
 
-  const totalMinutes = $derived(rangeEntries.reduce((sum, entry) => sum + entry.minutes, 0));
+  // Per-entry minutes to aggregate: raw durations, or overlap-adjusted shares.
+  // Shares are computed on the full date range BEFORE the project-chip filter,
+  // so hiding one project never rewrites another project's numbers.
+  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(dateRangeEntries) : null);
+  const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
+
+  const totalMinutes = $derived(rangeEntries.reduce((sum, entry) => sum + minutesOf(entry), 0));
   const workDays = $derived(days.filter((day) => !isWeekend(day) && !off.has(day)));
   const minutesByDay = $derived.by(() => {
     const totals = new Map<string, number>();
-    for (const entry of rangeEntries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + entry.minutes);
+    for (const entry of rangeEntries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + minutesOf(entry));
     return totals;
   });
   const peakDay = $derived.by(() => {
@@ -121,7 +130,7 @@
     return best;
   });
   const weekendMinutes = $derived(
-    rangeEntries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + entry.minutes, 0),
+    rangeEntries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + minutesOf(entry), 0),
   );
   const offCounts = $derived.by(() => {
     const counts = { vacation: 0, sick: 0, dayoff: 0 };
@@ -148,7 +157,7 @@
     const perDay = new Map<string, Map<string, number>>();
     for (const entry of rangeEntries) {
       const bucket = perDay.get(entry.date) ?? new Map<string, number>();
-      bucket.set(entryKey(entry), (bucket.get(entryKey(entry)) ?? 0) + entry.minutes);
+      bucket.set(entryKey(entry), (bucket.get(entryKey(entry)) ?? 0) + minutesOf(entry));
       perDay.set(entry.date, bucket);
     }
     return days.map((day) => ({
@@ -166,7 +175,9 @@
 
   const byProject = $derived.by(() => {
     const totals = new Map<string, number>();
-    for (const entry of rangeEntries) totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + entry.minutes);
+    for (const entry of rangeEntries) {
+      totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + minutesOf(entry));
+    }
     return [...totals.entries()].sort((left, right) => right[1] - left[1]);
   });
 
@@ -182,8 +193,6 @@
     if (column === "entries") return t("Entries");
     return t("Avg / entry");
   }
-
-  const tableTotal = $derived(filteredEntries.reduce((sum, entry) => sum + roundMinutes(entry.minutes, rounding), 0));
 
   const tableGroups = $derived.by(() => {
     const key = (entry: ReportEntry) =>
@@ -202,17 +211,29 @@
     if (groupBy === "day") {
       rows.sort((left, right) => left[0].localeCompare(right[0]));
     } else {
-      const total = (entries: ReportEntry[]) => entries.reduce((sum, entry) => sum + entry.minutes, 0);
+      const total = (entries: ReportEntry[]) => entries.reduce((sum, entry) => sum + minutesOf(entry), 0);
       rows.sort((left, right) => total(right[1]) - total(left[1]));
     }
     return rows.map(([groupKey, entries]) => ({
       key: groupKey,
       label: groupBy === "day" ? formatDayISO(groupKey) : groupBy === "project" ? chipName(groupKey) : groupKey,
       color: groupBy === "project" ? chipColor(groupKey) : null,
-      minutes: entries.reduce((sum, entry) => sum + roundMinutes(entry.minutes, rounding), 0),
+      // With overlaps-once on, rounding applies to the group sum: per-share
+      // rounding would clamp each fraction up to a full step and re-inflate
+      // the very overlap the option removes.
+      minutes: overlapOnce
+        ? roundMinutes(
+            entries.reduce((sum, entry) => sum + minutesOf(entry), 0),
+            rounding,
+          )
+        : entries.reduce((sum, entry) => sum + roundMinutes(entry.minutes, rounding), 0),
       entries: [...entries].sort((left, right) => left.startedAt - right.startedAt),
     }));
   });
+
+  // The header total is the sum of the visible groups, so table and header can
+  // never disagree regardless of rounding mode.
+  const tableTotal = $derived(tableGroups.reduce((sum, group) => sum + group.minutes, 0));
 
   function cellValue(group: { minutes: number; entries: ReportEntry[] }, column: string): string {
     if (column === "duration") return fmtMin(group.minutes);
@@ -224,7 +245,14 @@
   // --- actions ---
 
   function exportCSV() {
-    const csv = buildCSV(filteredEntries, (projectID) => chipName(projectID ?? NO_PROJECT_KEY), rounding);
+    // With overlaps-once on, per-row rounding would clamp fractional shares
+    // back up to a full step, so the CSV exports the raw shares instead.
+    const csv = buildCSV(
+      filteredEntries,
+      (projectID) => chipName(projectID ?? NO_PROJECT_KEY),
+      overlapOnce ? 0 : rounding,
+      minutesOf,
+    );
     const blobURL = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const anchor = document.createElement("a");
     anchor.href = blobURL;
@@ -237,6 +265,9 @@
     const params = new URLSearchParams({ from: dateFrom, to: dateTo });
     if (disabledKeys.size > 0) {
       params.set("projects", [...activeKeys].join(","));
+    }
+    if (overlapOnce) {
+      params.set("overlap", "1");
     }
     window.location.hash = "/reports/print?" + params.toString();
   }
@@ -268,6 +299,13 @@
       {formatDayISO(dayFilter)}&nbsp;&nbsp;✕
     </button>
   {/if}
+  <label
+    class="overlap-toggle"
+    title={t("Overlapping entries are counted once: simultaneous work shares the elapsed time.")}
+  >
+    <input type="checkbox" bind:checked={overlapOnce} />
+    {t("Overlaps once")}
+  </label>
   <span class="spacer"></span>
   <button onclick={exportCSV}>{t("Export CSV")}</button>
   <button class="primary" onclick={openPrint}>{t("PDF report")}</button>
@@ -420,7 +458,11 @@
                 </span>
               </td>
               {#each visibleColumns as column (column)}
-                <td class="num muted">{column === "duration" ? fmtMin(roundMinutes(entry.minutes, rounding)) : ""}</td>
+                <td class="num muted">
+                  {column === "duration"
+                    ? fmtMin(overlapOnce ? minutesOf(entry) : roundMinutes(entry.minutes, rounding))
+                    : ""}
+                </td>
               {/each}
             </tr>
           {/each}
@@ -500,6 +542,20 @@
     font-size: 0.78rem;
     cursor: pointer;
     font-weight: 600;
+  }
+
+  .overlap-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .overlap-toggle:has(input:checked) {
+    color: var(--text);
   }
 
   .legend {

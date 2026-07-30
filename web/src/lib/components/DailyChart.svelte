@@ -38,19 +38,29 @@
   const uid = $props.id();
   const hatchID = `${uid}-hatch`;
 
-  const WIDTH = 760;
-  const HEIGHT = 260;
   const PAD_LEFT = 36;
   const PAD_TOP = 14;
   const PAD_BOTTOM = 20;
-  const baselineY = HEIGHT - PAD_BOTTOM;
-  const plotHeight = baselineY - PAD_TOP;
+
+  let containerWidth = $state(760);
+  // True-pixel canvas only for the interactive chart under 34rem (544px):
+  // the print sheet (interactive={false}) and desktop keep the fixed 760x260
+  // viewBox, so their rendering is byte-identical. A 760-unit viewBox squeezed
+  // into ~326 CSS px renders axis labels at ~4.3px - unreadable.
+  const width = $derived(interactive && containerWidth < 544 ? Math.max(300, containerWidth) : 760);
+  const height = $derived(width < 480 ? 200 : 260);
+  const baselineY = $derived(height - PAD_BOTTOM);
+  const plotHeight = $derived(baselineY - PAD_TOP);
 
   const dayTotals = $derived(days.map((day) => day.slices.reduce((sum, slice) => sum + slice.minutes, 0)));
   const yMax = $derived(Math.ceil(Math.max(120, ...dayTotals) / 120) * 120);
-  const columnWidth = $derived((WIDTH - PAD_LEFT) / Math.max(1, days.length));
+  const columnWidth = $derived((width - PAD_LEFT) / Math.max(1, days.length));
   const barWidth = $derived(Math.min(columnWidth * 0.72, 22));
-  const labelStep = $derived(Math.max(1, Math.ceil(days.length / 14)));
+  // Pixel budget: ~46px per label; capped at 14 so desktop density is
+  // exactly the previous ceil(days / 14).
+  const labelStep = $derived(
+    Math.max(1, Math.ceil(days.length / Math.min(14, Math.max(4, Math.floor(width / 46))))),
+  );
   const gridLines = $derived.by(() => {
     const lines: number[] = [];
     for (let level = 0; level <= yMax; level += 120) lines.push(level);
@@ -105,7 +115,8 @@
   }
 </script>
 
-<svg class="chart" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label={t("Daily tracked hours")}>
+<div class="chartwrap" bind:clientWidth={containerWidth}>
+<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label={t("Daily tracked hours")}>
   <defs>
     <pattern id={hatchID} width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
       <rect width="7" height="7" fill="rgba(224,82,82,0.10)" />
@@ -126,7 +137,7 @@
   {/each}
 
   {#each gridLines as level (level)}
-    <line x1={PAD_LEFT} y1={yOf(level)} x2={WIDTH} y2={yOf(level)} stroke="var(--grid)" />
+    <line x1={PAD_LEFT} y1={yOf(level)} x2={width} y2={yOf(level)} stroke="var(--grid)" />
     {#if level > 0}
       <text x={PAD_LEFT - 6} y={yOf(level) + 3.5} text-anchor="end" font-size="10" fill="var(--text-dim)">
         {level / 60}{hourUnit}
@@ -150,7 +161,7 @@
       />
     {/each}
     {#if index % labelStep === 0}
-      <text x={bar.x + barWidth / 2} y={HEIGHT - 5} text-anchor="middle" font-size="9.5" fill="var(--text-dim)">
+      <text x={bar.x + barWidth / 2} y={height - 5} text-anchor="middle" font-size="9.5" fill="var(--text-dim)">
         {Number(bar.date.slice(8))}
       </text>
     {/if}
@@ -172,19 +183,23 @@
     <line
       x1={PAD_LEFT}
       y1={yOf(avgMinutes)}
-      x2={WIDTH}
+      x2={width}
       y2={yOf(avgMinutes)}
       stroke="var(--accent)"
       stroke-width="1.3"
       stroke-dasharray="6 5"
       opacity="0.75"
     />
-    <text x={WIDTH - 4} y={yOf(avgMinutes) - 5} text-anchor="end" font-size="10" fill="var(--accent)">
-      {avgCaption}
-    </text>
+    <!-- The caption is ~130px and would lie across the bars on a narrow
+         canvas; the "avg per work day" stat tile carries the same number. -->
+    {#if width >= 480}
+      <text x={width - 4} y={yOf(avgMinutes) - 5} text-anchor="end" font-size="10" fill="var(--accent)">
+        {avgCaption}
+      </text>
+    {/if}
   {/if}
 
-  <line x1={PAD_LEFT} y1={baselineY} x2={WIDTH} y2={baselineY} stroke="var(--axis)" />
+  <line x1={PAD_LEFT} y1={baselineY} x2={width} y2={baselineY} stroke="var(--axis)" />
 
   {#if interactive}
     {#each days as day, index (day.date)}
@@ -211,6 +226,7 @@
     {/each}
   {/if}
 </svg>
+</div>
 
 {#if tip && days[tip.index]}
   {@const tipDay = days[tip.index]!}
@@ -229,6 +245,10 @@
 {/if}
 
 <style>
+  .chartwrap {
+    width: 100%;
+  }
+
   .chart {
     width: 100%;
     display: block;

@@ -134,6 +134,9 @@
     top: calc(100% + 4px);
     left: 0;
     min-width: 100%;
+    max-height: 40dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -158,5 +161,11 @@
 
   .menu button.active {
     background: var(--hover);
+  }
+
+  @media (pointer: coarse) {
+    .menu button {
+      min-height: 2.6rem;
+    }
   }
 </style>

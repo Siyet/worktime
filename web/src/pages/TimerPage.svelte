@@ -71,7 +71,7 @@
 
 <form class="card row" onsubmit={submitStart}>
   <input
-    style="flex: 1"
+    class="grow"
     placeholder={t("What are you working on?")}
     bind:value={description}
     aria-label={t("Description")}
@@ -159,5 +159,43 @@
   .elapsed {
     font-size: 1.05rem;
     font-weight: 600;
+  }
+
+  .grow {
+    flex: 1;
+  }
+
+  /* Day totals like "3h 10m" must never break mid-value. */
+  .row > .mono {
+    white-space: nowrap;
+  }
+
+  @media (max-width: 34rem) {
+    form.row {
+      flex-wrap: wrap;
+    }
+
+    .grow {
+      flex: 1 1 100%;
+    }
+
+    form.row :global(.pselect) {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    form.row :global(.pselect > button) {
+      width: 100%;
+      max-width: none;
+    }
+
+    form.row :global(.pselect .caret) {
+      margin-left: auto;
+    }
+
+    form.row > button.primary {
+      flex: 0 0 auto;
+      min-width: 7rem;
+    }
   }
 </style>

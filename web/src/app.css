@@ -47,6 +47,12 @@
   }
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -60,11 +66,6 @@ a {
   color: var(--accent);
 }
 
-a:hover {
-  color: var(--accent);
-  filter: brightness(1.15);
-}
-
 button {
   font: inherit;
   border: 1px solid var(--border);
@@ -75,10 +76,6 @@ button {
   cursor: pointer;
 }
 
-button:hover {
-  border-color: var(--text-dim);
-}
-
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -86,8 +83,37 @@ button.primary {
   font-weight: 600;
 }
 
-button.primary:hover {
-  filter: brightness(1.08);
+/* Hover styling only where hover exists: on touch it turns into sticky state
+   that survives the tap. Press feedback comes from :active instead. */
+@media (hover: hover) {
+  a:hover {
+    color: var(--accent);
+    filter: brightness(1.15);
+  }
+
+  button:hover {
+    border-color: var(--text-dim);
+  }
+
+  button.primary:hover {
+    filter: brightness(1.08);
+  }
+}
+
+button:active {
+  background: var(--hover);
+}
+
+button.primary:active {
+  background: var(--accent);
+  filter: brightness(0.92);
+}
+
+button,
+a,
+input,
+select {
+  touch-action: manipulation;
 }
 
 button.danger {
@@ -354,11 +380,16 @@ button.tag:focus-visible {
     flex-direction: column;
     align-items: flex-end;
     gap: 0;
+    font-size: 0.85rem;
   }
 
   /* The end time is derivable from the next row's start; it goes first. */
   .item .when .to {
     display: none;
+  }
+
+  .item .when .dur {
+    min-width: 0;
   }
 
   .item .desc {
@@ -367,6 +398,23 @@ button.tag:focus-visible {
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+
+  /* One-truncation law: only .proj may ellipsize (the dot already encodes the
+     project). Chips and the +N counter are atomic; when project + chips don't
+     fit, the tag block wraps to its own line with full labels. */
+  .item .meta {
+    flex-wrap: wrap;
+    row-gap: 0.1rem;
+  }
+
+  .item .meta .tags {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+
+  .item .meta .tags .tag {
+    flex: 0 0 auto;
   }
 }
 
@@ -381,9 +429,11 @@ button.tag:focus-visible {
   border-color: transparent;
 }
 
-.kebab:hover {
-  color: var(--text);
-  border-color: var(--border);
+@media (hover: hover) {
+  .kebab:hover {
+    color: var(--text);
+    border-color: var(--border);
+  }
 }
 
 /* Open state must read without hover - mobile has none. */
@@ -561,6 +611,15 @@ dialog.sheet::backdrop {
   }
 }
 
+/* dialog.sheet is the flex column, but its only child is the <form>: without
+   making the form itself a min-height:0 flex column, .ed-body's flex/overflow
+   rules are inert and the footer scrolls out of view. */
+.sheet form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .sheet .ed-head {
   display: flex;
   align-items: center;
@@ -580,6 +639,7 @@ dialog.sheet::backdrop {
   padding: 0.3rem 1rem 0.9rem;
   display: grid;
   gap: 0.75rem;
+  scroll-padding-block: 3rem;
 }
 
 .sheet .ed-foot {
@@ -705,5 +765,95 @@ dialog.sheet::backdrop {
   margin-bottom: 0.35rem;
   width: 100%;
   font-size: 0.9rem;
+}
+
+/* --- mobile: iOS focus-zoom guard ------------------------------------------
+   iOS Safari zooms the page when a focused input is under 16px. */
+@media (max-width: 34rem) {
+  input,
+  select {
+    font-size: 1rem;
+  }
+
+  .timefield {
+    font-size: 1rem;
+    width: 5.5rem;
+  }
+
+  .tagpick-add input,
+  .tagpick-filter {
+    font-size: 1rem;
+  }
+}
+
+/* --- touch targets ---------------------------------------------------------
+   Checkbox/radio/color keep their intrinsic size: a 44px checkbox and a
+   stretched colour swatch read as bugs, not accessibility. */
+@media (pointer: coarse) {
+  button {
+    min-height: 2.75rem;
+  }
+
+  .seg button {
+    min-height: 2.6rem;
+  }
+
+  /* Filter chips keep the settled compact pill look, same as button.tag. */
+  .chip {
+    min-height: 2.1rem;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+  select {
+    min-height: 2.75rem;
+  }
+}
+
+/* --- mobile sheet motion + stats grid -------------------------------------- */
+@keyframes sheet-up {
+  from {
+    transform: translateY(1.5rem);
+    opacity: 0.5;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .rowmenu {
+    animation: sheet-up 160ms ease-out;
+  }
+
+  dialog.sheet[open] {
+    animation: sheet-up 200ms ease-out;
+  }
+
+  dialog.sheet::backdrop {
+    animation: fade-in 200ms ease-out;
+  }
+
+  .menu-scrim {
+    animation: fade-in 160ms ease-out;
+    overscroll-behavior: contain;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowmenu,
+  dialog.sheet[open],
+  dialog.sheet::backdrop,
+  .menu-scrim {
+    animation: none;
+  }
 }
 

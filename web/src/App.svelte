@@ -48,6 +48,13 @@
       unauthenticated: t("signed out"),
     }[syncState.status],
   );
+
+  // On narrow screens the nav scrolls horizontally (ru/de labels overflow a
+  // 360px viewport by a few dozen px); keep the active tab in view.
+  $effect(() => {
+    void route.path;
+    document.querySelector("nav a.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 </script>
 
 {#if printRoute}
@@ -113,6 +120,8 @@
     max-width: 46rem;
     margin: 0 auto;
     padding: 0 1rem 3rem;
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
   }
 
   .shell.wide {
@@ -124,6 +133,7 @@
     align-items: center;
     gap: 1rem;
     padding: 0.8rem 0;
+    padding-top: max(0.8rem, env(safe-area-inset-top));
     flex-wrap: wrap;
   }
 
@@ -189,5 +199,37 @@
     padding: 0.6rem 1.4rem;
     border-radius: var(--radius);
     text-decoration: none;
+  }
+
+  /* Two-deck header below 34rem: logo + sync status on top, nav as one
+     non-wrapping row with horizontal scroll as the safety valve. */
+  @media (max-width: 34rem) {
+    header {
+      gap: 0.25rem 0.6rem;
+    }
+
+    .status {
+      order: 2;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    nav {
+      order: 3;
+      flex: 1 0 100%;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    nav::-webkit-scrollbar {
+      display: none;
+    }
+
+    nav a {
+      padding: 0.3rem 0.55rem;
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
   }
 </style>

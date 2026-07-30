@@ -28,7 +28,7 @@
 
 <form class="card row" onsubmit={submitCreate}>
   <input type="color" bind:value={newColor} aria-label={t("Project color")} />
-  <input style="flex: 1" placeholder={t("New project name")} bind:value={newName} aria-label={t("Project name")} />
+  <input class="grow" placeholder={t("New project name")} bind:value={newName} aria-label={t("Project name")} />
   <button class="primary" type="submit">{t("Add")}</button>
 </form>
 
@@ -42,7 +42,7 @@
         onchange={(event) => updateProject({ ...project, color: event.currentTarget.value })}
       />
       <input
-        style="flex: 1"
+        class="grow"
         value={project.name}
         aria-label={t("Name")}
         onchange={(event) => {
@@ -69,5 +69,24 @@
 
   .item.archived {
     opacity: 0.5;
+  }
+
+  /* min-width: 0 is the actual unclip: a text input's intrinsic minimum is
+     ~170px (default size attribute) and flex-basis alone cannot shrink it. */
+  .grow {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  @media (max-width: 34rem) {
+    input[type="color"] {
+      width: 2.4rem;
+      flex: 0 0 auto;
+      padding: 0.15rem;
+    }
+
+    .item > button:not(.icon) {
+      padding-inline: 0.6rem;
+    }
   }
 </style>

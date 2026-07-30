@@ -94,4 +94,31 @@
     background: color-mix(in srgb, var(--purple) 20%, transparent);
     border-color: var(--purple);
   }
+
+  @media (max-width: 34rem) {
+    .row.wrap input[type="date"] {
+      flex: 1 1 40%;
+      min-width: 0;
+    }
+
+    .row.wrap > button.primary {
+      flex: 1 1 100%;
+    }
+
+    .item {
+      flex-wrap: wrap;
+    }
+
+    /* A date range is one token - the row wraps, the range never does. */
+    .item .mono {
+      white-space: nowrap;
+      font-size: 0.85rem;
+    }
+
+    /* When the row wraps, the delete control right-aligns instead of
+       stranding flush-left on line 2. */
+    .item > button.icon {
+      margin-left: auto;
+    }
+  }
 </style>

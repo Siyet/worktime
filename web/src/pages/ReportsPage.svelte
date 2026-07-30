@@ -572,6 +572,7 @@
     <span class="spacer"></span>
     <span class="muted mono">{fmtMin(tableTotal)}</span>
   </div>
+  <div class="tablewrap">
   <table>
     <thead>
       <tr>
@@ -650,6 +651,7 @@
       {/if}
     </tbody>
   </table>
+  </div>
   {#if groupBy === "tag" && multiTagCount > 0}
     <p class="reconcile">
       {t(
@@ -873,6 +875,16 @@
     text-align: right;
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .tablewrap {
+    overflow-x: auto;
+  }
+
+  /* Header totals ("16h 30m") and per-project durations never wrap. */
+  .row > .mono {
+    white-space: nowrap;
   }
 
   tr.group td {
@@ -909,5 +921,80 @@
   .inline-dot {
     display: inline-block;
     margin-right: 0.4rem;
+  }
+
+  @media (max-width: 34rem) {
+    .toolbar {
+      gap: 0.5rem;
+    }
+
+    .toolbar > :global(.seg) {
+      display: flex;
+      width: 100%;
+    }
+
+    /* flex-basis auto + min-width 0: long locale labels ("Прошлая неделя")
+       keep their width and only shrink under real pressure, with ellipsis
+       instead of the .seg overflow clip. */
+    .toolbar > :global(.seg button) {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 0.35rem 0.4rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toolbar > input[type="date"] {
+      flex: 1 1 40%;
+      min-width: 0;
+    }
+
+    .toolbar .overlap-toggle {
+      flex: 1 1 100%;
+    }
+
+    .toolbar > .spacer {
+      display: none;
+    }
+
+    /* Only the two action buttons; the day-filter pill keeps its shape. */
+    .toolbar > button:not(.filterpill) {
+      flex: 1 1 40%;
+      min-height: 2.75rem;
+    }
+
+    /* Group by: 2x2 grid instead of a 150px vertical stack. Page-scoped
+       :global rules out-specify Seg's :where()-scoped component rules. */
+    .builder :global(.seg.vertical) {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      width: 100%;
+    }
+
+    .builder :global(.seg.vertical button) {
+      border: none;
+    }
+
+    .builder :global(.seg.vertical button:nth-child(even)) {
+      border-left: 1px solid var(--border);
+    }
+
+    .builder :global(.seg.vertical button:nth-child(n + 3)) {
+      border-top: 1px solid var(--border);
+    }
+
+    table {
+      font-size: 0.85rem;
+    }
+
+    td,
+    th {
+      padding: 0.4rem 0.3rem;
+    }
+
+    td:first-child {
+      overflow-wrap: anywhere;
+    }
   }
 </style>

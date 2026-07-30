@@ -3,6 +3,7 @@
     appState,
     clock,
     deleteEntry,
+    entryTags,
     projectByID,
     runningEntries,
     startTimer,
@@ -11,6 +12,7 @@
   import { formatDay, formatDuration, formatDurationShort, formatTime, localDateISO } from "../lib/format";
   import { t } from "../lib/i18n";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
+  import TagChips from "../lib/components/TagChips.svelte";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeEntry } from "../lib/types";
 
@@ -83,10 +85,16 @@
       {@const project = projectByID(entry.project_id)}
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
-        <span>{entry.description || t("(no description)")}</span>
-        {#if project}<span class="muted">{project.name}</span>{/if}
-        <span class="spacer"></span>
-        <span class="mono elapsed">{formatDuration(clock.now - entry.started_at)}</span>
+        <span class="main">
+          <span class="desc">{entry.description || t("(no description)")}</span>
+          <span class="meta muted">
+            {#if project}<span class="proj">{project.name}</span>{/if}
+            <TagChips tags={entryTags(entry)} />
+          </span>
+        </span>
+        <span class="when">
+          <span class="dur elapsed">{formatDuration(clock.now - entry.started_at)}</span>
+        </span>
         <button onclick={() => stopTimer(entry.id)}>{t("Stop")}</button>
       </div>
     {/each}
@@ -104,13 +112,19 @@
       {@const project = projectByID(entry.project_id)}
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
-        <span>{entry.description || t("(no description)")}</span>
-        {#if project}<span class="muted">{project.name}</span>{/if}
-        <span class="spacer"></span>
-        <span class="muted mono">
-          {formatTime(entry.started_at)}-{formatTime(entry.stopped_at!)}
+        <span class="main">
+          <span class="desc">{entry.description || t("(no description)")}</span>
+          <span class="meta muted">
+            {#if project}<span class="proj">{project.name}</span>{/if}
+            <TagChips tags={entryTags(entry)} />
+          </span>
         </span>
-        <span class="mono">{formatDurationShort(entry.stopped_at! - entry.started_at)}</span>
+        <span class="when">
+          <span class="dur">{formatDurationShort(entry.stopped_at! - entry.started_at)}</span>
+          <span class="to muted">
+            {formatTime(entry.started_at)}-{formatTime(entry.stopped_at!)}
+          </span>
+        </span>
         <button class="danger icon" title={t("Delete entry")} onclick={() => deleteEntry(entry.id)}>
           <TrashIcon />
         </button>

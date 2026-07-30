@@ -120,6 +120,12 @@ const ru: Dictionary = {
   Status: "Статус",
   "pending changes": "несинхронизированные изменения",
   "last synced": "последняя синхронизация",
+  Tags: "Теги",
+  untagged: "без тега",
+  "Filter or create a tag…": "Найти или создать тег…",
+  "No tags yet.": "Тегов пока нет.",
+  "Create tag {name}": "Создать тег {name}",
+  "At most {count} tags per entry.": "Не больше {count} тегов на запись.",
 };
 
 const es: Dictionary = {
@@ -239,6 +245,12 @@ const es: Dictionary = {
   Status: "Estado",
   "pending changes": "cambios pendientes",
   "last synced": "última sincronización",
+  Tags: "Etiquetas",
+  untagged: "sin etiqueta",
+  "Filter or create a tag…": "Filtrar o crear una etiqueta…",
+  "No tags yet.": "Aún no hay etiquetas.",
+  "Create tag {name}": "Crear etiqueta {name}",
+  "At most {count} tags per entry.": "Máximo {count} etiquetas por entrada.",
 };
 
 const de: Dictionary = {
@@ -357,6 +369,12 @@ const de: Dictionary = {
   Status: "Status",
   "pending changes": "ausstehende Änderungen",
   "last synced": "zuletzt synchronisiert",
+  Tags: "Tags",
+  untagged: "ohne Tag",
+  "Filter or create a tag…": "Tag filtern oder anlegen…",
+  "No tags yet.": "Noch keine Tags.",
+  "Create tag {name}": "Tag {name} anlegen",
+  "At most {count} tags per entry.": "Höchstens {count} Tags pro Eintrag.",
 };
 
 const fr: Dictionary = {
@@ -477,6 +495,12 @@ const fr: Dictionary = {
   Status: "Statut",
   "pending changes": "modifications en attente",
   "last synced": "dernière synchro",
+  Tags: "Étiquettes",
+  untagged: "sans étiquette",
+  "Filter or create a tag…": "Filtrer ou créer une étiquette…",
+  "No tags yet.": "Aucune étiquette pour l'instant.",
+  "Create tag {name}": "Créer l'étiquette {name}",
+  "At most {count} tags per entry.": "Au maximum {count} étiquettes par entrée.",
 };
 
 const zh: Dictionary = {
@@ -594,6 +618,12 @@ const zh: Dictionary = {
   Status: "状态",
   "pending changes": "待同步更改",
   "last synced": "最后同步",
+  Tags: "标签",
+  untagged: "无标签",
+  "Filter or create a tag…": "筛选或创建标签…",
+  "No tags yet.": "还没有标签。",
+  "Create tag {name}": "创建标签 {name}",
+  "At most {count} tags per entry.": "每条记录最多 {count} 个标签。",
 };
 
 const dictionaries: Record<Exclude<Locale, "en">, Dictionary> = { ru, es, de, fr, zh };

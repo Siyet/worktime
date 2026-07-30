@@ -32,6 +32,13 @@ export async function loadStateFromDB(): Promise<void> {
 
 window.addEventListener(SYNC_MERGED_EVENT, () => void loadStateFromDB());
 
+// IndexedDB stores values through structured clone, which refuses a Proxy. Anything
+// read out of $state is one, and spreading a row only copies the reference to nested
+// values such as the tags array - so every row is snapshotted on its way to disk.
+function persistable<Row>(row: Row): Row {
+  return $state.snapshot(row) as Row;
+}
+
 function upsertInto<Row extends { id: string }>(rows: Row[], row: Row): void {
   const index = rows.findIndex((candidate) => candidate.id === row.id);
   if (index >= 0) {
@@ -63,7 +70,7 @@ export async function startTimer(description: string, projectID: string | null, 
     updated_at: now,
     deleted_at: null,
   };
-  await saveLocalRow("time_entries", entry);
+  await saveLocalRow("time_entries", persistable(entry));
   upsertInto(appState.entries, entry);
   requestSync();
 }
@@ -82,7 +89,7 @@ export async function updateEntry(entryID: string, patch: Partial<TimeEntry>): P
   if (!entry) return;
   const updated: TimeEntry = { ...entry, ...patch, id: entry.id, updated_at: Date.now() };
   if (patch.tags) updated.tags = sortTags(patch.tags);
-  await saveLocalRow("time_entries", updated);
+  await saveLocalRow("time_entries", persistable(updated));
   upsertInto(appState.entries, updated);
   requestSync();
 }
@@ -91,7 +98,7 @@ export async function deleteEntry(entryID: string): Promise<void> {
   const entry = appState.entries.find((candidate) => candidate.id === entryID);
   if (!entry) return;
   const now = Date.now();
-  await saveLocalRow("time_entries", { ...entry, deleted_at: now, updated_at: now });
+  await saveLocalRow("time_entries", persistable({ ...entry, deleted_at: now, updated_at: now }));
   removeFrom(appState.entries, entryID);
   requestSync();
 }
@@ -102,7 +109,7 @@ export async function restoreEntry(entryID: string): Promise<TimeEntry | undefin
   const buried = await getRow<TimeEntry>("time_entries", entryID);
   if (!buried) return undefined;
   const restored: TimeEntry = { ...buried, deleted_at: null, updated_at: Date.now() };
-  await saveLocalRow("time_entries", restored);
+  await saveLocalRow("time_entries", persistable(restored));
   upsertInto(appState.entries, restored);
   requestSync();
   return restored;
@@ -121,7 +128,7 @@ export async function createProject(name: string, color: string): Promise<Projec
     updated_at: now,
     deleted_at: null,
   };
-  await saveLocalRow("projects", project);
+  await saveLocalRow("projects", persistable(project));
   upsertInto(appState.projects, project);
   requestSync();
   return project;
@@ -129,7 +136,7 @@ export async function createProject(name: string, color: string): Promise<Projec
 
 export async function updateProject(updatedProject: Project): Promise<void> {
   const updated: Project = { ...updatedProject, updated_at: Date.now() };
-  await saveLocalRow("projects", updated);
+  await saveLocalRow("projects", persistable(updated));
   upsertInto(appState.projects, updated);
   requestSync();
 }
@@ -138,7 +145,7 @@ export async function deleteProject(projectID: string): Promise<void> {
   const project = appState.projects.find((candidate) => candidate.id === projectID);
   if (!project) return;
   const now = Date.now();
-  await saveLocalRow("projects", { ...project, deleted_at: now, updated_at: now });
+  await saveLocalRow("projects", persistable({ ...project, deleted_at: now, updated_at: now }));
   removeFrom(appState.projects, projectID);
   requestSync();
 }
@@ -157,7 +164,7 @@ export async function addTimeOff(kind: TimeOffKind, dateFrom: string, dateTo: st
     updated_at: now,
     deleted_at: null,
   };
-  await saveLocalRow("time_off", timeOff);
+  await saveLocalRow("time_off", persistable(timeOff));
   upsertInto(appState.timeOff, timeOff);
   requestSync();
 }
@@ -166,7 +173,7 @@ export async function deleteTimeOff(timeOffID: string): Promise<void> {
   const timeOff = appState.timeOff.find((candidate) => candidate.id === timeOffID);
   if (!timeOff) return;
   const now = Date.now();
-  await saveLocalRow("time_off", { ...timeOff, deleted_at: now, updated_at: now });
+  await saveLocalRow("time_off", persistable({ ...timeOff, deleted_at: now, updated_at: now }));
   removeFrom(appState.timeOff, timeOffID);
   requestSync();
 }

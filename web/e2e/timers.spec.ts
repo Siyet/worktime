@@ -32,7 +32,7 @@ test.describe("timers", () => {
     const dayCard = page.locator(".card").filter({ hasText: expectedDay });
     await expect(dayCard).toBeVisible();
     const finished = dayCard.locator(".item").filter({ hasText: "Write e2e tests" });
-    await expect(finished.locator("span.muted.mono")).toContainText("-");
+    await expect(finished.locator(".when .to")).toContainText("-");
     await expect(finished.getByTitle("Delete entry")).toBeVisible();
   });
 

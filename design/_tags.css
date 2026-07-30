@@ -1,0 +1,603 @@
+/* ============================================================================
+   1. web/src/app.css  +  design/_shared.css   (global, additive)
+   Mirror every rule into both files - the design workflow keeps them in sync.
+   Tokens used: --surface --text --text-dim --border --accent --accent-text
+   --danger --hover --radius --mono. No new tokens, no new hues.
+   ========================================================================== */
+
+/* --- tag chip --------------------------------------------------------------
+   One neutral treatment. Hue in an entry row already means "project" (15 of
+   them, user-picked), and teal/purple/danger already mean vacation/dayoff/sick
+   on Time off. A tag is read, not decoded. Transparent fill so the chip keeps
+   the contrast of whatever surface it sits on (text-dim on --surface is 6.8:1
+   dark / 4.75:1 light - AA for 12px text; a tinted fill would drop it under). */
+.tag {
+  display: inline-block;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: baseline;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+/* Absence is a shape, not a colour: survives greyscale, print and CVD. */
+.tag.untagged {
+  border-style: dashed;
+  font-style: italic;
+}
+
+/* --accent is this system's only "chosen" signal (.seg button.on, .filterpill). */
+.tag.on {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tag.off {
+  opacity: 0.4;
+}
+
+/* Interactive chips (picker toggles, the row's +N). button{} base rules are
+   specificity 0,0,1 so .tag wins; .tag.on is 0,2,0 so it beats button:hover. */
+button.tag {
+  cursor: pointer;
+  font-family: inherit;
+  min-height: 1.6rem;
+}
+
+button.tag:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (pointer: coarse) {
+  button.tag {
+    min-height: 2.1rem;
+    padding: 0.25rem 0.6rem;
+  }
+}
+
+.tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+/* --- entry row -------------------------------------------------------------
+   Still .row.item flex. .main takes the slack with min-width:0, .when has a
+   fixed basis, so no description or tag list can push the right column. */
+.item .main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+/* One-tap edit on the biggest target in the row. A real button: valid HTML,
+   correct tab order (description, then kebab), no pointer-events tricks. */
+.item .desc {
+  all: unset;
+  display: block;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+
+.item .desc:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.item .desc:active {
+  color: var(--accent);
+}
+
+.item .meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.item .meta .proj {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.item .when {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.item .when .dur {
+  min-width: 4.4rem;
+}
+
+@media (max-width: 34rem) {
+  .item .when {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
+  }
+
+  /* The end time is derivable from the next row's start; it goes first. */
+  .item .when .to {
+    display: none;
+  }
+
+  .item .desc {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+/* --- kebab ---------------------------------------------------------------- */
+.kebab {
+  padding: 0.3rem 0.45rem;
+  min-width: 2.2rem;
+  min-height: 2.2rem;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border-color: transparent;
+}
+
+.kebab:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* Open state must read without hover - mobile has none. */
+.kebab[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--hover);
+}
+
+@media (pointer: coarse) {
+  .kebab {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}
+
+/* --- row menu: popover on wide, bottom sheet below 34rem ------------------ */
+.menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.rowmenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 30;
+  min-width: 10rem;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.rowmenu button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 2.4rem;
+  padding: 0.4rem 0.55rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+
+.rowmenu button:hover {
+  background: var(--hover);
+}
+
+.rowmenu button:active {
+  background: var(--hover);
+}
+
+.rowmenu button.danger:active {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.rowmenu .sep {
+  height: 1px;
+  margin: 0.25rem 0.1rem;
+  background: var(--border);
+}
+
+.rowmenu svg {
+  display: block;
+  opacity: 0.85;
+}
+
+.menu-scrim {
+  display: none;
+}
+
+@media (max-width: 34rem) {
+  .rowmenu {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 31;
+    min-width: 0;
+    padding: 0.4rem 0.4rem max(0.4rem, env(safe-area-inset-bottom));
+    border-radius: var(--radius) var(--radius) 0 0;
+    border-bottom: none;
+  }
+
+  .rowmenu button {
+    min-height: 3rem;
+    font-size: 1rem;
+  }
+
+  .menu-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(0, 0, 0, 0.45);
+    border: none;
+    padding: 0;
+  }
+}
+
+/* --- delete toast: undo instead of a confirm ------------------------------ */
+.toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.4rem 0.4rem 0.4rem 0.9rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.toast .what {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 0.88rem;
+}
+
+.toast button {
+  min-height: 2.4rem;
+  padding: 0.35rem 0.9rem;
+  white-space: nowrap;
+}
+
+/* --- entry editor: native dialog, sheet below 34rem, card above ----------- */
+dialog.sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: none;
+  max-height: 92dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.35);
+}
+
+dialog.sheet::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+@media (min-width: 34rem) {
+  dialog.sheet {
+    inset: 0;
+    margin: auto;
+    width: 32rem;
+    max-height: 88dvh;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.sheet .ed-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem 0.5rem;
+}
+
+.sheet .ed-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.sheet .ed-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.3rem 1rem 0.9rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.sheet .ed-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem max(0.7rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sheet .ed-foot button {
+  min-height: 2.6rem;
+}
+
+.ed-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.ed-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.ed-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Why the edit is happening, without hiding it behind the backdrop. */
+.ed-neighbours {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.ed-neighbours b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ed-neighbours .gap.bad {
+  color: var(--danger);
+}
+
+.timefield {
+  width: 5.25rem;
+  padding: 0.4rem 0.5rem;
+  text-align: center;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.timefield[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.timefield:disabled {
+  opacity: 0.45;
+}
+
+.ed-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.ed-hint.bad {
+  color: var(--danger);
+}
+
+.ed-calc {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 5rem;
+}
+
+/* --- tag picker: toggle grid, no popover inside a modal ------------------- */
+.tagpick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 9rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tagpick:focus-within {
+  border-color: var(--accent);
+}
+
+.tagpick-add {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.tagpick-add input {
+  flex: 1 1 auto;
+  min-width: 6rem;
+  font-size: 0.9rem;
+}
+
+.tagpick-filter {
+  margin-bottom: 0.35rem;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+/* ============================================================================
+   2. web/src/pages/ReportsPage.svelte  (scoped <style> additions)
+   ========================================================================== */
+
+/* Two chip strips now, so each needs a name. */
+.chipstrip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.chipstrip > .caption {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+/* Tag filter chip: the .chip idiom minus the dot. */
+.chip.tagchip {
+  padding: 0.2rem 0.7rem;
+}
+
+.chip.tagchip.untagged {
+  border-style: dashed;
+  font-style: italic;
+}
+
+/* Rounding is unavailable while overlaps-once is on: rounding a share that was
+   deliberately halved re-inflates the very overlap the option removes, and
+   exportCSV already forces rounding to 0 in that mode. */
+.seg.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Right column is a stack now: By project + By tag. */
+.side {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.by-item {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.by-item .untaglabel {
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* Proof row: Duration and % add up to the header, in the table itself. */
+tr.total td {
+  font-weight: 600;
+  border-top: 1.5px solid var(--text-dim);
+  border-bottom: none;
+}
+
+/* Weighted contribution of a multi-tag entry under one tag group. */
+.splitmark {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-left: 0.35rem;
+}
+
+.reconcile {
+  margin: 0.6rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+/* ============================================================================
+   3. web/src/pages/PrintReportPage.svelte  (scoped, fixed light sheet)
+   Single ink, no hue: identical in colour and in greyscale.
+   ========================================================================== */
+
+.tagtrail {
+  color: var(--text-dim);
+  font-size: 7.5pt;
+}
+
+.tagtrail::before {
+  content: " · ";
+}
+
+/* All tag bars share one ink, so the only variable is length - the channel
+   that survives a greyscale laser. */
+.pbar div.ink {
+  background: rgba(20, 26, 40, 0.55);
+}
+
+/* Redundant reinforcement for "no tag": hatch plus an italic label plus last
+   position. If background graphics are off in the print dialog, the label and
+   the ordering still carry it. */
+.pbar div.hatch {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(20, 26, 40, 0.55) 0 2px,
+    rgba(20, 26, 40, 0.12) 2px 4px
+  );
+}
+
+td.untagged-label {
+  font-style: italic;
+}
+
+tr.sumrow td {
+  font-weight: 600;
+  border-top: 1.2px solid #232936;
+  border-bottom: none;
+  background: transparent;
+}

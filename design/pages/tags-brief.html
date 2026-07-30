@@ -1,0 +1,141 @@
+<!-- @dsCard group="Pages" name="Tags - decided design" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Tags decided design</title>
+<link rel="stylesheet" href="../_shared.css" />
+<style>
+  body { max-width: 48rem }
+  h2 { font-size: 1.05rem; margin: 0 0 0.6rem }
+  ol { margin: 0; padding-left: 1.3rem }
+  li { margin: 0.55rem 0 }
+  li b { color: var(--text) }
+  li span { color: var(--text-dim) }
+  code { font-family: var(--mono); font-size: 0.9em; color: var(--accent) }
+  pre { font-family: var(--mono); font-size: 0.82rem; color: var(--text-dim);
+        background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 0.7rem; overflow-x: auto; margin: 0.6rem 0 0 }
+  .risk { color: var(--text-dim); font-size: 0.85rem; margin: 0.4rem 0 }
+  .rank { display: flex; gap: 1.4rem; flex-wrap: wrap; font-family: var(--mono); font-size: 0.85rem; color: var(--text-dim) }
+  .rank b { color: var(--text) }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>How this was decided</h2>
+    <p>
+      Four independent proposals were produced from four stances - mobile-first, density-first,
+      report-fidelity, minimal-change - each grounded in the real files: the token sheet, the existing
+      previews, <code>TimerPage.svelte</code>, <code>ReportsPage.svelte</code>,
+      <code>PrintReportPage.svelte</code>, <code>report.ts</code>. Each was then judged by three
+      adversarial reviewers on distinct lenses: totals correctness and offline LWW, one-handed phone
+      use, and consistency with the palette and the Time off colour semantics.
+    </p>
+    <div class="rank">
+      <span><b>mobile-first 5.3</b></span>
+      <span>density-first 4.3</span>
+      <span>minimal-change 4.3</span>
+      <span>report-fidelity 4.0</span>
+    </div>
+    <p class="risk">
+      Scores are low across the board - the judges rejected something in every proposal. The design
+      below is the winner with the runners-up's strongest ideas grafted in and every fatal flaw fixed.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Data model, settled before anything visual</h2>
+    <p>
+      Tags are <code>tags: string[]</code> of lowercase names on the <code>time_entries</code> row
+      itself. No tags table, no join table, no tag ids.
+    </p>
+    <p>
+      LWW resolves per row on <code>updated_at</code>, so a tag edit has to be one row write -
+      identical to editing a description, offline-safe, zero new sync machinery. A fourth synced
+      table would also break sequence allocation:
+      <code>sync.go:32</code> computes <code>totalRows</code> by hand over exactly three tables and
+      derives <code>nextSeq = lastSeq - totalRows + 1</code>, so a table missing from that sum hands
+      out sequence numbers outside the reserved block and clients silently miss rows on pull.
+      Verified in the code, not assumed.
+    </p>
+    <p class="risk">
+      The cost, accepted: the tag list is one LWW unit, so two devices tagging the same entry
+      concurrently resolve as last-writer-takes-the-whole-set rather than as a union. Identical to how
+      <code>description</code> already behaves.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>The decisions</h2>
+    <ol>
+      <li><b>Colour.</b> <span>One neutral chip. No per-tag hue, ever - hue means project, and teal/purple/danger mean vacation/dayoff/sick. <code>--accent</code> is the selected state only. Absence is a shape: dashed and italic.</span></li>
+      <li><b>Chips on rows.</b> <span>Yes, on a second meta line beside the project - one chip plus <code>+N</code>. Never in the description line.</span></li>
+      <li><b>Grouping by tag.</b> <span>Split: an entry with <i>k</i> tags contributes <code>billable/k</code> to each. Always an <code>untagged</code> bucket, distinct from the user tag <code>other</code>.</span></li>
+      <li><b>Creating tags.</b> <span>In the picker (normalised, case-insensitive match). Rename, merge and remove-from-all in Settings, behind count-bearing confirms.</span></li>
+      <li><b>Print.</b> <span>No pills. A dim <code>·</code>-separated trail after the description in Детализация, plus a <code>По тегам</code> figure with single-ink bars, <code>без тега</code> hatched and last. Suppressed entirely when nothing in range is tagged, so historical reports do not grow an empty section.</span></li>
+      <li><b>Editor.</b> <span>Native <code>&lt;dialog&gt;</code> + <code>showModal()</code>: sheet below 34rem, 32rem card above. Not inline. A live boundary line replaces "seeing the neighbours".</span></li>
+      <li><b>Running entry.</b> <span>Full editor; To empty with a <code>running</code> placeholder, typing a time stops it retroactively, <code>Stop now</code> as the shortcut. To can never be cleared.</span></li>
+      <li><b>Time input.</b> <span>Free-text mono, 24h, accepts <code>930</code> and friends, arrow-key nudges, invalid disables Save. A <code>+Nd</code> stepper makes overnight entries representable.</span></li>
+      <li><b>Delete.</b> <span>No confirm - immediate, with an 8s undo toast in the app shell. Tag removal in Settings keeps its confirm.</span></li>
+      <li><b>Row layout.</b> <span>Flex, three parts: <code>.dot</code>, <code>.main{flex:1 1 auto;min-width:0}</code>, <code>.when{flex:0 0 auto}</code>, kebab. The description is a button that opens the editor.</span></li>
+      <li><b>Sync hardening ships with it.</b> <span><code>updateEntry(id, patch)</code> instead of whole-row writes, <code>mergeServerRows</code> skips rows still holding a dirty marker, pushes chunk at 2000 rows, and an HTTP 400 falls back to one row per request so a single bad row is quarantined instead of blocking the batch.</span></li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Why the totals still add up</h2>
+    <p>
+      One number per entry, one weight function, and the weights always sum to 1:
+    </p>
+<pre>tableTotal
+  = Σ groups Σ entries in group  billable(entry) / k(entry)
+  = Σ entries  billable(entry) × k(entry)/k(entry)
+  = Σ entries  billable(entry)</pre>
+    <p>
+      So the header total does not depend on Group by - switching between Project, Tag, Day and
+      Description never changes it. That property is <i>new</i>: the current overlaps-once code rounds
+      group sums, so 15 project groups and 30 day groups produce different totals today. Fixed here
+      for every grouping at once.
+    </p>
+    <p>
+      Two consequences that had to be stated in the UI rather than hidden. Rounding and overlaps-once
+      become mutually exclusive, because rounding a deliberately halved share re-inflates the overlap
+      the option exists to remove - <code>exportCSV</code> already passes
+      <code>overlapOnce ? 0 : rounding</code> for exactly this reason, and the UI is being brought in
+      line with the export. And the Entries column is a count, not a total: an entry with two tags is
+      one entry in each of two groups, so group counts sum above the distinct count while durations
+      do not.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Risks accepted, not solved</h2>
+    <p class="risk">
+      A 60-minute meeting tagged <code>meeting</code> + <code>review</code> reports as 30m under each
+      - a number the user never entered. It is the price of reconciliation and it bites 358 of 10 835
+      real entries. The <code>1/k</code> marker and the table caption are the only mitigation.
+    </p>
+    <p class="risk">
+      No tag colours means a tag-heavy day is scanned by reading, not by pattern, and there is no
+      escape hatch - the palette is genuinely exhausted, so granting tag colours means reopening
+      decision 1.
+    </p>
+    <p class="risk">
+      Undo is an 8-second window. Closing the PWA loses the affordance; no "recently deleted" list
+      ships.
+    </p>
+    <p class="risk">
+      Rename and merge move <code>updated_at</code> on every affected row, so a merge touching
+      thousands of entries clobbers concurrent edits from another device that have not yet been pulled.
+    </p>
+    <p class="risk">
+      The <code>+Nd</code> stepper makes overnight entries possible but nobody will look for it; an
+      entry typed 23:40 to 00:20 gets its offset bumped with no signal beyond the duration readout.
+    </p>
+  </div>
+
+</body>
+</html>

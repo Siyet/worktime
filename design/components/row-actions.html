@@ -1,0 +1,197 @@
+<!-- @dsCard group="Components" name="Row actions & entry editing" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Row actions</title>
+<link rel="stylesheet" href="../_shared.css" />
+<link rel="stylesheet" href="../_tags.css" />
+<style>
+  .note { color: var(--text-dim); font-size: 0.82rem; margin: 0.6rem 0 0 }
+  .note b { color: var(--text) }
+  /* Previews force the popover and dialog visible; in the app both are conditional. */
+  .rowmenu.demo { display: block; position: static; margin: 0.4rem 0 0; width: 11rem }
+  .ed.demo { display: block; position: static; max-width: 32rem; margin: 0;
+             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius) }
+  .toast.demo { position: static; display: inline-flex; margin-top: 0.5rem }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h3>Kebab replaces the always-visible trash</h3>
+    <div class="row item">
+      <span class="dot" style="background: #607dbe"></span>
+      <span class="main">
+        <button class="desc">Weekly</button>
+        <span class="meta"><span class="proj">PT</span><span class="tag">meeting</span></span>
+      </span>
+      <span class="when"><span class="dur mono">54m</span><span class="to mono">11:00-11:54</span></span>
+      <span class="menu-wrap">
+        <button class="kebab icon" title="Entry actions" aria-haspopup="menu" aria-expanded="true">⋯</button>
+        <div class="rowmenu demo" role="menu">
+          <button role="menuitem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            Edit
+          </button>
+          <div class="sep"></div>
+          <button role="menuitem" class="danger">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>
+            Delete
+          </button>
+        </div>
+      </span>
+    </div>
+    <p class="note">
+      <b>Decided:</b> destructive actions no longer sit one mis-tap from the duration column. The
+      same markup is an absolutely positioned popover on wide screens - the existing
+      <code>ProjectSelect</code> menu idiom - and a fixed bottom sheet with a scrim below 34rem, so
+      it can never be clipped by a card and both items are 3rem thumb targets. CSS-only difference.
+    </p>
+    <p class="note">
+      Only two items ship. Duplicate was cut: it was in the first cut and no judge wanted it.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Delete: no confirm, an undo toast</h3>
+    <div class="toast demo" role="status">
+      <span>Deleted · Weekly</span>
+      <button>Undo</button>
+    </div>
+    <p class="note">
+      <b>Decided:</b> the kebab already costs two taps and deletes are already soft
+      <code>deleted_at</code> tombstones, so undo is one ordinary LWW write with a fresh
+      <code>updated_at</code> that wins on every device and works offline. 8 seconds,
+      <code>role="status"</code>, a real ≥2.4rem button, and it lives in the app shell so in-app
+      navigation does not dismiss it. Removing a tag from every entry in Settings <i>does</i> keep a
+      count-bearing confirm - that is hundreds of row rewrites with no cheap undo.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Editor - native dialog, sheet on mobile</h3>
+    <div class="ed demo">
+      <div class="ed-head">
+        <span>Edit entry</span>
+        <span class="spacer"></span>
+        <button class="icon" title="Close">✕</button>
+      </div>
+      <div class="ed-body">
+        <div class="ed-line">
+          <input class="desc" style="flex:1" value="Sync with Piloting department" />
+        </div>
+        <div class="ed-line">
+          <span class="ed-label">Project</span>
+          <select><option>IV</option><option>MySky</option><option>PT</option><option>No project</option></select>
+        </div>
+        <div class="ed-line">
+          <span class="ed-label">Tags</span>
+          <div class="tagpick" style="flex:1">
+            <div class="tags">
+              <span class="tag on">meeting</span>
+              <span class="tag on">analysis</span>
+              <span class="tag">development</span>
+              <span class="tag">review</span>
+              <span class="tag">other</span>
+            </div>
+          </div>
+        </div>
+        <div class="ed-line">
+          <span class="ed-label">Date</span>
+          <span class="seg"><button>-1d</button><button>+1d</button></span>
+          <input type="date" value="2026-07-29" />
+        </div>
+        <div class="ed-line">
+          <span class="ed-label">From</span>
+          <input class="timefield mono" value="14:00" inputmode="numeric" maxlength="5" />
+          <span class="ed-label">To</span>
+          <input class="timefield mono" value="15:00" inputmode="numeric" maxlength="5" />
+          <span class="seg"><button>+0d</button></span>
+          <span class="ed-calc mono">1h 00m</span>
+        </div>
+        <div class="ed-neighbours">
+          <span>prev ends 11:00</span>
+          <span class="gap">gap 3h 00m</span>
+          <span>next starts 15:30</span>
+        </div>
+      </div>
+      <div class="ed-foot">
+        <span class="ed-hint">24h</span>
+        <span class="spacer"></span>
+        <button>Cancel</button>
+        <button class="primary">Save</button>
+      </div>
+    </div>
+    <p class="note">
+      <b>Decided:</b> native <code>&lt;dialog&gt;</code> with <code>showModal()</code> - bottom sheet
+      below 34rem, centred 32rem card above, one markup block. Not inline. The sheet grows upward so
+      the focused field stays above the mobile keyboard and Save stays in the thumb zone, and the
+      native dialog gives focus trap, Escape, <code>::backdrop</code> and background
+      <code>inert</code> with no JS.
+    </p>
+    <p class="note">
+      The "see the neighbours" argument for inline editing is answered better <i>inside</i> the
+      dialog: a live boundary line states the previous end, the gap and the next start, with an
+      <code>overlaps 20m</code> danger variant. That is the actual information wanted when fixing a
+      time, and it is precise instead of visual.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Editor states</h3>
+    <div class="ed demo" style="margin-bottom:0.8rem">
+      <div class="ed-body">
+        <div class="ed-line">
+          <span class="ed-label">From</span>
+          <input class="timefield mono" value="09:35" inputmode="numeric" maxlength="5" />
+          <span class="ed-label">To</span>
+          <input class="timefield mono" placeholder="running" value="" inputmode="numeric" maxlength="5" />
+          <button>Stop now</button>
+          <span class="ed-calc mono">4h 12m</span>
+        </div>
+        <div class="ed-neighbours"><span>prev ends 09:00</span><span class="gap">gap 35m</span></div>
+      </div>
+    </div>
+    <div class="ed demo">
+      <div class="ed-body">
+        <div class="ed-line">
+          <span class="ed-label">From</span>
+          <input class="timefield mono bad" value="9:7x" aria-invalid="true" inputmode="numeric" maxlength="5" />
+          <span class="ed-label">To</span>
+          <input class="timefield mono" value="15:00" inputmode="numeric" maxlength="5" />
+          <span class="ed-calc mono">—</span>
+        </div>
+        <div class="ed-neighbours"><span class="bad">overlaps 20m</span></div>
+      </div>
+      <div class="ed-foot">
+        <span class="spacer"></span>
+        <button>Cancel</button>
+        <button class="primary" disabled>Save</button>
+      </div>
+    </div>
+    <p class="note">
+      <b>Running entry:</b> the full editor, with To empty and a dim <code>running</code>
+      placeholder. Typing a time stops it retroactively - "I forgot to stop at 17:00" is the main
+      reason to open a running entry. <code>Stop now</code> fills the current time. To can
+      <i>never</i> be cleared: <code>toReportEntries</code> skips <code>stopped_at === null</code>,
+      so a clearable To would silently delete hours from every report, the CSV and the printed sheet.
+      If the row is stopped on another device while the editor is open, the editor swaps to the
+      finished layout with a notice instead of saving its stale snapshot.
+    </p>
+    <p class="note">
+      <b>Time input:</b> free-text mono, <code>inputmode="numeric"</code>, always 24h. Accepts
+      <code>9</code>, <code>930</code>, <code>0930</code>, <code>9:30</code>, <code>9.30</code> and
+      normalises on blur; ArrowUp/Down nudge a minute, Shift+Arrow fifteen. Unparseable sets
+      <code>aria-invalid</code>, a danger border, <code>—</code> in the readout and disables Save.
+      <code>input[type=time]</code> was rejected: it follows the browser locale instead of this
+      app's own <code>hourCycle</code> setting, refuses <code>930</code>, and cannot express an end
+      date. The <code>+Nd</code> stepper is what makes a 23:40-00:20 entry representable at all -
+      without it <code>validateChanges</code> rejects the whole batch on
+      <code>stopped_at &lt; started_at</code>.
+    </p>
+  </div>
+
+</body>
+</html>

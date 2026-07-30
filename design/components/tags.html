@@ -1,0 +1,200 @@
+<!-- @dsCard group="Components" name="Tags" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkTime - Tags</title>
+<link rel="stylesheet" href="../_shared.css" />
+<link rel="stylesheet" href="../_tags.css" />
+<style>
+  .note { color: var(--text-dim); font-size: 0.82rem; margin: 0.6rem 0 0 }
+  .note b { color: var(--text) }
+  .lbl { color: var(--text-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 0.4rem }
+  .narrow { max-width: 22rem; border: 1px dashed var(--border); border-radius: var(--radius); padding: 0.5rem }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem }
+  th, td { text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border) }
+  th { color: var(--text-dim); font-weight: 500; font-size: 0.8rem }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h3>Chip - one neutral treatment</h3>
+    <span class="tags">
+      <span class="tag">meeting</span>
+      <span class="tag">development</span>
+      <span class="tag">analysis</span>
+      <span class="tag">review</span>
+      <span class="tag">other</span>
+      <span class="tag untagged">untagged</span>
+      <span class="tag on">selected</span>
+    </span>
+    <p class="note">
+      <b>Decided:</b> no per-tag hue, ever. Hue in an entry row already means project - 15 of them,
+      user-picked - and teal, purple and danger are bound to vacation, dayoff and sick on Time off
+      and in the DailyChart legend. A third colour axis on the same row informs nothing. A tag is
+      read, not decoded. <code>--accent</code> appears only as the selected state, which is what it
+      already means in <code>.seg button.on</code>.
+    </p>
+    <p class="note">
+      Absence is a <b>shape</b>, not a colour: <code>untagged</code> is dashed and italic, so it
+      survives greyscale print and colour-vision deficiency. The rejected first cut used
+      <code>color-mix(in srgb, var(--tag) 72%, var(--text))</code>, which put green at roughly 3:1
+      in the light theme - under AA for 12px text.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Entry rows - one chip plus overflow</h3>
+    <div class="row item">
+      <span class="dot" style="background: #e8a33d"></span>
+      <span class="main">
+        <button class="desc">Доработка топологии</button>
+        <span class="meta"><span class="proj">MySky</span><span class="tag">development</span></span>
+      </span>
+      <span class="when"><span class="dur mono">1h 45m</span><span class="to mono">9:15-11:00</span></span>
+      <button class="kebab icon" title="Entry actions">⋯</button>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: #607dbe"></span>
+      <span class="main">
+        <button class="desc">Sync with Piloting department + перехват EdTechLab</button>
+        <span class="meta"><span class="proj">IV</span><span class="tag">meeting</span><span class="tag">+1</span></span>
+      </span>
+      <span class="when"><span class="dur mono">1h 00m</span><span class="to mono">14:00-15:00</span></span>
+      <button class="kebab icon" title="Entry actions">⋯</button>
+    </div>
+    <div class="row item">
+      <span class="dot" style="background: var(--border)"></span>
+      <span class="main">
+        <button class="desc">Формирую сайт</button>
+        <span class="meta"><span class="proj">Offspings</span><span class="tag untagged">untagged</span></span>
+      </span>
+      <span class="when"><span class="dur mono">4h 20m</span><span class="to mono">10:00-14:20</span></span>
+      <button class="kebab icon" title="Entry actions">⋯</button>
+    </div>
+    <p class="note">
+      <b>Decided:</b> chips live on a second meta line beside the project, never in the description
+      line. Exactly one chip plus <code>+N</code> - 371 of 10 835 real entries carry two or more
+      tags, so one chip is the whole truth on 96.6% of rows. <code>.when</code> is
+      <code>flex: 0 0 auto</code> against a <code>min-width: 0</code> <code>.main</code>, so the
+      duration column is stable by construction and a long tag can never push it out of alignment.
+    </p>
+    <p class="note">
+      The description text is a <code>&lt;button class="desc"&gt;</code> that opens the editor, so
+      editing is one tap without breaking tab order or HTML validity.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Narrow viewport (below 34rem)</h3>
+    <div class="narrow">
+      <div class="row item">
+        <span class="dot" style="background: #e8a33d"></span>
+        <span class="main">
+          <button class="desc">MT-19573 feat(sky_quotes): add customer UUID backfill service and REST endpoints</button>
+          <span class="meta"><span class="proj">MySky</span><span class="tag">development</span></span>
+        </span>
+        <span class="when"><span class="dur mono">38m</span></span>
+        <button class="kebab icon" title="Entry actions">⋯</button>
+      </div>
+    </div>
+    <p class="note">
+      <code>.when</code> stacks with the duration on top and the end time hidden; the description
+      clamps to two lines. Tap targets go to 3rem under <code>@media (pointer: coarse)</code>.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Tag picker - a toggle grid, not a popover</h3>
+    <div class="tagpick">
+      <input class="tagpick-filter" placeholder="Filter or create…" value="re" />
+      <div class="tags">
+        <span class="tag on">review</span>
+        <span class="tag">development</span>
+        <span class="tag">meeting</span>
+        <span class="tag">analysis</span>
+        <span class="tag">other</span>
+      </div>
+      <button class="tagpick-add">Create “re”</button>
+    </div>
+    <p class="note">
+      <b>Decided:</b> a flat toggle grid, because the picker lives inside a modal editor and a
+      popover inside a dialog is a stacking-context fight for nothing. Names are normalised on
+      create - trimmed, whitespace-collapsed, lowercased, 24 chars - and matched case-insensitively,
+      so typing <code>Review</code> toggles the existing <code>review</code> instead of forking it.
+    </p>
+    <p class="note">
+      Creation lives here because tagging has to be a sub-second offline action. Rename, merge and
+      remove-from-all-entries live in Settings, each behind a count-bearing confirm - six years of
+      on-the-fly creation guarantees near-duplicates that silently fragment a report group, and with
+      names-as-values those three operations are the only repair tool.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Reports - filter strips and group by</h3>
+    <div class="chipstrip">
+      <span class="caption">Projects</span>
+      <button class="chip"><span class="dot" style="background:#e8a33d"></span>MySky</button>
+      <button class="chip off"><span class="dot" style="background:#607dbe"></span>PT</button>
+      <button class="chip"><span class="dot" style="background:var(--border)"></span>No project</button>
+    </div>
+    <div class="chipstrip" style="margin-top:0.4rem">
+      <span class="caption">Tags</span>
+      <button class="chip">development</button>
+      <button class="chip">meeting</button>
+      <button class="chip off">analysis</button>
+      <button class="chip"><span class="untaglabel">untagged</span></button>
+    </div>
+    <div class="row" style="margin-top:0.7rem">
+      <span class="caption">Group by</span>
+      <span class="seg">
+        <button>Project</button>
+        <button class="on">Tag</button>
+        <button>Day</button>
+        <button>Description</button>
+      </span>
+    </div>
+
+    <table style="margin-top:0.7rem">
+      <tr><th>Tag</th><th class="num">Entries</th><th class="num">Duration</th></tr>
+      <tr><td>development</td><td class="num">4218</td><td class="num">1104h 12m</td></tr>
+      <tr><td>meeting</td><td class="num">3473</td><td class="num">742h 05m</td></tr>
+      <tr><td>analysis</td><td class="num">1641</td><td class="num">410h 30m</td></tr>
+      <tr><td>other</td><td class="num">1208</td><td class="num">288h 44m</td></tr>
+      <tr><td>review</td><td class="num">374</td><td class="num">96h 18m</td></tr>
+      <tr><td><span class="untaglabel">untagged</span></td><td class="num">286</td><td class="num">61h 07m</td></tr>
+      <tr class="sumrow"><td class="total">Total</td><td class="num">10835</td><td class="num">2702h 56m</td></tr>
+    </table>
+    <p class="reconcile">
+      358 entries carry more than one tag. Their duration is split equally across their tags, so
+      group durations add up to the total while the Entries column counts an entry once per group -
+      group counts therefore sum above the distinct total shown here.
+    </p>
+
+    <div style="margin-top:0.8rem">
+      <div class="row item"><span class="what">Sync with Piloting department</span><span class="splitmark">1/2</span><span class="spacer"></span><span class="mono">30m</span></div>
+      <div class="row item"><span class="what">AIM Grooming</span><span class="spacer"></span><span class="mono">1h 58m</span></div>
+    </div>
+    <p class="note">
+      <b>Decided:</b> split, not count-each-fully. An entry with <i>k</i> tags contributes
+      <code>billable(entry)/k</code> to each group; weights sum to exactly 1 under every grouping, so
+      the header total does not depend on Group by. Detail rows print their weighted share with a
+      dim <code>1/k</code> marker, so a reader who adds the detail rows gets the group header
+      exactly - today <code>ReportsPage.svelte:463</code> prints the full duration there, which under
+      a tag group would show 1h under a 30m header.
+    </p>
+    <p class="note">
+      <code>untagged</code> is a first-class group <i>and</i> a first-class filter chip, mirroring
+      <code>NO_PROJECT_KEY</code>. Without a key of its own, roughly a third of the real entries
+      would match no active tag chip and silently vanish from the totals, the chart and the CSV. It
+      stays distinct from the user tag <code>other</code>: "I classified this as other" and "I never
+      tagged this" are different facts.
+    </p>
+  </div>
+
+</body>
+</html>

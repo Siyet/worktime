@@ -7,6 +7,7 @@
   import { DEMO, seedDemoDataIfEmpty } from "./lib/demo";
   import { t } from "./lib/i18n";
   import Logo from "./lib/components/Logo.svelte";
+  import UndoToast from "./lib/components/UndoToast.svelte";
   import TimerPage from "./pages/TimerPage.svelte";
   import ProjectsPage from "./pages/ProjectsPage.svelte";
   import TimeOffPage from "./pages/TimeOffPage.svelte";
@@ -100,6 +101,10 @@
       <TimerPage />
     {/if}
   </main>
+
+  <!-- Lives in the shell, not on a page: in-app navigation must not dismiss
+       the 8-second undo window. -->
+  <UndoToast />
 </div>
 {/if}
 

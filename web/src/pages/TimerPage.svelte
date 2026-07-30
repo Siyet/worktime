@@ -2,22 +2,24 @@
   import {
     appState,
     clock,
-    deleteEntry,
     entryTags,
     projectByID,
     runningEntries,
     startTimer,
     stopTimer,
   } from "../lib/state/app.svelte";
+  import { deleteEntryWithUndo } from "../lib/state/undo.svelte";
   import { formatDay, formatDuration, formatDurationShort, formatTime, localDateISO } from "../lib/format";
   import { t } from "../lib/i18n";
+  import EntryEditor from "../lib/components/EntryEditor.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
+  import RowMenu from "../lib/components/RowMenu.svelte";
   import TagChips from "../lib/components/TagChips.svelte";
-  import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeEntry } from "../lib/types";
 
   let description = $state("");
   let selectedProjectID = $state<string | null>(null);
+  let editingID = $state<string | null>(null);
 
   const activeProjects = $derived(
     appState.projects.filter((project) => !project.archived).sort((a, b) => a.name.localeCompare(b.name)),
@@ -86,7 +88,9 @@
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
         <span class="main">
-          <span class="desc">{entry.description || t("(no description)")}</span>
+          <button type="button" class="desc" onclick={() => (editingID = entry.id)}>
+            {entry.description || t("(no description)")}
+          </button>
           <span class="meta muted">
             {#if project}<span class="proj">{project.name}</span>{/if}
             <TagChips tags={entryTags(entry)} />
@@ -113,7 +117,9 @@
       <div class="row item">
         <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
         <span class="main">
-          <span class="desc">{entry.description || t("(no description)")}</span>
+          <button type="button" class="desc" onclick={() => (editingID = entry.id)}>
+            {entry.description || t("(no description)")}
+          </button>
           <span class="meta muted">
             {#if project}<span class="proj">{project.name}</span>{/if}
             <TagChips tags={entryTags(entry)} />
@@ -121,13 +127,11 @@
         </span>
         <span class="when">
           <span class="dur">{formatDurationShort(entry.stopped_at! - entry.started_at)}</span>
-          <span class="to muted">
-            {formatTime(entry.started_at)}-{formatTime(entry.stopped_at!)}
-          </span>
+          <span class="range muted"><span class="from">{formatTime(entry.started_at)}</span><span class="to"
+            >-{formatTime(entry.stopped_at!)}</span
+          ></span>
         </span>
-        <button class="danger icon" title={t("Delete entry")} onclick={() => deleteEntry(entry.id)}>
-          <TrashIcon />
-        </button>
+        <RowMenu onedit={() => (editingID = entry.id)} ondelete={() => void deleteEntryWithUndo(entry)} />
       </div>
     {/each}
   </div>
@@ -135,6 +139,10 @@
 
 {#if running.length === 0 && recentDays.length === 0}
   <p class="muted">{t("No entries yet. Start your first timer above.")}</p>
+{/if}
+
+{#if editingID !== null}
+  <EntryEditor entryID={editingID} onclose={() => (editingID = null)} />
 {/if}
 
 <style>

@@ -521,6 +521,12 @@ button.tag:focus-visible {
 }
 
 /* --- entry editor: native dialog, sheet below 34rem, card above ----------- */
+/* display:flex below would override the UA's display:none for a closed dialog,
+   so the closed state must be restated explicitly. */
+dialog.sheet:not([open]) {
+  display: none;
+}
+
 dialog.sheet {
   position: fixed;
   inset: auto 0 0 0;

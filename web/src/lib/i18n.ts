@@ -126,6 +126,46 @@ const ru: Dictionary = {
   "No tags yet.": "Тегов пока нет.",
   "Create tag {name}": "Создать тег {name}",
   "At most {count} tags per entry.": "Не больше {count} тегов на запись.",
+  "Entry actions": "Действия с записью",
+  "Close menu": "Закрыть меню",
+  Edit: "Редактировать",
+  "Edit entry": "Редактирование записи",
+  Deleted: "Удалено",
+  Undo: "Вернуть",
+  Dismiss: "Закрыть",
+  Date: "Дата",
+  Time: "Время",
+  running: "идёт",
+  "Stop now": "Остановить сейчас",
+  Save: "Сохранить",
+  Cancel: "Отмена",
+  "prev ends": "пред. до",
+  "next starts": "след. с",
+  "gap {n}": "зазор {n}",
+  "overlaps {n}": "пересечение {n}",
+  "End day offset": "Смещение дня окончания",
+  "Entering an end time stops this timer at that moment. Start cannot be in the future.":
+    "Введённое время окончания остановит таймер этим моментом. Старт не может быть в будущем.",
+  "This entry was stopped on another device; the end time below is the stored one.":
+    "Запись остановлена на другом устройстве; время окончания ниже - сохранённое.",
+  "This entry is longer than 12 hours - check the +Nd offset.":
+    "Запись длиннее 12 часов - проверь смещение +Nd.",
+  "End is before start - check the +Nd offset.": "Окончание раньше начала - проверь смещение +Nd.",
+  Tag: "Тег",
+  "by tag": "по тегам",
+  "By tag": "По тегам",
+  Total: "Итого",
+  "Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.":
+    "Округление выключено, пока пересечения считаются один раз: округление половинной доли возвращает пересечение обратно.",
+  "An entry with several tags splits its time equally between them, so this adds up to the same total as By project.":
+    "Запись с несколькими тегами делит время между ними поровну, поэтому сумма совпадает с итогом по проектам.",
+  "shared with {n} tags": "делится между {n} тегами",
+  "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.":
+    "{n} записей имеют больше одного тега. Их длительность делится поровну, поэтому Длительность и % сходятся с итогом точно; колонка Записи считает такую запись в каждой строке тега, поэтому сумма счётчиков больше {total}.",
+  Export: "Экспорт",
+  "Your projects, entries and time off as a standalone SQLite database.":
+    "Твои проекты, записи и отсутствия одним файлом SQLite.",
+  "Download .sqlite": "Скачать .sqlite",
 };
 
 const es: Dictionary = {
@@ -251,6 +291,46 @@ const es: Dictionary = {
   "No tags yet.": "Aún no hay etiquetas.",
   "Create tag {name}": "Crear etiqueta {name}",
   "At most {count} tags per entry.": "Máximo {count} etiquetas por entrada.",
+  "Entry actions": "Acciones del registro",
+  "Close menu": "Cerrar menú",
+  Edit: "Editar",
+  "Edit entry": "Editar registro",
+  Deleted: "Eliminado",
+  Undo: "Deshacer",
+  Dismiss: "Cerrar",
+  Date: "Fecha",
+  Time: "Hora",
+  running: "en marcha",
+  "Stop now": "Detener ahora",
+  Save: "Guardar",
+  Cancel: "Cancelar",
+  "prev ends": "ant. termina",
+  "next starts": "sig. empieza",
+  "gap {n}": "hueco {n}",
+  "overlaps {n}": "se solapa {n}",
+  "End day offset": "Desfase del día final",
+  "Entering an end time stops this timer at that moment. Start cannot be in the future.":
+    "Introducir una hora de fin detiene este temporizador en ese momento. El inicio no puede estar en el futuro.",
+  "This entry was stopped on another device; the end time below is the stored one.":
+    "Este registro se detuvo en otro dispositivo; la hora de fin de abajo es la guardada.",
+  "This entry is longer than 12 hours - check the +Nd offset.":
+    "Este registro dura más de 12 horas: revisa el desfase +Nd.",
+  "End is before start - check the +Nd offset.": "El fin es anterior al inicio: revisa el desfase +Nd.",
+  Tag: "Etiqueta",
+  "by tag": "por etiqueta",
+  "By tag": "Por etiqueta",
+  Total: "Total",
+  "Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.":
+    "El redondeo está desactivado mientras los solapes se cuentan una vez: redondear una parte dividida vuelve a añadir el solape.",
+  "An entry with several tags splits its time equally between them, so this adds up to the same total as By project.":
+    "Una entrada con varias etiquetas reparte su tiempo a partes iguales entre ellas, así que esto suma el mismo total que Por proyecto.",
+  "shared with {n} tags": "compartido entre {n} etiquetas",
+  "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.":
+    "{n} entradas tienen más de una etiqueta. Su duración se reparte a partes iguales, así que Duración y % suman el total exacto; la columna Registros cuenta esa entrada en cada fila de etiqueta, por eso los contadores suman más de {total}.",
+  Export: "Exportar",
+  "Your projects, entries and time off as a standalone SQLite database.":
+    "Tus proyectos, registros y ausencias en un único archivo SQLite.",
+  "Download .sqlite": "Descargar .sqlite",
 };
 
 const de: Dictionary = {
@@ -375,6 +455,46 @@ const de: Dictionary = {
   "No tags yet.": "Noch keine Tags.",
   "Create tag {name}": "Tag {name} anlegen",
   "At most {count} tags per entry.": "Höchstens {count} Tags pro Eintrag.",
+  "Entry actions": "Aktionen für den Eintrag",
+  "Close menu": "Menü schließen",
+  Edit: "Bearbeiten",
+  "Edit entry": "Eintrag bearbeiten",
+  Deleted: "Gelöscht",
+  Undo: "Rückgängig",
+  Dismiss: "Schließen",
+  Date: "Datum",
+  Time: "Zeit",
+  running: "läuft",
+  "Stop now": "Jetzt stoppen",
+  Save: "Speichern",
+  Cancel: "Abbrechen",
+  "prev ends": "vorh. endet",
+  "next starts": "nächster beginnt",
+  "gap {n}": "Lücke {n}",
+  "overlaps {n}": "überlappt {n}",
+  "End day offset": "Endtag-Versatz",
+  "Entering an end time stops this timer at that moment. Start cannot be in the future.":
+    "Eine eingetragene Endzeit stoppt diesen Timer zu diesem Zeitpunkt. Der Start kann nicht in der Zukunft liegen.",
+  "This entry was stopped on another device; the end time below is the stored one.":
+    "Dieser Eintrag wurde auf einem anderen Gerät gestoppt; die Endzeit unten ist die gespeicherte.",
+  "This entry is longer than 12 hours - check the +Nd offset.":
+    "Dieser Eintrag ist länger als 12 Stunden - prüfe den +Nd-Versatz.",
+  "End is before start - check the +Nd offset.": "Das Ende liegt vor dem Start - prüfe den +Nd-Versatz.",
+  Tag: "Tag",
+  "by tag": "nach Tag",
+  "By tag": "Nach Tag",
+  Total: "Gesamt",
+  "Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.":
+    "Rundung ist aus, solange Überlappungen einmal zählen: das Runden eines halbierten Anteils bringt die Überlappung zurück.",
+  "An entry with several tags splits its time equally between them, so this adds up to the same total as By project.":
+    "Ein Eintrag mit mehreren Tags teilt seine Zeit gleichmäßig zwischen ihnen auf, daher ergibt dies dieselbe Summe wie Nach Projekt.",
+  "shared with {n} tags": "geteilt zwischen {n} Tags",
+  "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.":
+    "{n} Einträge tragen mehr als einen Tag. Ihre Dauer wird gleichmäßig aufgeteilt, daher summieren sich Dauer und % exakt zum Gesamt; die Spalte Einträge zählt einen solchen Eintrag in jeder Tag-Zeile, weshalb die Gruppenzähler über {total} liegen.",
+  Export: "Export",
+  "Your projects, entries and time off as a standalone SQLite database.":
+    "Deine Projekte, Einträge und Abwesenheiten als eigenständige SQLite-Datei.",
+  "Download .sqlite": ".sqlite herunterladen",
 };
 
 const fr: Dictionary = {
@@ -501,6 +621,46 @@ const fr: Dictionary = {
   "No tags yet.": "Aucune étiquette pour l'instant.",
   "Create tag {name}": "Créer l'étiquette {name}",
   "At most {count} tags per entry.": "Au maximum {count} étiquettes par entrée.",
+  "Entry actions": "Actions de l'entrée",
+  "Close menu": "Fermer le menu",
+  Edit: "Modifier",
+  "Edit entry": "Modifier l'entrée",
+  Deleted: "Supprimé",
+  Undo: "Rétablir",
+  Dismiss: "Fermer",
+  Date: "Date",
+  Time: "Heure",
+  running: "en cours",
+  "Stop now": "Arrêter maintenant",
+  Save: "Enregistrer",
+  Cancel: "Annuler",
+  "prev ends": "préc. finit à",
+  "next starts": "suiv. commence à",
+  "gap {n}": "écart {n}",
+  "overlaps {n}": "chevauche {n}",
+  "End day offset": "Décalage du jour de fin",
+  "Entering an end time stops this timer at that moment. Start cannot be in the future.":
+    "Saisir une heure de fin arrête ce minuteur à ce moment. Le début ne peut pas être dans le futur.",
+  "This entry was stopped on another device; the end time below is the stored one.":
+    "Cette entrée a été arrêtée sur un autre appareil ; l'heure de fin ci-dessous est celle enregistrée.",
+  "This entry is longer than 12 hours - check the +Nd offset.":
+    "Cette entrée dure plus de 12 heures - vérifie le décalage +Nd.",
+  "End is before start - check the +Nd offset.": "La fin précède le début - vérifie le décalage +Nd.",
+  Tag: "Étiquette",
+  "by tag": "par étiquette",
+  "By tag": "Par étiquette",
+  Total: "Total",
+  "Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.":
+    "L'arrondi est désactivé tant que les chevauchements comptent une fois : arrondir une part divisée réintroduit le chevauchement.",
+  "An entry with several tags splits its time equally between them, so this adds up to the same total as By project.":
+    "Une entrée avec plusieurs étiquettes répartit son temps à parts égales entre elles, donc la somme égale le total Par projet.",
+  "shared with {n} tags": "partagé entre {n} étiquettes",
+  "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.":
+    "{n} entrées portent plus d'une étiquette. Leur durée est répartie à parts égales, donc Durée et % s'additionnent exactement au total ; la colonne Entrées compte une telle entrée dans chaque ligne d'étiquette, d'où des compteurs au-dessus de {total}.",
+  Export: "Export",
+  "Your projects, entries and time off as a standalone SQLite database.":
+    "Tes projets, entrées et absences dans un seul fichier SQLite.",
+  "Download .sqlite": "Télécharger .sqlite",
 };
 
 const zh: Dictionary = {
@@ -624,6 +784,45 @@ const zh: Dictionary = {
   "No tags yet.": "还没有标签。",
   "Create tag {name}": "创建标签 {name}",
   "At most {count} tags per entry.": "每条记录最多 {count} 个标签。",
+  "Entry actions": "记录操作",
+  "Close menu": "关闭菜单",
+  Edit: "编辑",
+  "Edit entry": "编辑记录",
+  Deleted: "已删除",
+  Undo: "撤销",
+  Dismiss: "关闭",
+  Date: "日期",
+  Time: "时间",
+  running: "进行中",
+  "Stop now": "立即停止",
+  Save: "保存",
+  Cancel: "取消",
+  "prev ends": "上一条结束于",
+  "next starts": "下一条开始于",
+  "gap {n}": "间隔 {n}",
+  "overlaps {n}": "重叠 {n}",
+  "End day offset": "结束日偏移",
+  "Entering an end time stops this timer at that moment. Start cannot be in the future.":
+    "输入结束时间会在该时刻停止此计时器。开始时间不能在未来。",
+  "This entry was stopped on another device; the end time below is the stored one.":
+    "此记录已在另一台设备上停止；下方的结束时间为已保存的值。",
+  "This entry is longer than 12 hours - check the +Nd offset.": "此记录超过 12 小时——请检查 +Nd 偏移。",
+  "End is before start - check the +Nd offset.": "结束早于开始——请检查 +Nd 偏移。",
+  Tag: "标签",
+  "by tag": "按标签",
+  "By tag": "按标签",
+  Total: "总计",
+  "Rounding is off while overlaps are counted once: rounding a halved share puts the overlap back.":
+    "重叠只计一次时取整不可用：对减半的份额取整会把重叠加回来。",
+  "An entry with several tags splits its time equally between them, so this adds up to the same total as By project.":
+    "带多个标签的记录把时间平均分给各标签，因此总和与按项目一致。",
+  "shared with {n} tags": "由 {n} 个标签分摊",
+  "{n} entries carry more than one tag. Their duration is split equally, so Duration and % add up to the total exactly; the Entries column counts such an entry in every tag row, which is why the group counts sum above {total}.":
+    "{n} 条记录带有多个标签。它们的时长被平均拆分，因此时长和 % 与总计完全一致；条目列会在每个标签行中计入这类记录，所以分组条目数之和大于 {total}。",
+  Export: "导出",
+  "Your projects, entries and time off as a standalone SQLite database.":
+    "你的项目、记录和休假打包为一个 SQLite 文件。",
+  "Download .sqlite": "下载 .sqlite",
 };
 
 const dictionaries: Record<Exclude<Locale, "en">, Dictionary> = { ru, es, de, fr, zh };

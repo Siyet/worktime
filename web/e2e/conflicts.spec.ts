@@ -78,8 +78,11 @@ test.describe("multi-device conflicts (LWW)", () => {
     await expect(rowB).toBeVisible();
 
     const deleted = pushBarrier(page, "doomed");
-    await page.locator(".item").filter({ hasText: "doomed" }).getByTitle("Delete entry").click();
+    await page.locator(".item").filter({ hasText: "doomed" }).getByRole("button", { name: "Entry actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete" }).click();
     await deleted;
+    // Dismiss the undo toast so it cannot overlay later clicks.
+    await page.getByRole("button", { name: "Dismiss" }).click();
 
     await triggerSync(pageB);
     await expect(rowB).toHaveCount(0);

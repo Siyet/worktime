@@ -33,7 +33,7 @@ test.describe("timers", () => {
     await expect(dayCard).toBeVisible();
     const finished = dayCard.locator(".item").filter({ hasText: "Write e2e tests" });
     await expect(finished.locator(".when .to")).toContainText("-");
-    await expect(finished.getByTitle("Delete entry")).toBeVisible();
+    await expect(finished.getByRole("button", { name: "Entry actions" })).toBeVisible();
   });
 
   test("two concurrent timers tick independently, stopping one leaves the other", async ({ page, server }) => {
@@ -120,10 +120,14 @@ test.describe("timers", () => {
 
     const finished = page.locator(".item").filter({ hasText: "to be deleted" });
     await expect(finished).toBeVisible();
-    await finished.getByTitle("Delete entry").click();
+    await finished.getByRole("button", { name: "Entry actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete" }).click();
 
-    await expect(page.getByText("to be deleted")).toHaveCount(0);
+    // The undo toast still carries the description, so scope the check to rows.
+    await expect(page.locator(".item").filter({ hasText: "to be deleted" })).toHaveCount(0);
     await expect(page.getByText("No entries yet. Start your first timer above.")).toBeVisible();
+    await page.getByRole("button", { name: "Dismiss" }).click();
+    await expect(page.getByText("to be deleted")).toHaveCount(0);
   });
 
   test("running timer survives a page reload and keeps ticking", async ({ page, server }) => {

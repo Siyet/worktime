@@ -176,6 +176,47 @@ button.tag:focus-visible {
   }
 }
 
+/* --- tag select: popover picker for the timer start form ------------------- */
+.tagselect {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 14rem;
+}
+
+.tagselect .caret {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.tagmenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 30;
+  width: 19rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+@media (max-width: 34rem) {
+  .tagmenu {
+    position: fixed;
+    top: auto;
+    inset: auto 0 0 0;
+    z-index: 31;
+    width: auto;
+    max-width: none;
+    padding: 0.8rem 0.8rem max(0.8rem, env(safe-area-inset-bottom));
+    border-radius: var(--radius) var(--radius) 0 0;
+    border-bottom: none;
+  }
+}
+
 /* --- kebab ---------------------------------------------------------------- */
 .kebab {
   padding: 0.3rem 0.45rem;

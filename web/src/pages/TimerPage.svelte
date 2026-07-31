@@ -15,10 +15,12 @@
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
   import RowMenu from "../lib/components/RowMenu.svelte";
   import TagChips from "../lib/components/TagChips.svelte";
+  import TagSelect from "../lib/components/TagSelect.svelte";
   import type { TimeEntry } from "../lib/types";
 
   let description = $state("");
   let selectedProjectID = $state<string | null>(null);
+  let selectedTags = $state<string[]>([]);
   let editingID = $state<string | null>(null);
 
   const activeProjects = $derived(
@@ -49,11 +51,14 @@
 
   async function submitStart(event: SubmitEvent) {
     event.preventDefault();
-    // Clear the input before the async write so text typed right after
-    // submitting is never wiped by a late reset.
+    // Clear the inputs before the async write so text typed right after
+    // submitting is never wiped by a late reset. Tags reset like the
+    // description - they describe the task, not the session.
     const submitted = description.trim();
+    const tags = [...selectedTags];
     description = "";
-    await startTimer(submitted, selectedProjectID);
+    selectedTags = [];
+    await startTimer(submitted, selectedProjectID, tags);
   }
 
   function dayTotal(entries: TimeEntry[]): number {
@@ -77,6 +82,7 @@
     aria-label={t("Description")}
   />
   <ProjectSelect projects={activeProjects} bind:value={selectedProjectID} />
+  <TagSelect bind:selected={selectedTags} />
   <button class="primary" type="submit">{t("Start")}</button>
 </form>
 
@@ -179,6 +185,8 @@
       flex: 1 1 100%;
     }
 
+    /* Row 2: project + tags share the line; row 3: a full-width Start in the
+       thumb zone. */
     form.row :global(.pselect) {
       flex: 1 1 auto;
       min-width: 0;
@@ -193,9 +201,14 @@
       margin-left: auto;
     }
 
+    form.row :global(.menu-wrap) {
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
     form.row > button.primary {
-      flex: 0 0 auto;
-      min-width: 7rem;
+      flex: 1 1 100%;
+      min-width: 0;
     }
   }
 </style>

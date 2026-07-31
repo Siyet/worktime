@@ -130,6 +130,25 @@ test.describe("timers", () => {
     await expect(page.getByText("to be deleted")).toHaveCount(0);
   });
 
+  test("tags picked in the start form land on the running and finished entry", async ({ page, server }) => {
+    await page.goto(server.url + "/#/");
+    await page.getByPlaceholder("What are you working on?").fill("tagged from start");
+    await page.getByRole("button", { name: "Tags", exact: true }).click();
+    await page.locator(".tagmenu").getByRole("button", { name: "meeting", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".tagmenu")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Start" }).click();
+    const row = runningCard(page).locator(".item").filter({ hasText: "tagged from start" });
+    await expect(row.locator(".tag").first()).toHaveText("meeting");
+
+    await row.getByRole("button", { name: "Stop" }).click();
+    const finished = page.locator(".item").filter({ hasText: "tagged from start" });
+    await expect(finished.locator(".tag").first()).toHaveText("meeting");
+    // The form resets for the next task: the trigger reads "Tags" again.
+    await expect(page.getByRole("button", { name: "Tags", exact: true })).toContainText("Tags");
+  });
+
   test("running timer survives a page reload and keeps ticking", async ({ page, server }) => {
     await page.goto(server.url + "/#/");
     await page.getByPlaceholder("What are you working on?").fill("survivor");

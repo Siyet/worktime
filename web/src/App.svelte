@@ -64,7 +64,9 @@
     <p class="muted">{t("Loading…")}</p>
   {/if}
 {:else}
-<div class="shell" class:wide={route.path === "/reports"}>
+<!-- Timer and Reports use the wide shell: entry rows and report tables both
+     benefit from the extra width on desktop. -->
+<div class="shell" class:wide={route.path === "/reports" || route.path === "/"}>
   <header>
     <span class="logo"><Logo /><span class="wordmark">W<span class="logo-accent">T</span></span></span>
     <nav>
@@ -75,8 +77,40 @@
     {#if DEMO}
       <span class="status" data-status="demo" title={t("Demo mode - data is stored only in this browser.")}>demo</span>
     {:else}
-      <span class="status" data-status={syncState.status} title={"sync: " + syncState.status}>
-        {statusLabel}{syncState.pendingCount > 0 ? ` (${syncState.pendingCount})` : ""}
+      <!-- Icon per state; the label stays in the DOM visually hidden, so
+           screen readers and text assertions read the same words as before. -->
+      <span
+        class="status"
+        data-status={syncState.status}
+        title={statusLabel + (syncState.pendingCount > 0 ? ` (${syncState.pendingCount})` : "")}
+      >
+        {#if syncState.status === "synced"}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        {:else if syncState.status === "syncing" || syncState.status === "idle"}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />
+          </svg>
+        {:else if syncState.status === "offline"}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m2 2 20 20" />
+            <path d="M5.78 5.78A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.31-.19" />
+            <path d="M21.53 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7 7 0 0 0 10 5.07" />
+          </svg>
+        {:else if syncState.status === "error"}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z" />
+            <path d="M12 9v4" /><path d="M12 17h.01" />
+          </svg>
+        {:else}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+            <path d="m10 17 5-5-5-5" /><path d="M15 12H3" />
+          </svg>
+        {/if}
+        <span class="sr-only">{statusLabel}{syncState.pendingCount > 0 ? " " : ""}</span>
+        {#if syncState.pendingCount > 0}<span class="pending">({syncState.pendingCount})</span>{/if}
       </span>
     {/if}
   </header>
@@ -174,13 +208,36 @@
   }
 
   .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     font-size: 0.8rem;
     color: var(--text-dim);
+  }
+
+  .status svg {
+    display: block;
   }
 
   .status[data-status="error"],
   .status[data-status="unauthenticated"] {
     color: var(--danger);
+  }
+
+  .status[data-status="syncing"] svg {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status svg {
+      animation: none;
+    }
   }
 
   .signin {

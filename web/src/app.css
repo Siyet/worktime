@@ -221,6 +221,19 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* Visually hidden but present for screen readers and textContent. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .stats {
   display: flex;
   gap: 1.8rem;
@@ -767,6 +780,47 @@ dialog.sheet::backdrop {
   font-size: 0.9rem;
 }
 
+/* --- tag select: popover picker for the timer start form ------------------- */
+.tagselect {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 14rem;
+}
+
+.tagselect .caret {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.tagmenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 30;
+  width: 19rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+@media (max-width: 34rem) {
+  .tagmenu {
+    position: fixed;
+    top: auto;
+    inset: auto 0 0 0;
+    z-index: 31;
+    width: auto;
+    max-width: none;
+    padding: 0.8rem 0.8rem max(0.8rem, env(safe-area-inset-bottom));
+    border-radius: var(--radius) var(--radius) 0 0;
+    border-bottom: none;
+  }
+}
+
 /* --- mobile: iOS focus-zoom guard ------------------------------------------
    iOS Safari zooms the page when a focused input is under 16px. */
 @media (max-width: 34rem) {
@@ -824,7 +878,8 @@ dialog.sheet::backdrop {
 }
 
 @media (max-width: 34rem) {
-  .rowmenu {
+  .rowmenu,
+  .tagmenu {
     animation: sheet-up 160ms ease-out;
   }
 
@@ -850,6 +905,7 @@ dialog.sheet::backdrop {
 
 @media (prefers-reduced-motion: reduce) {
   .rowmenu,
+  .tagmenu,
   dialog.sheet[open],
   dialog.sheet::backdrop,
   .menu-scrim {

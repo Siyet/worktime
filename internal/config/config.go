@@ -2,8 +2,10 @@
 package config
 
 import (
+	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -20,6 +22,12 @@ type Config struct {
 	GoogleClientSecret string
 	// BaseURL is the externally visible URL of the instance, used for OAuth redirects.
 	BaseURL string
+	// AgentGrace is how long an agent session may go without heartbeats before the
+	// reconciliation job closes it at the last heartbeat.
+	AgentGrace time.Duration
+	// AgentIdle is the largest gap between agent heartbeats still billed as
+	// continuous work; a larger gap splits the session into a new time entry.
+	AgentIdle time.Duration
 }
 
 func Load() Config {
@@ -30,6 +38,8 @@ func Load() Config {
 		GoogleClientID:     os.Getenv("WORKTIME_GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("WORKTIME_GOOGLE_CLIENT_SECRET"),
 		BaseURL:            envOr("WORKTIME_BASE_URL", "http://localhost:8080"),
+		AgentGrace:         envDuration("WORKTIME_AGENT_GRACE", 10*time.Minute),
+		AgentIdle:          envDuration("WORKTIME_AGENT_IDLE", 10*time.Minute),
 	}
 	for _, email := range strings.Split(os.Getenv("WORKTIME_ALLOWED_EMAILS"), ",") {
 		if email = strings.TrimSpace(email); email != "" {
@@ -44,4 +54,17 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		log.Printf("config: ignoring %s=%q, using %s", key, value, fallback)
+		return fallback
+	}
+	return parsed
 }

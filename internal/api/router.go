@@ -48,6 +48,11 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		api.Post("/tokens", s.handleCreateToken)
 		api.Delete("/tokens/{id}", s.handleDeleteToken)
 		api.Get("/export.sqlite", s.handleExport)
+		api.Route("/agent/sessions/{id}", func(agent chi.Router) {
+			agent.Post("/start", s.handleAgentStart)
+			agent.Post("/heartbeat", s.handleAgentHeartbeat)
+			agent.Post("/stop", s.handleAgentStop)
+		})
 	})
 
 	mcpHandler := mcpserver.NewHandler(dataStore)

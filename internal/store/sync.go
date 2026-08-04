@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -36,13 +37,9 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	totalRows := len(request.Changes.Projects) + len(request.Changes.TimeEntries) + len(request.Changes.TimeOff)
 	nextSeq := int64(0)
 	if totalRows > 0 {
-		var lastSeq int64
-		if err := transaction.QueryRow(
-			"UPDATE sync_state SET seq = seq + ? RETURNING seq", totalRows,
-		).Scan(&lastSeq); err != nil {
+		if nextSeq, err = allocateServerSeq(transaction, totalRows); err != nil {
 			return SyncResponse{}, err
 		}
-		nextSeq = lastSeq - int64(totalRows) + 1
 	}
 
 	// Projects go first so that pulled entries never reference a project the client
@@ -163,6 +160,18 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 	return response, nil
+}
+
+// allocateServerSeq reserves a contiguous block of server_seq values inside the
+// given transaction and returns the first value of the block.
+func allocateServerSeq(transaction *sql.Tx, rows int) (int64, error) {
+	var lastSeq int64
+	if err := transaction.QueryRow(
+		"UPDATE sync_state SET seq = seq + ? RETURNING seq", rows,
+	).Scan(&lastSeq); err != nil {
+		return 0, err
+	}
+	return lastSeq - int64(rows) + 1, nil
 }
 
 // validateTags enforces the tag rules server-side. Three writers reach this endpoint -

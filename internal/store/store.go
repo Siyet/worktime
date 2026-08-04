@@ -118,6 +118,31 @@ CREATE INDEX idx_time_off_user_dates ON time_off(user_id, date_from);
 	`
 ALTER TABLE time_entries ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
 `,
+	// 004: agent sessions for crash-resilient Claude Code time tracking. The id is the
+	// agent's session_id and doubles as the idempotency key for start/heartbeat/stop.
+	// time_entry_id points at the current (running) segment's time_entries row; a session
+	// spans several entries when idle gaps split it. Not a synced table: rows live only
+	// on the server, clients see the produced time_entries through the normal pull path.
+	`
+CREATE TABLE agent_sessions (
+	id                TEXT PRIMARY KEY,
+	user_id           TEXT NOT NULL,
+	project_id        TEXT,
+	source            TEXT NOT NULL DEFAULT 'claude-code',
+	status            TEXT NOT NULL DEFAULT 'active',
+	started_at        INTEGER NOT NULL,
+	last_heartbeat_at INTEGER NOT NULL,
+	ended_at          INTEGER,
+	end_reason        TEXT,
+	cwd               TEXT NOT NULL DEFAULT '',
+	git_branch        TEXT NOT NULL DEFAULT '',
+	model             TEXT NOT NULL DEFAULT '',
+	time_entry_id     TEXT,
+	created_at        INTEGER NOT NULL,
+	updated_at        INTEGER NOT NULL
+);
+CREATE INDEX idx_agent_sessions_open ON agent_sessions(user_id, status, last_heartbeat_at);
+`,
 }
 
 type Store struct {

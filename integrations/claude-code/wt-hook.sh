@@ -1,0 +1,113 @@
+#!/bin/sh
+# WorkTime hook for Claude Code: reports session activity to a worktime server
+# so agent working time is tracked automatically and survives crashes.
+#
+# Wired via .claude/settings.json (see settings.json.example next to this file):
+#   wt-hook.sh start      <- SessionStart (startup|resume)
+#   wt-hook.sh heartbeat  <- UserPromptSubmit / PostToolUse / Stop / PreCompact
+#   wt-hook.sh stop       <- SessionEnd
+#
+# Requires two environment variables:
+#   WORKTIME_URL    e.g. https://wt.example.com (no trailing slash)
+#   WORKTIME_TOKEN  a wt_... API token created in WorkTime settings
+#
+# Design constraints (do not "fix" these):
+#   - Always exits 0: a tracking failure must never block the agent.
+#   - curl runs with a hard 3s timeout.
+#   - Failed calls are spooled to $WORKTIME_QUEUE_DIR (default ~/.worktime/queue)
+#     with their original timestamps and flushed on the next event, so worktime
+#     being unreachable loses nothing. The server is idempotent, replays are safe.
+
+set -u
+
+EVENT="${1:-heartbeat}"
+BASE_URL="${WORKTIME_URL:-}"
+TOKEN="${WORKTIME_TOKEN:-}"
+QUEUE_DIR="${WORKTIME_QUEUE_DIR:-$HOME/.worktime/queue}"
+
+[ -n "$BASE_URL" ] && [ -n "$TOKEN" ] || exit 0
+
+INPUT=$(cat 2>/dev/null || true)
+
+# Extracts a top-level string field from the hook JSON on stdin. The value is
+# returned still JSON-escaped, which makes it safe to embed back into a JSON
+# body as-is (important for Windows paths with backslashes).
+json_string() {
+    printf '%s' "$INPUT" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+SESSION_ID=$(json_string session_id)
+case "$SESSION_ID" in
+    *[!0-9a-fA-F-]*|'') exit 0 ;;
+esac
+
+now_ms() {
+    ms=$(date +%s%3N 2>/dev/null || true)
+    case "$ms" in
+        ''|*[!0-9]*) printf '%s000' "$(date +%s)" ;;
+        *) printf '%s' "$ms" ;;
+    esac
+}
+
+# send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry)
+send() {
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -m 3 -X POST "$1" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$2" 2>/dev/null) || code=000
+    case "$code" in
+        2*) return 0 ;;
+        000|408|429|5*) return 2 ;;
+        *) return 1 ;;
+    esac
+}
+
+flush_queue() {
+    [ -d "$QUEUE_DIR" ] || return 0
+    for spooled in "$QUEUE_DIR"/*.req; do
+        [ -f "$spooled" ] || continue
+        url=$(head -n 1 "$spooled")
+        body=$(tail -n +2 "$spooled")
+        send "$url" "$body"
+        case $? in
+            2) return 0 ;;          # still unreachable, keep the rest in order
+            *) rm -f "$spooled" ;;  # delivered, or permanently rejected
+        esac
+    done
+}
+
+deliver() {
+    send "$1" "$2"
+    [ $? -eq 2 ] || return 0    # delivered, or rejected for good - nothing to retry
+    mkdir -p "$QUEUE_DIR" 2>/dev/null || exit 0
+    # Cap the queue so a long outage cannot fill the disk.
+    [ "$(ls "$QUEUE_DIR" 2>/dev/null | wc -l)" -lt 1000 ] || exit 0
+    spool="$QUEUE_DIR/$(now_ms)-$$.req"
+    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool" 2>/dev/null || true
+}
+
+flush_queue
+
+SESSION_URL="$BASE_URL/api/agent/sessions/$SESSION_ID"
+
+case "$EVENT" in
+    start)
+        CWD_JSON=$(json_string cwd)
+        # Unescape only for git; the JSON body reuses the escaped form verbatim.
+        CWD_PATH=$(printf '%s' "$CWD_JSON" | sed 's/\\\\/\\/g')
+        BRANCH=""
+        [ -n "$CWD_PATH" ] && BRANCH=$(git -C "$CWD_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+        deliver "$SESSION_URL/start" \
+            "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"}"
+        ;;
+    heartbeat)
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)}"
+        ;;
+    stop)
+        REASON=$(json_string reason)
+        [ -n "$REASON" ] || REASON=other
+        deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"}"
+        ;;
+esac
+
+exit 0

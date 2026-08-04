@@ -10,6 +10,7 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 - **Sync protocol**: single `POST /api/sync` does push + pull in one transaction. Pull cursor is `server_seq` (global monotonic counter, server-side). Conflicts resolve by last-write-wins on `updated_at` (client clock). Deletes are soft (`deleted_at` tombstones). IDs are client-generated UUIDv7. All timestamps are unix **milliseconds** UTC.
 - **Auth**: Google OIDC -> session cookie; API tokens (`wt_` prefix, sha256-hashed) for MCP/scripts; `WORKTIME_DEV_AUTH=1` auto-signs in a local dev user (dev/e2e only).
 - **MCP**: `/mcp`, streamable HTTP, stateless mode; a per-user server instance is built per request from the Bearer token. Tools call the store directly and write through `store.Sync` so changes reach clients via the normal pull path.
+- **Agent tracking**: Claude Code hooks post idempotent start/heartbeat/stop to `/api/agent/sessions/{id}/*`; a session owns one running `time_entries` row, idle gaps > `WORKTIME_AGENT_IDLE` split segments, and a minutely reconcile job closes sessions silent for > `WORKTIME_AGENT_GRACE` at the last heartbeat - a lost stop can never inflate a duration. See `docs/agent-tracking.md`.
 - SQLite runs with a **single connection** (`SetMaxOpenConns(1)`) - serializes everything, eliminates SQLITE_BUSY. Benchmarks in `docs/benchmark.md` show this is orders of magnitude above the real load; don't add pooling without re-benchmarking.
 
 ## Layout
@@ -23,6 +24,7 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 | `internal/mcpserver` | MCP tools |
 | `web/src` | Svelte 5 app: `lib/db.ts` (IndexedDB), `lib/sync.svelte.ts` (engine), `lib/state/` (runes stores), `lib/report.ts` (report math, shared by Reports and print), `lib/components/` (Logo, ProjectSelect, Seg, DailyChart, TrashIcon), `pages/` |
 | `web/e2e` | Playwright suite (34+ tests) |
+| `integrations/claude-code` | reference hook script + settings for automatic agent time tracking |
 | `design/` | design-system previews, synced with the claude.ai/design "WorkTime" project via DesignSync |
 | `data/` | gitignored: local DBs and personal exports |
 

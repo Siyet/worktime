@@ -178,6 +178,17 @@ ALTER TABLE time_entries   ADD COLUMN paused_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE agent_sessions ADD COLUMN tz_offset_min INTEGER;
 ALTER TABLE agent_sessions ADD COLUMN last_kind TEXT NOT NULL DEFAULT '';
 `,
+	// 007: give the entries that already existed when 005 shipped the back
+	// reference the column was added for. Only the entry each session currently
+	// points at can be recovered - its earlier segments are unrecoverable - but
+	// that is the one that matters: without it set_agent_task cannot rename the
+	// row of a session that started before the upgrade.
+	`
+UPDATE time_entries
+SET agent_session_id = (SELECT s.id FROM agent_sessions s WHERE s.time_entry_id = time_entries.id)
+WHERE agent_session_id IS NULL
+  AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.time_entry_id = time_entries.id);
+`,
 }
 
 type Store struct {

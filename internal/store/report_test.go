@@ -47,7 +47,7 @@ func TestBuildReport(t *testing.T) {
 
 	windowFrom := time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC).UnixMilli()
 	windowTo := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC).UnixMilli()
-	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo)
+	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo, 0)
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBuildReportExcludesAgentPause(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, resumed+60_000)
 	testStop(t, testStore, user.ID, sessionID, resumed+60_000, "other")
 
-	report, err := testStore.BuildReport(ctx, user.ID, agentBaseMs-1000, resumed+120_000)
+	report, err := testStore.BuildReport(ctx, user.ID, agentBaseMs-1000, resumed+120_000, 0)
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}

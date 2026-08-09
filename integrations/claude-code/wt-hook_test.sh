@@ -127,6 +127,26 @@ reset_log flush
 run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 check "the queue is flushed with the next event" "$(wc -l < "$WT_STUB_LOG" | tr -d ' ')" 3
 check "nothing is left in the queue" "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 0
+# The backlog has to land before the live event. The server ignores any signal at or
+# before its watermark, so the other order lets the live heartbeat book the outage as a
+# pause and then drops the spooled proof that it was work.
+check "the backlog is delivered before the live event" \
+    "$(head -n 1 "$WT_STUB_LOG" | cut -f2 | grep -c '"at":1' || true)" 1
+
+# --- a stop replays the spooled start first -------------------------------------
+# stop on a session the server has never seen is a 404, which the hook classifies as
+# permanent and drops. Flushing first means the start has created the session by then.
+reset_log stopflush
+rm -rf "$WORK/queue"
+WT_STUB_CODE=000
+run_hook start "{\"session_id\":\"$SESSION\",\"cwd\":\"/tmp/project\"}"
+WT_STUB_CODE=200
+reset_log stopflush2
+run_hook stop "{\"session_id\":\"$SESSION\",\"reason\":\"clear\"}"
+check "the spooled start goes out before the stop" "$(head -n 1 "$WT_STUB_LOG" | cut -f1)" \
+    "http://worktime.test/api/agent/sessions/$SESSION/start"
+check "the stop follows it" "$(tail -n 1 "$WT_STUB_LOG" | cut -f1)" \
+    "http://worktime.test/api/agent/sessions/$SESSION/stop"
 
 # --- concurrent hooks never send a spooled request twice ------------------------
 reset_log parallel

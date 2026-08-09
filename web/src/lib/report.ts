@@ -88,7 +88,18 @@ export function apportion(values: number[], targetTotal: number): number[] {
   return result;
 }
 
+// A range this long is a date-input accident, not a report anyone reads day by day.
+// The cap exists so a stray year like 0202 cannot hang the page building a million
+// strings; it is far past any range the UI offers.
+export const maxReportDays = 20_000;
+
 // Inclusive list of local days between two YYYY-MM-DD dates. Noon anchors dodge DST edges.
+//
+// The list has to cover the whole range: callers divide totals by its length and scan
+// it for the peak day, while the entries themselves are filtered by the raw range. A
+// list stopping short would leave a report whose numerator spans years and whose
+// denominator spans months - an average of thirty-four hours a day, with nothing on
+// screen to say why.
 export function listDays(fromISO: string, toISO: string): string[] {
   if (!fromISO || !toISO || toISO < fromISO) return [];
   const days: string[] = [];
@@ -97,7 +108,7 @@ export function listDays(fromISO: string, toISO: string): string[] {
   while (cursor <= end) {
     days.push(localDateISO(cursor.getTime()));
     cursor.setDate(cursor.getDate() + 1);
-    if (days.length > 1000) break;
+    if (days.length >= maxReportDays) break;
   }
   return days;
 }
@@ -167,6 +178,108 @@ export function splitOverlapMinutes(entries: ReportEntry[]): Map<string, number>
   return minutes;
 }
 
+// dateRangeEntries narrows to a local date range. The timestamp pre-filter is what
+// keeps the conversion off the whole history: only the survivors get a Date built for
+// them, and the generous one-day margin covers the offset between a local day and the
+// UTC timestamp behind it without having to reason about the sign.
+export function dateRangeEntries(entries: TimeEntry[], fromISO: string, toISO: string): ReportEntry[] {
+  if (!fromISO || !toISO || toISO < fromISO) return [];
+  const day = 86_400_000;
+  const fromMs = Date.parse(fromISO + "T00:00:00Z") - day;
+  const toMs = Date.parse(toISO + "T00:00:00Z") + 2 * day;
+  const candidates = entries.filter(
+    (entry) => entry.stopped_at !== null && entry.started_at >= fromMs && entry.started_at <= toMs,
+  );
+  return toReportEntries(candidates).filter((entry) => entry.date >= fromISO && entry.date <= toISO);
+}
+
+export interface ReportSummary {
+  totalMinutes: number;
+  workDays: string[];
+  avgMinutes: number;
+  minutesByDay: Map<string, number>;
+  peakDay: string | null;
+  weekendMinutes: number;
+  offCounts: Record<TimeOffKind, number>;
+  byProject: [string, number][];
+  byTag: [string, number][];
+}
+
+// summariseReport is the whole aggregation both report surfaces render. It lived twice
+// - once in the Reports page and once in the print sheet - and the copies had already
+// drifted: the two gated the By tag section on different entry sets, so one filter
+// produced a tag section on screen and none on the printed sheet.
+//
+// entries are already filtered; days and off describe the range, and minutesOf supplies
+// either raw or overlap-adjusted minutes.
+export function summariseReport(
+  entries: ReportEntry[],
+  days: string[],
+  off: Map<string, TimeOffKind>,
+  minutesOf: (entry: ReportEntry) => number,
+): ReportSummary {
+  const totalMinutes = entries.reduce((sum, entry) => sum + minutesOf(entry), 0);
+  const workDays = days.filter((day) => !isWeekend(day) && !off.has(day));
+
+  const minutesByDay = new Map<string, number>();
+  for (const entry of entries) {
+    minutesByDay.set(entry.date, (minutesByDay.get(entry.date) ?? 0) + minutesOf(entry));
+  }
+
+  let peakDay: string | null = null;
+  for (const day of days) {
+    if ((minutesByDay.get(day) ?? 0) > (peakDay ? minutesByDay.get(peakDay)! : 0)) peakDay = day;
+  }
+
+  const weekendMinutes = entries
+    .filter((entry) => isWeekend(entry.date))
+    .reduce((sum, entry) => sum + minutesOf(entry), 0);
+
+  const offCounts: Record<TimeOffKind, number> = { vacation: 0, sick: 0, dayoff: 0 };
+  for (const day of days) {
+    const kind = off.get(day);
+    if (kind) offCounts[kind]++;
+  }
+
+  const projectTotals = new Map<string, number>();
+  for (const entry of entries) {
+    const key = entry.projectID ?? NO_PROJECT_KEY;
+    projectTotals.set(key, (projectTotals.get(key) ?? 0) + minutesOf(entry));
+  }
+
+  return {
+    totalMinutes,
+    workDays,
+    avgMinutes: workDays.length ? totalMinutes / workDays.length : 0,
+    minutesByDay,
+    peakDay,
+    weekendMinutes,
+    offCounts,
+    byProject: [...projectTotals.entries()].sort((left, right) => right[1] - left[1]),
+    byTag: totalsByTag(entries, minutesOf),
+  };
+}
+
+// Split shares: an entry with k tags contributes 1/k of its minutes to each, so
+// Σ By tag = Σ By project = the total, and the untagged bucket keeps every untagged
+// entry inside it. The section is suppressed when nothing shown is tagged - a history
+// with no tags must not grow a card holding a single "untagged, 100%" row. Untagged
+// sorts last regardless of size: it is a residue, not a tag.
+function totalsByTag(entries: ReportEntry[], minutesOf: (entry: ReportEntry) => number): [string, number][] {
+  if (!entries.some((entry) => entry.tags.length > 0)) return [];
+  const totals = new Map<string, number>();
+  for (const entry of entries) {
+    const keys = entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY];
+    for (const key of keys) {
+      totals.set(key, (totals.get(key) ?? 0) + minutesOf(entry) / keys.length);
+    }
+  }
+  const rows = [...totals.entries()].sort((left, right) => right[1] - left[1]);
+  const untaggedIndex = rows.findIndex(([key]) => key === UNTAGGED_KEY);
+  if (untaggedIndex >= 0) rows.push(...rows.splice(untaggedIndex, 1));
+  return rows;
+}
+
 export function formatDayISO(dayISO: string): string {
   return new Date(dayISO + "T12:00").toLocaleDateString(formattingLocale(), {
     weekday: "short",
@@ -191,10 +304,25 @@ export function buildCSV(
   for (const entry of sorted) {
     const started = new Date(entry.startedAt);
     const start = `${String(started.getHours()).padStart(2, "0")}:${String(started.getMinutes()).padStart(2, "0")}`;
-    const description = `"${entry.description.replaceAll('"', '""')}"`;
-    const tags = `"${(entry.tags.length > 0 ? entry.tags.join(";") : "(untagged)").replaceAll('"', '""')}"`;
     const minutes = Math.round(roundMinutes(minutesFor(entry), roundingStep));
-    lines.push([entry.date, projectName(entry.projectID), description, tags, start, minutes].join(","));
+    lines.push(
+      [
+        entry.date,
+        csvCell(projectName(entry.projectID)),
+        csvCell(entry.description),
+        csvCell(entry.tags.length > 0 ? entry.tags.join(";") : "(untagged)"),
+        start,
+        minutes,
+      ].join(","),
+    );
   }
   return lines.join("\n");
+}
+
+// Every free-text cell goes through this. A project named "Acme, Ltd" written raw
+// produces a seventh field and shifts Description, Tags, Start and Duration one column
+// right for every row of that project - silently, since nothing in a CSV reader
+// objects.
+function csvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }

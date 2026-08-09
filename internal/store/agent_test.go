@@ -591,6 +591,63 @@ func TestAgentStopTrimsTrailingIdle(t *testing.T) {
 	}
 }
 
+// A tool call is the one gap that is known to be work: PostToolUse fires only when the
+// tool returns, so a long Bash or Task looks like an empty chair from the server. The
+// stop path has to apply the same rule the heartbeat path does, or a session whose last
+// act is a twenty-minute test run bills those minutes as zero while the identical gap
+// followed by a heartbeat bills all of them.
+func TestAgentStopBillsTrailingToolRun(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-tool-stop@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	toolStartedAt := agentBaseMs + 60_000
+	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+		AgentSignal{At: toolStartedAt, Kind: AgentKindToolStart}, testPolicy); err != nil {
+		t.Fatalf("tool start: %v", err)
+	}
+
+	// The tool runs for twenty minutes and the process exits without a PostToolUse.
+	toolRunMs := int64(20 * 60 * 1000)
+	session := testStop(t, testStore, user.ID, sessionID, toolStartedAt+toolRunMs, "other")
+	if *session.EndedAt != toolStartedAt+toolRunMs {
+		t.Fatalf("expected the tool run billed to the cap, got end %d (tool started at %d)",
+			*session.EndedAt, toolStartedAt)
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt == nil || *entry.StoppedAt != toolStartedAt+toolRunMs {
+		t.Fatalf("unexpected entry stop: %+v", entry)
+	}
+}
+
+// The cap still applies: a gap longer than ToolMaxMs is billed up to it, not in full.
+func TestAgentStopCapsTrailingToolRun(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-tool-cap@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	toolStartedAt := agentBaseMs + 60_000
+	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+		AgentSignal{At: toolStartedAt, Kind: AgentKindToolStart}, testPolicy); err != nil {
+		t.Fatalf("tool start: %v", err)
+	}
+
+	session := testStop(t, testStore, user.ID, sessionID, toolStartedAt+3*testPolicy.ToolMaxMs, "other")
+	if *session.EndedAt != toolStartedAt+testPolicy.ToolMaxMs {
+		t.Fatalf("expected the end capped at ToolMaxMs, got %d", *session.EndedAt)
+	}
+	if _, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID); err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+}
+
 func TestAgentReopenKeepsSameEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-reopen@test.local")

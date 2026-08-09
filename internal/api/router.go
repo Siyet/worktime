@@ -22,7 +22,11 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 	s := &server{store: dataStore, cfg: cfg}
 
 	router := chi.NewRouter()
-	router.Use(middleware.RealIP)
+	// No RealIP here on purpose: it overwrites RemoteAddr from X-Forwarded-For and
+	// friends, which the client controls, and Caddy appends to that header rather than
+	// replacing it - so a value the client supplies wins. Nothing reads the client IP
+	// today; whatever adds the first rate limiter or audit log has to decide what it
+	// trusts rather than inherit a spoofable value.
 	router.Use(middleware.Recoverer)
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

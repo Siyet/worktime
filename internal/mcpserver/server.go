@@ -99,6 +99,22 @@ func (d toolDeps) pushEntries(ctx context.Context, entries ...store.TimeEntry) e
 	return err
 }
 
+// stampUpdate prepares an edit of an existing row for the sync path. Conflicts resolve
+// last-write-wins on updated_at, and the stored value carries the *browser* clock while
+// this process carries the server's. A browser running a minute ahead would therefore
+// make the write lose silently - Sync reports no per-row outcome, so the tool would
+// answer "stopped" for a timer that is still running. Stepping past the stored value
+// keeps the intent of last-write-wins (this edit is the latest one) without trusting
+// either clock to be right.
+func stampUpdate(entry *store.TimeEntry, now int64) int64 {
+	stamp := now
+	if entry.UpdatedAt >= stamp {
+		stamp = entry.UpdatedAt + 1
+	}
+	entry.UpdatedAt = stamp
+	return stamp
+}
+
 func (d toolDeps) resolveProject(ctx context.Context, name string) (*store.Project, error) {
 	if name == "" {
 		return nil, nil
@@ -247,14 +263,25 @@ func (d toolDeps) stopTimer(ctx context.Context, req *mcp.CallToolRequest, input
 	}
 	now := time.Now().UnixMilli()
 	entry.StoppedAt = &now
-	entry.UpdatedAt = now
+	stampUpdate(&entry, now)
 	if err := d.pushEntries(ctx, entry); err != nil {
 		return nil, timerOut{}, err
+	}
+	// Sync reports no per-row outcome, so the only honest way to answer "stopped" is
+	// to read the row back. Reporting success for a timer that is still running is
+	// worse than an error: nobody goes looking for it.
+	stored, err := d.store.GetTimeEntry(ctx, d.userID, entry.ID)
+	if err != nil {
+		return nil, timerOut{}, err
+	}
+	if stored.StoppedAt == nil {
+		return nil, timerOut{}, fmt.Errorf("entry %s is still running: the stop was refused by a newer version of the row",
+			entry.ID)
 	}
 	return nil, timerOut{
 		EntryID: entry.ID, Description: entry.Description,
 		StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
-		Elapsed:   formatDuration(billableMs(entry, now)),
+		Elapsed:   formatDuration(billableMs(stored, *stored.StoppedAt)),
 	}, nil
 }
 
@@ -272,7 +299,7 @@ func (d toolDeps) stopAllTimers(ctx context.Context, req *mcp.CallToolRequest, i
 	for _, entry := range running {
 		stoppedAt := now
 		entry.StoppedAt = &stoppedAt
-		entry.UpdatedAt = now
+		stampUpdate(&entry, now)
 		updated = append(updated, entry)
 	}
 	if len(updated) > 0 {
@@ -280,7 +307,18 @@ func (d toolDeps) stopAllTimers(ctx context.Context, req *mcp.CallToolRequest, i
 			return nil, stopAllOut{}, err
 		}
 	}
-	return nil, stopAllOut{StoppedCount: len(updated)}, nil
+	// The count reports what actually stopped, not what was attempted.
+	stopped := 0
+	for _, entry := range updated {
+		stored, err := d.store.GetTimeEntry(ctx, d.userID, entry.ID)
+		if err != nil {
+			return nil, stopAllOut{}, err
+		}
+		if stored.StoppedAt != nil {
+			stopped++
+		}
+	}
+	return nil, stopAllOut{StoppedCount: stopped}, nil
 }
 
 type listTimersOut struct {
@@ -439,6 +477,10 @@ func (d toolDeps) listTimeOff(ctx context.Context, req *mcp.CallToolRequest, inp
 type timeReportIn struct {
 	From string `json:"from" jsonschema:"first day, YYYY-MM-DD"`
 	To   string `json:"to" jsonschema:"last day inclusive, YYYY-MM-DD"`
+	// Without an offset the days are UTC days, while the app reports on local ones, so
+	// an entry started at 01:00 in UTC+3 lands in the previous day here and in the
+	// right one on screen.
+	TZOffsetMin *int `json:"tz_offset_min,omitempty" jsonschema:"minutes east of UTC for the days in this report; defaults to the timezone of the most recent agent session, or UTC"`
 }
 
 type reportProjectOut struct {
@@ -464,7 +506,21 @@ func (d toolDeps) timeReport(ctx context.Context, req *mcp.CallToolRequest, inpu
 	if err != nil {
 		return nil, timeReportOut{}, fmt.Errorf("to must be YYYY-MM-DD: %w", err)
 	}
-	report, err := d.store.BuildReport(ctx, d.userID, fromDate.UnixMilli(), toDate.AddDate(0, 0, 1).UnixMilli())
+	offsetMin := 0
+	if input.TZOffsetMin != nil {
+		offsetMin = *input.TZOffsetMin
+	} else if known, err := d.store.LatestAgentTZOffset(ctx, d.userID); err != nil {
+		return nil, timeReportOut{}, err
+	} else if known != nil {
+		// The agent sessions carry the offset of the machine this tool runs on, which
+		// is a far better guess than UTC for the caller asking for "last week".
+		offsetMin = *known
+	}
+	// The dates name local days, so the window has to start at local midnight.
+	offsetMs := int64(offsetMin) * 60_000
+	fromMs := fromDate.UnixMilli() - offsetMs
+	toMs := toDate.AddDate(0, 0, 1).UnixMilli() - offsetMs
+	report, err := d.store.BuildReport(ctx, d.userID, fromMs, toMs, offsetMin)
 	if err != nil {
 		return nil, timeReportOut{}, err
 	}

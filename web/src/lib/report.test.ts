@@ -3,15 +3,17 @@ import {
   apportion,
   buildCSV,
   groupKeysOf,
+  listDays,
   NO_PROJECT_KEY,
   roundMinutes,
   splitOverlapMinutes,
+  summariseReport,
   toReportEntries,
   UNTAGGED_KEY,
   type GroupBy,
   type ReportEntry,
 } from "./report";
-import type { TimeEntry } from "./types";
+import type { TimeEntry, TimeOffKind } from "./types";
 
 function makeEntry(overrides: Partial<ReportEntry> = {}): ReportEntry {
   return {
@@ -231,5 +233,100 @@ describe("toReportEntries with agent pauses", () => {
     const shares = splitOverlapMinutes([...paused, ...partner]);
     expect(shares.get("paused")).toBe(60);
     expect(shares.get("partner")).toBe(60);
+  });
+});
+
+describe("buildCSV", () => {
+  const projectName = (projectID: string | null) => (projectID === "p1" ? "Acme, Ltd" : "No project");
+
+  it("quotes a project name containing a comma", () => {
+    // Written raw it produces a seventh field and shifts every later column right,
+    // which no CSV reader complains about - the file just parses into garbage.
+    const csv = buildCSV([makeEntry({ projectID: "p1" })], projectName, 0);
+    const row = csv.split("\n")[1]!;
+    expect(row).toContain('"Acme, Ltd"');
+    expect(splitCSVRow(row)).toHaveLength(6);
+  });
+
+  it("keeps every row at six fields whatever the text holds", () => {
+    const csv = buildCSV(
+      [makeEntry({ projectID: "p1", description: 'a "quoted", comma', tags: ["x,y"] })],
+      projectName,
+      0,
+    );
+    for (const row of csv.split("\n")) expect(splitCSVRow(row)).toHaveLength(6);
+  });
+});
+
+// Minimal RFC 4180 field splitter, enough to count fields in a generated row.
+function splitCSVRow(row: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < row.length; index++) {
+    const character = row[index]!;
+    if (quoted) {
+      if (character === '"' && row[index + 1] === '"') {
+        current += '"';
+        index++;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        current += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+describe("listDays", () => {
+  it("covers the whole range, so averages divide by the days they were summed over", () => {
+    // Truncating the list while the entries keep the full range gave a numerator
+    // spanning years over a denominator spanning months - 34 hours a day, unflagged.
+    const days = listDays("2015-01-01", "2026-08-10");
+    expect(days).toHaveLength(4240);
+    expect(days.at(-1)).toBe("2026-08-10");
+  });
+});
+
+describe("summariseReport", () => {
+  const noOff = new Map<string, TimeOffKind>();
+  const raw = (entry: ReportEntry) => entry.minutes;
+
+  it("suppresses the tag section when nothing shown is tagged", () => {
+    const summary = summariseReport([makeEntry()], ["2026-07-01"], noOff, raw);
+    expect(summary.byTag).toEqual([]);
+  });
+
+  it("gates the tag section on the entries it is given, not on a wider range", () => {
+    // The screen and the print sheet gated this differently, so the same filter
+    // produced a By tag card on one and no section on the other.
+    const tagged = makeEntry({ id: "tagged", tags: ["dev"] });
+    expect(summariseReport([tagged], ["2026-07-01"], noOff, raw).byTag).toHaveLength(1);
+    expect(summariseReport([makeEntry({ id: "plain" })], ["2026-07-01"], noOff, raw).byTag).toEqual([]);
+  });
+
+  it("splits a multi-tag entry so the tag totals match the project totals", () => {
+    const summary = summariseReport([makeEntry({ tags: ["a", "b"] })], ["2026-07-01"], noOff, raw);
+    const tagTotal = summary.byTag.reduce((sum, [, minutes]) => sum + minutes, 0);
+    expect(tagTotal).toBeCloseTo(summary.totalMinutes);
+  });
+
+  it("sorts the untagged bucket last however large it is", () => {
+    const summary = summariseReport(
+      [makeEntry({ id: "big" }), makeEntry({ id: "big2" }), makeEntry({ id: "small", tags: ["dev"], minutes: 5 })],
+      ["2026-07-01"],
+      noOff,
+      raw,
+    );
+    expect(summary.byTag.at(-1)![0]).toBe(UNTAGGED_KEY);
   });
 });

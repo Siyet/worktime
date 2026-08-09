@@ -161,7 +161,7 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 	session, err := getAgentSession(ctx, transaction, userID, params.SessionID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if err := s.ensureAgentSessionIDFree(ctx, transaction, params.SessionID); err != nil {
+		if err := ensureAgentSessionIDFree(ctx, transaction, params.SessionID); err != nil {
 			return AgentSession{}, err
 		}
 		if err := validateAgentProject(ctx, transaction, userID, params.ProjectID); err != nil {
@@ -246,7 +246,7 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, si
 	session, err := getAgentSession(ctx, transaction, userID, sessionID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if err := s.ensureAgentSessionIDFree(ctx, transaction, sessionID); err != nil {
+		if err := ensureAgentSessionIDFree(ctx, transaction, sessionID); err != nil {
 			return AgentSession{}, err
 		}
 		session = AgentSession{
@@ -319,9 +319,20 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 		return AgentSession{}, err
 	}
 
+	// The tail is trimmed to the last heartbeat, because a stop that arrives long after
+	// one proves nothing about the gap in between. The exception is the same one
+	// advanceAgentSession makes: a gap that opened with a tool call is work up to the
+	// cap, since PostToolUse only fires once the tool returns. Without it a session
+	// whose last act is a twenty-minute test run - interrupted, or with its PostToolUse
+	// hook killed alongside the process - bills those twenty minutes as zero, while the
+	// identical gap followed by a heartbeat bills all of them.
 	effectiveEnd := signal.At
 	if signal.At < session.LastHeartbeatAt || signal.At-session.LastHeartbeatAt > policy.IdleMs {
-		effectiveEnd = session.LastHeartbeatAt
+		billable := int64(0)
+		if session.LastKind == AgentKindToolStart && signal.At > session.LastHeartbeatAt {
+			billable = min(signal.At-session.LastHeartbeatAt, policy.ToolMaxMs)
+		}
+		effectiveEnd = session.LastHeartbeatAt + billable
 	}
 	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now)
 	if err != nil {
@@ -413,24 +424,20 @@ func (s *Store) GetAgentSession(ctx context.Context, userID, sessionID string) (
 	return session, err
 }
 
-// ListActiveAgentSessions returns the user's open sessions, newest first.
-func (s *Store) ListActiveAgentSessions(ctx context.Context, userID string) ([]AgentSession, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+agentSessionColumns+` FROM agent_sessions
-		 WHERE user_id = ? AND status = ? ORDER BY started_at DESC`, userID, agentStatusActive)
-	if err != nil {
-		return nil, err
+// LatestAgentTZOffset returns the UTC offset of the user's most recent agent session,
+// or nil when no session ever reported one. It is the only record this server keeps of
+// what "today" means to the user, which is what the MCP report falls back to when the
+// caller does not say.
+func (s *Store) LatestAgentTZOffset(ctx context.Context, userID string) (*int, error) {
+	var offset *int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tz_offset_min FROM agent_sessions
+		WHERE user_id = ? AND tz_offset_min IS NOT NULL
+		ORDER BY started_at DESC LIMIT 1`, userID).Scan(&offset)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
-	sessions := []AgentSession{}
-	for rows.Next() {
-		session, err := scanAgentSession(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		sessions = append(sessions, session)
-	}
-	return sessions, closeRows(rows)
+	return offset, err
 }
 
 // AgentTaskSelector picks the session a task is attached to. An explicit session
@@ -1028,7 +1035,7 @@ func scanAgentSession(row rowScanner) (AgentSession, error) {
 
 // ensureAgentSessionIDFree rejects a session id already claimed by another user,
 // so a leaked or guessed id can never attach entries to a foreign account.
-func (s *Store) ensureAgentSessionIDFree(ctx context.Context, transaction *sql.Tx, sessionID string) error {
+func ensureAgentSessionIDFree(ctx context.Context, transaction *sql.Tx, sessionID string) error {
 	var one int
 	err := transaction.QueryRowContext(ctx,
 		"SELECT 1 FROM agent_sessions WHERE id = ?", sessionID).Scan(&one)

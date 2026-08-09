@@ -48,7 +48,7 @@ func TestBuildReportCountsDayoff(t *testing.T) {
 
 	windowFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
 	windowTo := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo)
+	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo, 0)
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
@@ -59,6 +59,72 @@ func TestBuildReportCountsDayoff(t *testing.T) {
 	}
 	if days["dayoff"] != 2 || days["sick"] != 1 {
 		t.Fatalf("expected 2 dayoff and 1 sick day, got %+v", report.TimeOff)
+	}
+}
+
+// The window is half-open in milliseconds while time off is stored as inclusive dates,
+// so the last day of the report is the one holding the final millisecond. Deriving it
+// from the exclusive bound instead reaches a day too far, and a vacation starting the
+// day after the range is counted inside it.
+func TestBuildReportExcludesTimeOffPastTheWindow(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "dayoff-edge@test.local")
+	ctx := context.Background()
+
+	push := SyncRequest{Changes: SyncChanges{TimeOff: []TimeOff{
+		{ID: uuid.NewString(), Kind: "vacation", DateFrom: "2026-07-08", DateTo: "2026-07-10", CreatedAt: 1, UpdatedAt: 1},
+		{ID: uuid.NewString(), Kind: "sick", DateFrom: "2026-07-07", DateTo: "2026-07-07", CreatedAt: 1, UpdatedAt: 1},
+	}}}
+	if _, err := testStore.Sync(ctx, user.ID, push); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// 2026-07-01..2026-07-07 inclusive, expressed the way the MCP tool expresses it.
+	windowFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	windowTo := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC).UnixMilli()
+	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo, 0)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	days := map[string]int{}
+	for _, item := range report.TimeOff {
+		days[item.Kind] = item.Days
+	}
+	if days["vacation"] != 0 {
+		t.Fatalf("vacation starting the day after the window must not be counted, got %+v", report.TimeOff)
+	}
+	if days["sick"] != 1 {
+		t.Fatalf("expected the last day of the window counted, got %+v", report.TimeOff)
+	}
+}
+
+// With an offset the same millisecond window names different calendar days, which is
+// what makes the MCP report agree with the app for anyone not on UTC.
+func TestBuildReportUsesTheCallersDays(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "dayoff-tz@test.local")
+	ctx := context.Background()
+
+	push := SyncRequest{Changes: SyncChanges{TimeOff: []TimeOff{
+		{ID: uuid.NewString(), Kind: "vacation", DateFrom: "2026-07-08", DateTo: "2026-07-08", CreatedAt: 1, UpdatedAt: 1},
+	}}}
+	if _, err := testStore.Sync(ctx, user.ID, push); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// 2026-07-02..2026-07-08 local in UTC+3: the window starts at 21:00 UTC the day
+	// before and ends at 21:00 UTC on the 8th.
+	offsetMin := 180
+	offsetMs := int64(offsetMin) * 60_000
+	windowFrom := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC).UnixMilli() - offsetMs
+	windowTo := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC).UnixMilli() - offsetMs
+	report, err := testStore.BuildReport(ctx, user.ID, windowFrom, windowTo, offsetMin)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(report.TimeOff) != 1 || report.TimeOff[0].Days != 1 {
+		t.Fatalf("expected the local last day counted once, got %+v", report.TimeOff)
 	}
 }
 

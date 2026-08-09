@@ -1,6 +1,7 @@
 // Application state: runes-based stores backed by IndexedDB. Every mutation
 // writes to the local database first, then pokes the sync engine.
 import { getAllRows, getRow, saveLocalRow } from "../db";
+import { maxTagLength } from "../limits";
 import { requestSync, SYNC_MERGED_EVENT } from "../sync.svelte";
 import type { Project, TimeEntry, TimeOff, TimeOffKind } from "../types";
 import { uuidv7 } from "../uuid";
@@ -55,6 +56,15 @@ function removeFrom<Row extends { id: string }>(rows: Row[], id: string): void {
   }
 }
 
+// updated_at is both a wall clock and a version: conflicts resolve last-write-wins on
+// it. A clock that jumps backwards - NTP correction, waking from sleep - would then
+// make an edit lose to the version it replaces, and the server would silently keep the
+// old one. Stepping past the previous value keeps every edit strictly newer than what
+// it edits, and two edits can never share a millisecond.
+function nextUpdatedAt(previous: { updated_at: number }): number {
+  return Math.max(Date.now(), previous.updated_at + 1);
+}
+
 // --- time entries ---
 
 export async function startTimer(description: string, projectID: string | null, tags: string[] = []): Promise<void> {
@@ -87,7 +97,7 @@ export async function stopTimer(entryID: string): Promise<void> {
 export async function updateEntry(entryID: string, patch: Partial<TimeEntry>): Promise<void> {
   const entry = appState.entries.find((candidate) => candidate.id === entryID);
   if (!entry) return;
-  const updated: TimeEntry = { ...entry, ...patch, id: entry.id, updated_at: Date.now() };
+  const updated: TimeEntry = { ...entry, ...patch, id: entry.id, updated_at: nextUpdatedAt(entry) };
   if (patch.tags) updated.tags = sortTags(patch.tags);
   await saveLocalRow("time_entries", persistable(updated));
   upsertInto(appState.entries, updated);
@@ -97,7 +107,7 @@ export async function updateEntry(entryID: string, patch: Partial<TimeEntry>): P
 export async function deleteEntry(entryID: string): Promise<void> {
   const entry = appState.entries.find((candidate) => candidate.id === entryID);
   if (!entry) return;
-  const now = Date.now();
+  const now = nextUpdatedAt(entry);
   await saveLocalRow("time_entries", persistable({ ...entry, deleted_at: now, updated_at: now }));
   removeFrom(appState.entries, entryID);
   requestSync();
@@ -108,7 +118,7 @@ export async function deleteEntry(entryID: string): Promise<void> {
 export async function restoreEntry(entryID: string): Promise<TimeEntry | undefined> {
   const buried = await getRow<TimeEntry>("time_entries", entryID);
   if (!buried) return undefined;
-  const restored: TimeEntry = { ...buried, deleted_at: null, updated_at: Date.now() };
+  const restored: TimeEntry = { ...buried, deleted_at: null, updated_at: nextUpdatedAt(buried) };
   await saveLocalRow("time_entries", persistable(restored));
   upsertInto(appState.entries, restored);
   requestSync();
@@ -135,7 +145,7 @@ export async function createProject(name: string, color: string): Promise<Projec
 }
 
 export async function updateProject(updatedProject: Project): Promise<void> {
-  const updated: Project = { ...updatedProject, updated_at: Date.now() };
+  const updated: Project = { ...updatedProject, updated_at: nextUpdatedAt(updatedProject) };
   await saveLocalRow("projects", persistable(updated));
   upsertInto(appState.projects, updated);
   requestSync();
@@ -144,7 +154,7 @@ export async function updateProject(updatedProject: Project): Promise<void> {
 export async function deleteProject(projectID: string): Promise<void> {
   const project = appState.projects.find((candidate) => candidate.id === projectID);
   if (!project) return;
-  const now = Date.now();
+  const now = nextUpdatedAt(project);
   await saveLocalRow("projects", persistable({ ...project, deleted_at: now, updated_at: now }));
   removeFrom(appState.projects, projectID);
   requestSync();
@@ -172,7 +182,7 @@ export async function addTimeOff(kind: TimeOffKind, dateFrom: string, dateTo: st
 export async function deleteTimeOff(timeOffID: string): Promise<void> {
   const timeOff = appState.timeOff.find((candidate) => candidate.id === timeOffID);
   if (!timeOff) return;
-  const now = Date.now();
+  const now = nextUpdatedAt(timeOff);
   await saveLocalRow("time_off", persistable({ ...timeOff, deleted_at: now, updated_at: now }));
   removeFrom(appState.timeOff, timeOffID);
   requestSync();
@@ -184,13 +194,20 @@ export async function deleteTimeOff(timeOffID: string): Promise<void> {
 // so the picker is never empty on a fresh instance.
 export const seedTags = ["analysis", "development", "meeting", "other", "review"];
 
-export const maxTagsPerEntry = 8;
-const maxTagLength = 24;
+export { maxTagsPerEntry } from "../limits";
 
 // normaliseTag produces the single canonical spelling of a name. Tags are values, not
 // ids, so two spellings of the same word would silently split a report group in two.
+// The leading underscore is stripped rather than merely rejected downstream: the server
+// reserves that prefix for the "__untagged" report bucket, and a tag it refuses takes
+// the whole entry down with it - the push 400s and the row is quarantined.
 export function normaliseTag(name: string): string {
-  return name.trim().replace(/\s+/g, " ").toLowerCase().slice(0, maxTagLength);
+  return name
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/^_+/, "")
+    .slice(0, maxTagLength);
 }
 
 // Stored sorted, so the one chip a row has room for is predictable rather than

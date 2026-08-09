@@ -5,12 +5,12 @@
   import { localDateISO } from "../lib/format";
   import {
     apportion,
+    dateRangeEntries,
     expandTimeOff,
-    isWeekend,
     listDays,
     NO_PROJECT_KEY,
     splitOverlapMinutes,
-    toReportEntries,
+    summariseReport,
     UNTAGGED_KEY,
     type ReportEntry,
   } from "../lib/report";
@@ -47,12 +47,10 @@
 
   const days = $derived(listDays(dateFrom, dateTo));
   const off = $derived(expandTimeOff(appState.timeOff));
-  const dateRangeEntries = $derived(
-    toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
-  );
+  const rangeAllEntries = $derived(dateRangeEntries(appState.entries, dateFrom, dateTo));
   const tagKeysOf = (entry: ReportEntry) => (entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY]);
   const entries = $derived(
-    dateRangeEntries.filter(
+    rangeAllEntries.filter(
       (entry) =>
         (!projectFilter || projectFilter.has(entryKey(entry))) &&
         (!tagFilter || tagKeysOf(entry).some((key) => tagFilter.has(key))),
@@ -62,59 +60,22 @@
   const overlapOnce = $derived(params.get("overlap") === "1");
   // Shares come from the full date range, so a single-project report still
   // counts time shared with other projects' concurrent entries only once.
-  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(dateRangeEntries) : null);
+  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(rangeAllEntries) : null);
   const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
 
-  const totalMinutes = $derived(entries.reduce((sum, entry) => sum + minutesOf(entry), 0));
-  const workDays = $derived(days.filter((day) => !isWeekend(day) && !off.has(day)));
-  const avgMinutes = $derived(workDays.length ? totalMinutes / workDays.length : 0);
-  const minutesByDay = $derived.by(() => {
-    const totals = new Map<string, number>();
-    for (const entry of entries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + minutesOf(entry));
-    return totals;
-  });
-  const peakDay = $derived.by(() => {
-    let best: string | null = null;
-    for (const day of days) {
-      if ((minutesByDay.get(day) ?? 0) > (best ? minutesByDay.get(best)! : 0)) best = day;
-    }
-    return best;
-  });
-  const weekendMinutes = $derived(
-    entries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + minutesOf(entry), 0),
-  );
-  const offCounts = $derived.by(() => {
-    const counts = { vacation: 0, sick: 0, dayoff: 0 };
-    for (const day of days) {
-      const kind = off.get(day);
-      if (kind) counts[kind]++;
-    }
-    return counts;
-  });
-
-  const byProject = $derived.by(() => {
-    const totals = new Map<string, number>();
-    for (const entry of entries) totals.set(entryKey(entry), (totals.get(entryKey(entry)) ?? 0) + minutesOf(entry));
-    return [...totals.entries()].sort((left, right) => right[1] - left[1]);
-  });
-
-  // Split shares: an entry with k tags contributes 1/k of its minutes to each,
-  // so По тегам adds up to the same Итого as По проектам. Suppressed entirely
-  // when nothing in the range is tagged - historical reports must not grow an
-  // empty section. "без тега" is always last: italic, hatched, ordered - three
-  // cues that survive greyscale and disabled background graphics.
-  const byTag = $derived.by(() => {
-    if (!entries.some((entry) => entry.tags.length > 0)) return [];
-    const totals = new Map<string, number>();
-    for (const entry of entries) {
-      const keys = tagKeysOf(entry);
-      for (const key of keys) totals.set(key, (totals.get(key) ?? 0) + minutesOf(entry) / keys.length);
-    }
-    const rows = [...totals.entries()].sort((left, right) => right[1] - left[1]);
-    const untaggedIndex = rows.findIndex(([key]) => key === UNTAGGED_KEY);
-    if (untaggedIndex >= 0) rows.push(...rows.splice(untaggedIndex, 1));
-    return rows;
-  });
+  // The same aggregation the Reports page renders. "без тега" sorts last there too:
+  // italic, hatched, ordered - three cues that survive greyscale and disabled
+  // background graphics.
+  const summary = $derived(summariseReport(entries, days, off, minutesOf));
+  const totalMinutes = $derived(summary.totalMinutes);
+  const workDays = $derived(summary.workDays);
+  const avgMinutes = $derived(summary.avgMinutes);
+  const minutesByDay = $derived(summary.minutesByDay);
+  const peakDay = $derived(summary.peakDay);
+  const weekendMinutes = $derived(summary.weekendMinutes);
+  const offCounts = $derived(summary.offCounts);
+  const byProject = $derived(summary.byProject);
+  const byTag = $derived(summary.byTag);
 
   // The Итого row invites the reader to add the column up, so the displayed
   // values must actually sum to it: largest-remainder allocation instead of
@@ -244,9 +205,21 @@
     return () => clearTimeout(timer);
   });
 
-  function detailEntries(key: string): ReportEntry[] {
-    return entries.filter((entry) => entryKey(entry) === key).sort((left, right) => left.startedAt - right.startedAt);
-  }
+  // Grouped once rather than filtered per project row: the detail table renders one
+  // row group per project, and a filter inside that loop rescans every entry each time.
+  const entriesByProject = $derived.by(() => {
+    const grouped = new Map<string, ReportEntry[]>();
+    for (const entry of entries) {
+      const bucket = grouped.get(entryKey(entry));
+      if (bucket) {
+        bucket.push(entry);
+      } else {
+        grouped.set(entryKey(entry), [entry]);
+      }
+    }
+    for (const bucket of grouped.values()) bucket.sort((left, right) => left.startedAt - right.startedAt);
+    return grouped;
+  });
 
   function startTime(startedAt: number): string {
     const started = new Date(startedAt);
@@ -401,7 +374,7 @@
               <td colspan="3"><span class="dot" style="background: {projectColor(key)}"></span>{projectName(key)}</td>
               <td class="num">{fmtRu(minutes)}</td>
             </tr>
-            {#each detailEntries(key) as entry (entry.id)}
+            {#each entriesByProject.get(key) ?? [] as entry (entry.id)}
               <tr class="entry">
                 <td>
                   {entry.description || "(без описания)"}

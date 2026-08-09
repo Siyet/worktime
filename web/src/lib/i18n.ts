@@ -120,6 +120,8 @@ const ru: Dictionary = {
   Status: "Статус",
   "pending changes": "несинхронизированные изменения",
   "last synced": "последняя синхронизация",
+  "changes were refused by the server and stay on this device until you edit them again.":
+    "изменений отклонено сервером - они останутся на этом устройстве, пока вы их не измените.",
   Tags: "Теги",
   untagged: "без тега",
   "Filter or create a tag…": "Найти или создать тег…",
@@ -292,6 +294,8 @@ const es: Dictionary = {
   Status: "Estado",
   "pending changes": "cambios pendientes",
   "last synced": "última sincronización",
+  "changes were refused by the server and stay on this device until you edit them again.":
+    "cambios fueron rechazados por el servidor y permanecen en este dispositivo hasta que los edites de nuevo.",
   Tags: "Etiquetas",
   untagged: "sin etiqueta",
   "Filter or create a tag…": "Filtrar o crear una etiqueta…",
@@ -463,6 +467,8 @@ const de: Dictionary = {
   Status: "Status",
   "pending changes": "ausstehende Änderungen",
   "last synced": "zuletzt synchronisiert",
+  "changes were refused by the server and stay on this device until you edit them again.":
+    "Änderungen hat der Server abgelehnt - sie bleiben auf diesem Gerät, bis du sie erneut bearbeitest.",
   Tags: "Tags",
   untagged: "ohne Tag",
   "Filter or create a tag…": "Tag filtern oder anlegen…",
@@ -636,6 +642,8 @@ const fr: Dictionary = {
   Status: "Statut",
   "pending changes": "modifications en attente",
   "last synced": "dernière synchro",
+  "changes were refused by the server and stay on this device until you edit them again.":
+    "modifications ont été refusées par le serveur et restent sur cet appareil jusqu'à ce que vous les modifiiez.",
   Tags: "Étiquettes",
   untagged: "sans étiquette",
   "Filter or create a tag…": "Filtrer ou créer une étiquette…",
@@ -806,6 +814,8 @@ const zh: Dictionary = {
   Status: "状态",
   "pending changes": "待同步更改",
   "last synced": "最后同步",
+  "changes were refused by the server and stay on this device until you edit them again.":
+    "项更改被服务器拒绝，在你再次编辑之前它们只保留在本设备上。",
   Tags: "标签",
   untagged: "无标签",
   "Filter or create a tag…": "筛选或创建标签…",

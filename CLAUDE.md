@@ -34,11 +34,12 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 make dev-api    # go run, :8080 (set WORKTIME_DEV_AUTH=1 to skip Google sign-in)
 make dev-web    # vite dev server, proxies /api /auth /mcp to :8080
 make build      # npm build + go build -> bin/worktime (frontend embedded via go:embed)
-make test       # go test ./...
+make test       # go test ./... + the vitest suite
+make test-hook  # the Claude Code hook (plain sh, covered by nothing else)
 make e2e        # builds the binary, then npx playwright test (e2e runs against bin/worktime!)
 ```
 
-Always run before finishing: `go vet ./...`, `cd web && npm run check`, `go test ./...`, and the e2e suite if frontend/sync/API changed. **e2e tests run against the embedded build** - rebuild `bin/worktime` (`make build`) after frontend changes or Playwright will test stale UI. On Windows the e2e fixture launches `bin/worktime.exe` - the Makefile picks the right name via `$(OS)`; a stray extension-less `bin/worktime` next to an old `.exe` means the suite silently tests the old build.
+Always run before finishing: `go vet ./...`, `cd web && npm run check`, `make test`, and the e2e suite if frontend/sync/API changed. `.github/workflows/ci.yml` runs the same set on every push. **e2e tests run against the embedded build** - rebuild `bin/worktime` (`make build`) after frontend changes or Playwright will test stale UI. On Windows the e2e fixture launches `bin/worktime.exe` - the Makefile picks the right name via `$(OS)`; a stray extension-less `bin/worktime` next to an old `.exe` means the suite silently tests the old build.
 
 ## Conventions
 

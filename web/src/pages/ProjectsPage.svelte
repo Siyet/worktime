@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState, createProject, deleteProject, updateProject } from "../lib/state/app.svelte";
   import { t } from "../lib/i18n";
+  import { maxNameLength } from "../lib/limits";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
 
   // Design palette defaults: new projects cycle through these instead of a single blue.
@@ -28,7 +29,13 @@
 
 <form class="card row" onsubmit={submitCreate}>
   <input type="color" bind:value={newColor} aria-label={t("Project color")} />
-  <input class="grow" placeholder={t("New project name")} bind:value={newName} aria-label={t("Project name")} />
+  <input
+    class="grow"
+    placeholder={t("New project name")}
+    bind:value={newName}
+    maxlength={maxNameLength}
+    aria-label={t("Project name")}
+  />
   <button class="primary" type="submit">{t("Add")}</button>
 </form>
 
@@ -44,6 +51,7 @@
       <input
         class="grow"
         value={project.name}
+        maxlength={maxNameLength}
         aria-label={t("Name")}
         onchange={(event) => {
           const name = event.currentTarget.value.trim();

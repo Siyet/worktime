@@ -124,13 +124,16 @@ export function wallClockMs(entries: TimeEntry[], now: number): number {
   return total;
 }
 
-// taskSuggestions offers what the page already shows: the last week plus
-// anything still running. The instance has more than ten thousand entries, and
-// a suggestion from a year ago helps nobody.
-export function taskSuggestions(entries: TimeEntry[], query: string, now: number): TaskSuggestion[] {
+// taskSuggestions offers what the page already shows: everything since cutoff plus
+// anything still running. The instance has more than ten thousand entries, and a
+// suggestion from a year ago helps nobody.
+//
+// The caller passes the cutoff rather than "now" so that the suggestions and the feed
+// they claim to mirror cannot drift apart, and so that neither has to be recomputed
+// every second just to keep a window edge fresh.
+export function taskSuggestions(entries: TimeEntry[], query: string, cutoff: number): TaskSuggestion[] {
   const needle = descriptionKey(query);
   if (needle === "") return [];
-  const cutoff = now - SUGGESTION_WINDOW_DAYS * 86_400_000;
 
   interface Candidate {
     suggestion: TaskSuggestion;

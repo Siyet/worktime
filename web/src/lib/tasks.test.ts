@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupDayEntries, taskKey, taskSuggestions, wallClockMs } from "./tasks";
+import { groupDayEntries, SUGGESTION_WINDOW_DAYS, taskKey, taskSuggestions, wallClockMs } from "./tasks";
 import type { TimeEntry } from "./types";
 
 const HOUR = 3_600_000;
@@ -126,6 +126,9 @@ describe("taskKey", () => {
 });
 
 describe("taskSuggestions", () => {
+  // The third argument is the window cutoff, not "now": the caller derives it from the
+  // day boundary so the suggestions and the feed they mirror share one window.
+  const CUTOFF = NOW - SUGGESTION_WINDOW_DAYS * 24 * HOUR;
   const source = [
     entry({ description: "Write e2e tests", started_at: NOW - 2 * HOUR, project_id: "p1", tags: ["review"] }),
     entry({ description: "Write docs", started_at: NOW - 3 * HOUR }),
@@ -134,18 +137,18 @@ describe("taskSuggestions", () => {
   ];
 
   it("suggests nothing for an empty query", () => {
-    expect(taskSuggestions(source, "", NOW)).toEqual([]);
-    expect(taskSuggestions(source, "   ", NOW)).toEqual([]);
+    expect(taskSuggestions(source, "", CUTOFF)).toEqual([]);
+    expect(taskSuggestions(source, "   ", CUTOFF)).toEqual([]);
   });
 
   it("ranks prefix matches above substring matches", () => {
-    const found = taskSuggestions(source, "write", NOW).map((suggestion) => suggestion.description);
+    const found = taskSuggestions(source, "write", CUTOFF).map((suggestion) => suggestion.description);
     expect(found.slice(0, 2)).toEqual(["Write e2e tests", "Write docs"]);
     expect(found).toContain("Rewrite the sync engine");
   });
 
   it("carries the project and tags of the newest use", () => {
-    const [first] = taskSuggestions(source, "write e2e", NOW);
+    const [first] = taskSuggestions(source, "write e2e", CUTOFF);
     expect(first).toEqual({ description: "Write e2e tests", projectID: "p1", tags: ["review"] });
   });
 
@@ -154,25 +157,25 @@ describe("taskSuggestions", () => {
       entry({ description: "api work", started_at: NOW - 5 * HOUR }),
       entry({ description: "API Work", started_at: NOW - HOUR }),
     ];
-    const found = taskSuggestions(entries, "api", NOW);
+    const found = taskSuggestions(entries, "api", CUTOFF);
     expect(found).toHaveLength(1);
     expect(found[0]!.description).toBe("API Work");
   });
 
   it("does not suggest what is already typed in full", () => {
-    expect(taskSuggestions(source, "Write docs", NOW)).toEqual([]);
+    expect(taskSuggestions(source, "Write docs", CUTOFF)).toEqual([]);
   });
 
   it("ignores entries older than the window unless they are still running", () => {
-    expect(taskSuggestions(source, "ancient", NOW)).toEqual([]);
+    expect(taskSuggestions(source, "ancient", CUTOFF)).toEqual([]);
     const stillRunning = entry({ description: "Ancient run", started_at: NOW - 30 * 24 * HOUR, stopped_at: null });
-    expect(taskSuggestions([stillRunning], "ancient", NOW)).toHaveLength(1);
+    expect(taskSuggestions([stillRunning], "ancient", CUTOFF)).toHaveLength(1);
   });
 
   it("returns at most eight suggestions", () => {
     const many = Array.from({ length: 12 }, (_, index) =>
       entry({ description: `Task number ${index}`, started_at: NOW - index * 60_000 }),
     );
-    expect(taskSuggestions(many, "task", NOW)).toHaveLength(8);
+    expect(taskSuggestions(many, "task", CUTOFF)).toHaveLength(8);
   });
 });

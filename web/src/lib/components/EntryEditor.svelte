@@ -9,7 +9,8 @@
   import { appState, clock, entryTags, projectByID, updateEntry } from "../state/app.svelte";
   import { formatDurationShort, formatTime, localDateISO } from "../format";
   import { t } from "../i18n";
-  import { taskSuggestions } from "../tasks";
+  import { maxTextLength } from "../limits";
+  import { SUGGESTION_WINDOW_DAYS, taskSuggestions } from "../tasks";
   import type { TimeEntry } from "../types";
   import {
     calendarDayDiff,
@@ -71,7 +72,7 @@
     stoppedRemotely = true;
     if (!toTouched && !offsetTouched) {
       toText = formatTimeOfDay(timeOfDayFromMs(stoppedAt));
-      endDayOffset = calendarDayDiff(dateISO, localDateISO(stoppedAt));
+      setEndDayOffset(calendarDayDiff(dateISO, localDateISO(stoppedAt)));
     }
   });
 
@@ -109,11 +110,25 @@
 
   // Boundary line: the reason to edit is almost always a boundary, so the
   // neighbours' edges and the live gap/overlap are shown inside the dialog.
+  // Narrowed by timestamp and keyed on the date alone, so typing in the From field does
+  // not rescan the table - and building a Date per row to compare formatted strings is
+  // not how a day is selected out of ten thousand entries.
+  const dayEntries = $derived.by(() => {
+    // Both bounds go through composeTimestamp: a DST day is 23 or 25 hours long, so
+    // adding a fixed 86_400_000 would clip an hour off one day a year.
+    const dayStart = composeTimestamp(dateISO, { hour: 0, minute: 0 });
+    const dayEnd = composeTimestamp(dateISO, { hour: 0, minute: 0 }, 1);
+    return appState.entries.filter(
+      (entry) =>
+        entry.id !== entryID &&
+        entry.stopped_at !== null &&
+        entry.started_at >= dayStart &&
+        entry.started_at < dayEnd,
+    );
+  });
+
   const neighbours = $derived.by(() => {
     if (startMs === null) return null;
-    const dayEntries = appState.entries.filter(
-      (entry) => entry.id !== entryID && entry.stopped_at !== null && localDateISO(entry.started_at) === dateISO,
-    );
     let prev: TimeEntry | null = null;
     let next: TimeEntry | null = null;
     for (const entry of dayEntries) {
@@ -147,8 +162,17 @@
     dateTouched = true;
   }
 
+  // The offset says how many days after the start date the entry ends, so it is never
+  // negative. Every write goes through here: calendarDayDiff against a stored end can
+  // return -1 once the date has been shifted forward, and that renders as "+-1d", puts
+  // the end before the start, disables Save and disables the − button that would undo
+  // it - leaving the dialog with no obvious way out.
+  function setEndDayOffset(value: number) {
+    endDayOffset = Math.max(0, value);
+  }
+
   function shiftEndDay(delta: number) {
-    endDayOffset = Math.max(0, endDayOffset + delta);
+    setEndDayOffset(endDayOffset + delta);
     offsetTouched = true;
   }
 
@@ -168,7 +192,7 @@
       const stored = current?.stopped_at ?? original.stopped_at;
       if (stored !== null && stored !== undefined) {
         toText = formatTimeOfDay(timeOfDayFromMs(stored));
-        endDayOffset = calendarDayDiff(dateISO, localDateISO(stored));
+        setEndDayOffset(calendarDayDiff(dateISO, localDateISO(stored)));
         toTouched = false;
         offsetTouched = false;
       }
@@ -206,7 +230,7 @@
   function stopNow() {
     const now = Date.now();
     toText = formatTimeOfDay(timeOfDayFromMs(now));
-    endDayOffset = Math.max(0, calendarDayDiff(dateISO, localDateISO(now)));
+    setEndDayOffset(calendarDayDiff(dateISO, localDateISO(now)));
     toTouched = true;
   }
 
@@ -243,14 +267,19 @@
   );
 
   // Renaming an entry to an existing task is what puts it into that task's
-  // group, so the same suggestions belong here.
-  const suggestions = $derived(
-    taskSuggestions(
-      appState.entries.filter((entry) => entry.id !== entryID),
-      draftDescription,
-      clock.now,
+  // group, so the same suggestions belong here - and from the same window the Timer
+  // page uses. The source is narrowed in its own $derived so that typing rebuilds only
+  // the suggestion list, not a copy of the entry table, and the cutoff is a day-level
+  // value so the one-second ticker never enters the picture.
+  const suggestionCutoff = $derived(
+    new Date(localDateISO(clock.now) + "T00:00").getTime() - (SUGGESTION_WINDOW_DAYS - 1) * 86_400_000,
+  );
+  const suggestionSource = $derived(
+    appState.entries.filter(
+      (entry) => entry.id !== entryID && (entry.stopped_at === null || entry.started_at >= suggestionCutoff),
     ),
   );
+  const suggestions = $derived(taskSuggestions(suggestionSource, draftDescription, suggestionCutoff));
 
   // Idle time an agent session subtracted from this entry. durationLabel is
   // computed from the form fields, not from the row, so the two would otherwise
@@ -321,7 +350,7 @@
           {suggestions}
           {projectName}
           onpick={applySuggestion}
-          maxlength={2000}
+          maxlength={maxTextLength}
         />
       </div>
 

@@ -175,6 +175,14 @@
       , {t("last synced")} {new Date(syncState.lastSyncedAt).toLocaleTimeString()}
     {/if}
   </p>
+  <!-- A refused row stays on this device only, and the status above still reads
+       "synced" - without this line there is nothing anywhere that says so. -->
+  {#if syncState.rejectedCount > 0}
+    <p class="rejected">
+      {syncState.rejectedCount}
+      {t("changes were refused by the server and stay on this device until you edit them again.")}
+    </p>
+  {/if}
 </div>
 {/if}
 
@@ -182,6 +190,12 @@
   h3 {
     margin: 0 0 0.5rem;
     font-size: 0.95rem;
+  }
+
+  .rejected {
+    margin: 0.4rem 0 0;
+    font-size: 0.85rem;
+    color: var(--danger);
   }
 
   .avatar {

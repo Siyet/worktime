@@ -113,10 +113,15 @@ test.describe("multi-device conflicts (LWW)", () => {
     await startAndStop(page, "echoed");
     await pushed;
 
-    // Extra sync cycles re-deliver the row through the pull path.
-    await triggerSync(page);
-    await triggerSync(page);
-    await page.waitForTimeout(300);
+    // Extra sync cycles re-deliver the row through the pull path. Each one is awaited
+    // to its response: triggerSync is fire-and-forget, so a fixed sleep would let the
+    // assertion pass on a slow machine simply because the pull had not landed yet -
+    // proving nothing about duplication.
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const settled = page.waitForResponse((response) => response.url().includes("/api/sync") && response.ok());
+      await triggerSync(page);
+      await settled;
+    }
     await expect(page.locator(".item").filter({ hasText: "echoed" })).toHaveCount(1);
   });
 

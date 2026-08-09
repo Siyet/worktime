@@ -40,7 +40,21 @@ type Config struct {
 	AgentReconcile time.Duration
 }
 
+// Defaults returns the agent timings a deployment gets when nothing is configured.
+// They are also the fallback for a Config assembled by hand, so a zero duration can
+// never reach the agent policy as a literal zero.
+func Defaults() Config {
+	return Config{
+		AgentGrace:     10 * time.Minute,
+		AgentIdle:      10 * time.Minute,
+		AgentToolMax:   30 * time.Minute,
+		AgentMaxPause:  4 * time.Hour,
+		AgentReconcile: time.Minute,
+	}
+}
+
 func Load() Config {
+	defaults := Defaults()
 	cfg := Config{
 		Addr:               envOr("WORKTIME_ADDR", ":8080"),
 		DBPath:             envOr("WORKTIME_DB", "worktime.db"),
@@ -48,11 +62,11 @@ func Load() Config {
 		GoogleClientID:     os.Getenv("WORKTIME_GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("WORKTIME_GOOGLE_CLIENT_SECRET"),
 		BaseURL:            envOr("WORKTIME_BASE_URL", "http://localhost:8080"),
-		AgentGrace:         envDuration("WORKTIME_AGENT_GRACE", 10*time.Minute),
-		AgentIdle:          envDuration("WORKTIME_AGENT_IDLE", 10*time.Minute),
-		AgentToolMax:       envDuration("WORKTIME_AGENT_TOOL_MAX", 30*time.Minute),
-		AgentMaxPause:      envDuration("WORKTIME_AGENT_MAX_PAUSE", 4*time.Hour),
-		AgentReconcile:     envDuration("WORKTIME_AGENT_RECONCILE", time.Minute),
+		AgentGrace:         envDuration("WORKTIME_AGENT_GRACE", defaults.AgentGrace),
+		AgentIdle:          envDuration("WORKTIME_AGENT_IDLE", defaults.AgentIdle),
+		AgentToolMax:       envDuration("WORKTIME_AGENT_TOOL_MAX", defaults.AgentToolMax),
+		AgentMaxPause:      envDuration("WORKTIME_AGENT_MAX_PAUSE", defaults.AgentMaxPause),
+		AgentReconcile:     envDuration("WORKTIME_AGENT_RECONCILE", defaults.AgentReconcile),
 	}
 	for _, email := range strings.Split(os.Getenv("WORKTIME_ALLOWED_EMAILS"), ",") {
 		if email = strings.TrimSpace(email); email != "" {

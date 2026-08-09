@@ -45,9 +45,20 @@ export async function saveLocalRow(table: TableName, row: SyncedRow): Promise<vo
   await transaction.done;
 }
 
-// saveServerRow persists a row received from the server without marking it dirty.
-export async function saveServerRow(table: TableName, row: SyncedRow): Promise<void> {
-  await (await db()).put(table, row);
+// readRows fetches the rows behind a set of dirty markers in one transaction. Opening
+// one per row is the anti-pattern mergeServerRows exists to avoid, and the push path
+// reaches the same size: a tag rename in Settings rewrites every affected entry.
+export async function readRows(markers: DirtyMarker[]): Promise<Map<string, SyncedRow>> {
+  const rows = new Map<string, SyncedRow>();
+  if (markers.length === 0) return rows;
+  const database = await db();
+  const transaction = database.transaction([...TABLES], "readonly");
+  for (const marker of markers) {
+    const row = (await transaction.objectStore(marker.table).get(marker.id)) as SyncedRow | undefined;
+    if (row) rows.set(`${marker.table}:${marker.id}`, row);
+  }
+  await transaction.done;
+  return rows;
 }
 
 // mergeServerRows applies a pulled batch in a single IndexedDB transaction.
@@ -80,7 +91,10 @@ export async function mergeServerRows(
       const local = (await store.get(row.id)) as SyncedRow | undefined;
       if (!local || row.updated_at >= local.updated_at) {
         void store.put(row);
-        merged = true;
+        // Every successful push is echoed back with the same updated_at, so reporting
+        // a merge on equality alone would make each local edit reload the whole state
+        // from disk. Only a row that actually differs is worth waking the app for.
+        if (!local || !sameStoredRow(local, row)) merged = true;
       }
     }
   }
@@ -88,19 +102,44 @@ export async function mergeServerRows(
   return merged;
 }
 
+// sameStoredRow compares two versions of a row by content. server_seq is excluded: it
+// moves on every write and says nothing about what the UI would render.
+function sameStoredRow(local: SyncedRow, incoming: SyncedRow): boolean {
+  const fields = new Set([...Object.keys(local), ...Object.keys(incoming)]);
+  fields.delete("server_seq");
+  for (const field of fields) {
+    const localValue = (local as unknown as Record<string, unknown>)[field];
+    const incomingValue = (incoming as unknown as Record<string, unknown>)[field];
+    if (Array.isArray(localValue) || Array.isArray(incomingValue)) {
+      const localItems = Array.isArray(localValue) ? localValue : [];
+      const incomingItems = Array.isArray(incomingValue) ? incomingValue : [];
+      if (localItems.length !== incomingItems.length) return false;
+      if (localItems.some((item, index) => item !== incomingItems[index])) return false;
+      continue;
+    }
+    if (localValue !== incomingValue) return false;
+  }
+  return true;
+}
+
 export async function listDirtyMarkers(): Promise<DirtyMarker[]> {
   return (await db()).getAll("dirty");
 }
 
-// clearDirtyMarker removes the push queue entry unless the row was edited again
-// while the push was in flight (its updated_at moved past the pushed one).
-export async function clearDirtyMarker(marker: DirtyMarker): Promise<void> {
+// clearDirtyMarkers removes push queue entries unless the row was edited again while
+// the push was in flight (its updated_at moved past the pushed one). The read and the
+// delete share one transaction, so that check cannot race; the whole batch shares it
+// too, because a chunk can hold thousands of markers.
+export async function clearDirtyMarkers(markers: DirtyMarker[]): Promise<void> {
+  if (markers.length === 0) return;
   const database = await db();
   const transaction = database.transaction("dirty", "readwrite");
-  const key = `${marker.table}:${marker.id}`;
-  const current: DirtyMarker | undefined = await transaction.store.get(key);
-  if (current && current.updated_at <= marker.updated_at) {
-    await transaction.store.delete(key);
+  for (const marker of markers) {
+    const key = `${marker.table}:${marker.id}`;
+    const current: DirtyMarker | undefined = await transaction.store.get(key);
+    if (current && current.updated_at <= marker.updated_at) {
+      void transaction.store.delete(key);
+    }
   }
   await transaction.done;
 }

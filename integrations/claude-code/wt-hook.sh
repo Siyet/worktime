@@ -173,23 +173,41 @@ SOURCE=$(json_string source)
     "$(now_ms)" "$EVENT" "$(json_string hook_event_name)" \
     "$SOURCE$REASON" "$SESSION_ID" >> "$WORKTIME_HOOK_LOG" 2>/dev/null || true
 
+# The backlog goes out before the current event. Delivering the live one first defeats
+# the queue twice over: the server ignores any signal at or before its watermark, so a
+# live heartbeat after an outage books the whole gap as a pause and the spooled
+# heartbeats that prove it was work are then discarded as stale; and a stop for a
+# session whose start is still spooled hits a session that does not exist yet, which is
+# a 404 - permanent, dropped, never retried.
+#
+# SessionStart is the exception: it is the one synchronous hook (5 second budget), and
+# nothing can be queued for a session that has not started. It flushes afterwards.
+# Draining an empty queue costs nothing, and an unreachable server stops the drain on
+# the first attempt.
+[ "$EVENT" = "start" ] || flush_queue
+
+# tz_offset_min rides along on every event. A session first seen from a heartbeat -
+# because its start was lost - would otherwise keep tz_offset_min NULL forever, and
+# crossesLocalMidnight can then never cut a night break in two. cwd and git_branch stay
+# on start only: collect_context shells out to git, and this runs on every tool call.
+TZ_FIELD=""
+OFFSET=$(tz_offset_min)
+[ -z "$OFFSET" ] || TZ_FIELD=",\"tz_offset_min\":$OFFSET"
+
 case "$EVENT" in
     start)
         collect_context
-        TZ_FIELD=""
-        OFFSET=$(tz_offset_min)
-        [ -z "$OFFSET" ] || TZ_FIELD=",\"tz_offset_min\":$OFFSET"
         deliver "$SESSION_URL/start" \
             "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
         ;;
     heartbeat)
-        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)}"
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)$TZ_FIELD}"
         ;;
     tool_start)
         # PreToolUse, i.e. *before* the tool runs. Without it a twenty minute Bash
         # or Task call is indistinguishable from an empty chair: every other hook
         # fires only once the gap has already happened.
-        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms),\"activity\":\"tool_start\"}"
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms),\"activity\":\"tool_start\"$TZ_FIELD}"
         ;;
     stop)
         # SessionEnd fires with reason=resume when the session is handed over to a
@@ -197,13 +215,12 @@ case "$EVENT" in
         # that is still working, and the next heartbeat would have to revive it.
         if [ "$REASON" != "resume" ]; then
             [ -n "$REASON" ] || REASON=other
-            deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"}"
+            deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"$TZ_FIELD}"
         fi
         ;;
 esac
 
-# The current event goes out first; the backlog follows on whatever budget is
-# left (SessionStart runs with a 5 second timeout).
-flush_queue
+# SessionStart delivers first, then drains whatever is left of its budget.
+[ "$EVENT" != "start" ] || flush_queue
 
 exit 0

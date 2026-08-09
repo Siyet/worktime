@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -50,7 +51,19 @@ func (s *server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "from and to must be unix-ms with to > from", http.StatusBadRequest)
 		return
 	}
-	report, err := s.store.BuildReport(r.Context(), currentUser(r).ID, from, to)
+	// The window is in milliseconds, so the caller has already pinned the day
+	// boundaries; the offset only decides which calendar days the time-off rows are
+	// matched against. Absent, it is UTC, which is what the boundaries then mean too.
+	tzOffsetMin := 0
+	if raw := r.URL.Query().Get("tz_offset_min"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < -14*60 || parsed > 14*60 {
+			http.Error(w, "tz_offset_min must be minutes east of UTC within ±14h", http.StatusBadRequest)
+			return
+		}
+		tzOffsetMin = parsed
+	}
+	report, err := s.store.BuildReport(r.Context(), currentUser(r).ID, from, to, tzOffsetMin)
 	if err != nil {
 		log.Printf("report: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -60,22 +73,27 @@ func (s *server) handleReport(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePull serves read-only snapshots for debugging and simple integrations:
-// GET /api/projects and GET /api/entries reuse the sync pull path with since=0.
+// GET /api/projects and GET /api/entries. Each reads only the table it serves - going
+// through the sync path would materialise the user's whole history, tombstones
+// included, and throw two thirds of it away on every request.
 func (s *server) handlePull(w http.ResponseWriter, r *http.Request) {
-	response, err := s.store.Sync(r.Context(), currentUser(r).ID, store.SyncRequest{Since: 0})
+	if r.URL.Path == "/api/projects" {
+		projects, err := s.store.ListProjects(r.Context(), currentUser(r).ID)
+		if err != nil {
+			log.Printf("pull projects: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, projects)
+		return
+	}
+	entries, err := s.store.ListEntries(r.Context(), currentUser(r).ID)
 	if err != nil {
-		log.Printf("pull: %v", err)
+		log.Printf("pull entries: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	switch r.URL.Path {
-	case "/api/projects":
-		writeJSON(w, http.StatusOK, response.Changes.Projects)
-	case "/api/entries":
-		writeJSON(w, http.StatusOK, response.Changes.TimeEntries)
-	default:
-		writeJSON(w, http.StatusOK, response.Changes)
-	}
+	writeJSON(w, http.StatusOK, entries)
 }
 
 // handleExport streams a standalone SQLite file with the current user's data.
@@ -98,9 +116,17 @@ type createTokenRequest struct {
 	Name string `json:"name"`
 }
 
+const maxTokenNameLength = 100
+
 func (s *server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	var request createTokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Name == "" || len(request.Name) > 100 {
+	// Capped like every other body-reading handler: the decoder streams, but it
+	// materialises the whole name string before the length check below can reject it,
+	// so an unbounded body is an unbounded allocation. Characters, not bytes, so the
+	// limit means what the message says for a non-ASCII name.
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	if err := decoder.Decode(&request); err != nil ||
+		request.Name == "" || utf8.RuneCountInString(request.Name) > maxTokenNameLength {
 		http.Error(w, "name is required (1..100 chars)", http.StatusBadRequest)
 		return
 	}

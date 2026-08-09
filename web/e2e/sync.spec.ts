@@ -89,6 +89,59 @@ test.describe("offline and sync", () => {
     expect(entries.some((entry: { description: string }) => entry.description === "queued change")).toBe(true);
   });
 
+  // A 400 is the one response that makes the client give up on a row: it quarantines
+  // it and clears the dirty marker, because retrying a row the server will always
+  // refuse would block every other pending change forever. The quarantine has to be
+  // per *version*, or fixing the row leaves it stranded on this device with the header
+  // still reading "synced".
+  test("rejected row: neighbours still sync, and editing it lets it through", async ({ page, server }) => {
+    await page.goto(server.url + "/#/");
+    await expect(status(page)).toHaveText("synced");
+
+    // Only the poisoned row is refused; everything else goes through untouched.
+    await page.route("**/api/sync", async (route) => {
+      const body = route.request().postData() ?? "";
+      if (body.includes("poisoned")) {
+        await route.fulfill({ status: 400, body: "time entry: description too long" });
+        return;
+      }
+      await route.continue();
+    });
+
+    await startTimer(page, "poisoned");
+    await startTimer(page, "healthy");
+    // Both are stopped so they land in the finished list, where the row menu lives.
+    await runningCard(page).locator(".item").filter({ hasText: "poisoned" })
+      .getByRole("button", { name: "Stop" }).click();
+    const healthyPushed = pushBarrier(page, "healthy");
+    await runningCard(page).locator(".item").filter({ hasText: "healthy" })
+      .getByRole("button", { name: "Stop" }).click();
+    await healthyPushed;
+
+    // The good row landed; the refused one did not, and the client stopped retrying it.
+    await expect(status(page)).toHaveText("synced");
+    let entries = await (await fetch(server.url + "/api/entries")).json();
+    expect(entries.some((entry: { description: string }) => entry.description === "healthy")).toBe(true);
+    expect(entries.some((entry: { description: string }) => entry.description === "poisoned")).toBe(false);
+
+    // The user fixes the entry. The new version has never been refused, so it must be
+    // tried again rather than skipped along with the version that was.
+    await page.unroute("**/api/sync");
+    const poisoned = page.locator(".item").filter({ hasText: "poisoned" });
+    await poisoned.getByRole("button", { name: "Entry actions" }).click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
+    const dialog = page.locator("dialog.sheet");
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Description").fill("fixed up");
+
+    const fixedPushed = pushBarrier(page, "fixed up");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await fixedPushed;
+
+    entries = await (await fetch(server.url + "/api/entries")).json();
+    expect(entries.some((entry: { description: string }) => entry.description === "fixed up")).toBe(true);
+  });
+
   test("two devices: fresh context bootstraps full state, open context pulls increments", async ({
     page,
     server,

@@ -4,15 +4,15 @@
   import {
     apportion,
     buildCSV,
+    dateRangeEntries,
     expandTimeOff,
     formatDayISO,
     groupKeysOf,
-    isWeekend,
     listDays,
     NO_PROJECT_KEY,
     roundMinutes,
     splitOverlapMinutes,
-    toReportEntries,
+    summariseReport,
     UNTAGGED_KEY,
     type GroupBy,
     type ReportEntry,
@@ -114,17 +114,16 @@
   const projectKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
   const tagKeysOf = (entry: ReportEntry) => (entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY]);
 
-  const dateRangeEntries = $derived(
-    toReportEntries(appState.entries).filter((entry) => entry.date >= dateFrom && entry.date <= dateTo),
-  );
+  const rangeAllEntries = $derived(dateRangeEntries(appState.entries, dateFrom, dateTo));
 
-  // The tag strip and the By tag panel exist only while the range actually
-  // contains tagged entries - a history with no tags must not grow empty UI.
-  const hasTaggedEntries = $derived(dateRangeEntries.some((entry) => entry.tags.length > 0));
+  // The tag strip exists only while the range actually contains tagged entries - a
+  // history with no tags must not grow empty UI. It is built from the unfiltered range
+  // on purpose: chips that disappeared as you filtered would leave no way back.
+  const hasTaggedEntries = $derived(rangeAllEntries.some((entry) => entry.tags.length > 0));
   const tagChips = $derived.by(() => {
     if (!hasTaggedEntries) return [];
     const names = new Set<string>();
-    for (const entry of dateRangeEntries) {
+    for (const entry of rangeAllEntries) {
       for (const tag of entry.tags) names.add(tag);
     }
     return [
@@ -147,7 +146,7 @@
   }
 
   const rangeEntries = $derived(
-    dateRangeEntries.filter(
+    rangeAllEntries.filter(
       (entry) =>
         activeProjectKeys.has(projectKey(entry)) &&
         (tagChips.length === 0 || tagKeysOf(entry).some((key) => activeTagKeys.has(key))),
@@ -158,35 +157,19 @@
   // Per-entry minutes to aggregate: raw durations, or overlap-adjusted shares.
   // Shares are computed on the full date range BEFORE the chip filters,
   // so hiding one project or tag never rewrites another's numbers.
-  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(dateRangeEntries) : null);
+  const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(rangeAllEntries) : null);
   const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
 
-  const totalMinutes = $derived(rangeEntries.reduce((sum, entry) => sum + minutesOf(entry), 0));
-  const workDays = $derived(days.filter((day) => !isWeekend(day) && !off.has(day)));
-  const minutesByDay = $derived.by(() => {
-    const totals = new Map<string, number>();
-    for (const entry of rangeEntries) totals.set(entry.date, (totals.get(entry.date) ?? 0) + minutesOf(entry));
-    return totals;
-  });
-  const peakDay = $derived.by(() => {
-    let best: string | null = null;
-    for (const day of days) {
-      if ((minutesByDay.get(day) ?? 0) > (best ? minutesByDay.get(best)! : 0)) best = day;
-    }
-    return best;
-  });
-  const weekendMinutes = $derived(
-    rangeEntries.filter((entry) => isWeekend(entry.date)).reduce((sum, entry) => sum + minutesOf(entry), 0),
-  );
-  const offCounts = $derived.by(() => {
-    const counts = { vacation: 0, sick: 0, dayoff: 0 };
-    for (const day of days) {
-      const kind = off.get(day);
-      if (kind) counts[kind]++;
-    }
-    return counts;
-  });
-  const avgMinutes = $derived(workDays.length ? totalMinutes / workDays.length : 0);
+  // One aggregation, shared with the printable sheet, so the two cannot disagree
+  // about the same range again.
+  const summary = $derived(summariseReport(rangeEntries, days, off, minutesOf));
+  const totalMinutes = $derived(summary.totalMinutes);
+  const workDays = $derived(summary.workDays);
+  const minutesByDay = $derived(summary.minutesByDay);
+  const peakDay = $derived(summary.peakDay);
+  const weekendMinutes = $derived(summary.weekendMinutes);
+  const offCounts = $derived(summary.offCounts);
+  const avgMinutes = $derived(summary.avgMinutes);
 
   const fmtHours = (minutes: number) => (minutes / 60).toFixed(1) + "h";
   const fmtMin = (minutes: number) => formatDurationShort(minutes * 60000);
@@ -219,28 +202,25 @@
     }));
   });
 
-  const byProject = $derived.by(() => {
-    const totals = new Map<string, number>();
-    for (const entry of rangeEntries) {
-      totals.set(projectKey(entry), (totals.get(projectKey(entry)) ?? 0) + minutesOf(entry));
-    }
-    return [...totals.entries()].sort((left, right) => right[1] - left[1]);
-  });
+  const byProject = $derived(summary.byProject);
+  const byTag = $derived(summary.byTag);
 
-  // Split shares: an entry with k tags contributes 1/k of its minutes to each,
-  // so Σ By tag = Σ By project = totalMinutes, and the untagged bucket keeps
-  // every untagged entry inside the total.
-  const byTag = $derived.by(() => {
-    if (!hasTaggedEntries) return [];
-    const totals = new Map<string, number>();
-    for (const entry of rangeEntries) {
-      const keys = tagKeysOf(entry);
-      for (const key of keys) {
-        totals.set(key, (totals.get(key) ?? 0) + minutesOf(entry) / keys.length);
-      }
-    }
-    return [...totals.entries()].sort((left, right) => right[1] - left[1]);
-  });
+  // The side cards invite the reader to add the column up, so the percentages are
+  // apportioned rather than rounded one by one: three equal groups rendered
+  // independently read 33+33+33, and the table on this very page - which does
+  // apportion - would then disagree with the card beside it.
+  const byProjectPct = $derived(
+    apportion(
+      byProject.map(([, minutes]) => minutes),
+      totalMinutes > 0 ? 100 : 0,
+    ),
+  );
+  const byTagPct = $derived(
+    apportion(
+      byTag.map(([, minutes]) => minutes),
+      totalMinutes > 0 ? 100 : 0,
+    ),
+  );
 
   // --- report table ---
 
@@ -347,8 +327,14 @@
     const anchor = document.createElement("a");
     anchor.href = blobURL;
     anchor.download = "worktime-report.csv";
+    // The download is handed to the browser asynchronously, so the URL is released on
+    // the next tick - revoking it in the same task can invalidate the blob before the
+    // fetch behind the download starts. The anchor goes into the document because a
+    // synthetic click on a detached element does not navigate everywhere.
+    document.body.append(anchor);
     anchor.click();
-    URL.revokeObjectURL(blobURL);
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(blobURL), 0);
   }
 
   function openPrint() {
@@ -480,14 +466,14 @@
   <div class="side">
     <div class="card">
       <h3>{t("By project")}</h3>
-      {#each byProject as [key, minutes] (key)}
+      {#each byProject as [key, minutes], index (key)}
         <div class="proj-item">
           <div class="row">
             <span class="dot" style="background: {chipColor(key)}"></span>
             <span>{chipName(key)}</span>
             <span class="spacer"></span>
             <span class="mono">{fmtMin(minutes)}</span>
-            <span class="muted mono pct">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</span>
+            <span class="muted mono pct">{byProjectPct[index] ?? 0}%</span>
           </div>
           <div class="pbar">
             <div style="width: {totalMinutes ? (minutes / totalMinutes) * 100 : 0}%; background: {chipColor(key)}"></div>
@@ -501,7 +487,7 @@
     {#if byTag.length > 0}
       <div class="card">
         <h3>{t("By tag")}</h3>
-        {#each byTag as [key, minutes] (key)}
+        {#each byTag as [key, minutes], index (key)}
           <div class="proj-item">
             <div class="row">
               {#if key === UNTAGGED_KEY}
@@ -511,7 +497,7 @@
               {/if}
               <span class="spacer"></span>
               <span class="mono">{fmtMin(minutes)}</span>
-              <span class="muted mono pct">{totalMinutes ? Math.round((minutes / totalMinutes) * 100) : 0}%</span>
+              <span class="muted mono pct">{byTagPct[index] ?? 0}%</span>
             </div>
             <!-- One ink for every bar: length ranks, hue would collide with the
                  project dots one card above. -->

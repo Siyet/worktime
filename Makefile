@@ -1,4 +1,4 @@
-.PHONY: dev-api dev-web build build-web test test-hook e2e lint
+.PHONY: dev-api dev-web build build-web test test-go test-web test-hook e2e lint
 
 dev-api:
 	go run ./cmd/worktime
@@ -20,8 +20,16 @@ endif
 build: build-web
 	go build -ldflags "-s -w" -o $(BIN) ./cmd/worktime
 
-test:
+# Everything that runs in under two seconds. The vitest suite covers the report
+# arithmetic, the grouping and the time parsing - none of which go test can reach - and
+# it used to be reachable only by typing the npm script by hand.
+test: test-go test-web
+
+test-go:
 	go test ./...
+
+test-web:
+	cd web && npm run test:unit
 
 # The Claude Code hook is plain sh and is covered by neither go test nor Playwright.
 test-hook:

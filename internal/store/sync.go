@@ -18,6 +18,12 @@ const (
 	maxBatchRows    = 10000
 	maxTagsPerEntry = 8
 	maxTagLength    = 24
+	// Timestamps are unix milliseconds, so a client that ships seconds or nanoseconds
+	// instead writes a row that is either prehistoric or centuries out. Both bounds are
+	// deliberately loose - they exist to keep SUM(stopped_at - started_at) inside int64
+	// in the reports, not to second-guess the clock of an offline device.
+	maxClockSkewMs = 366 * 24 * 60 * 60 * 1000
+	maxEntrySpanMs = 366 * 24 * 60 * 60 * 1000
 )
 
 // Sync applies client changes (last-write-wins by updated_at) and returns all rows
@@ -42,10 +48,17 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		}
 	}
 
+	// A row the last-write-wins guard refuses writes nothing and leaves server_seq
+	// where it was, so the pull below - which selects on server_seq > since - would not
+	// carry the winning version back when the client cursor is already past it. The
+	// client would then keep its refused version forever, believing it synced. Collect
+	// those ids and echo them explicitly. In the normal case nothing lands here.
+	refused := refusedIDs{}
+
 	// Projects go first so that pulled entries never reference a project the client
 	// has not seen yet within the same batch.
 	for _, project := range request.Changes.Projects {
-		_, err := transaction.ExecContext(ctx, `
+		result, err := transaction.ExecContext(ctx, `
 			INSERT INTO projects (id, user_id, name, color, archived, created_at, updated_at, deleted_at, server_seq)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
@@ -57,6 +70,11 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if err != nil {
 			return SyncResponse{}, err
 		}
+		if written, err := result.RowsAffected(); err != nil {
+			return SyncResponse{}, err
+		} else if written == 0 {
+			refused.projects = append(refused.projects, project.ID)
+		}
 		nextSeq++
 	}
 	for _, entry := range request.Changes.TimeEntries {
@@ -64,7 +82,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		// (ids come from the client, so a pushed value could claim a foreign session
 		// or hand the row a pause it never had) and absent from the update list, so
 		// a push never rewrites them.
-		_, err := transaction.ExecContext(ctx, `
+		result, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
 			                          created_at, updated_at, deleted_at, server_seq, agent_session_id, paused_ms)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
@@ -78,10 +96,15 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if err != nil {
 			return SyncResponse{}, err
 		}
+		if written, err := result.RowsAffected(); err != nil {
+			return SyncResponse{}, err
+		} else if written == 0 {
+			refused.timeEntries = append(refused.timeEntries, entry.ID)
+		}
 		nextSeq++
 	}
 	for _, timeOff := range request.Changes.TimeOff {
-		_, err := transaction.ExecContext(ctx, `
+		result, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_off (id, user_id, kind, date_from, date_to, note,
 			                      created_at, updated_at, deleted_at, server_seq)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -95,14 +118,20 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if err != nil {
 			return SyncResponse{}, err
 		}
+		if written, err := result.RowsAffected(); err != nil {
+			return SyncResponse{}, err
+		} else if written == 0 {
+			refused.timeOff = append(refused.timeOff, timeOff.ID)
+		}
 		nextSeq++
 	}
 
 	response := SyncResponse{}
 
-	projectRows, err := transaction.QueryContext(ctx, `
+	projectQuery, projectArgs := pullQuery(`
 		SELECT id, name, color, archived, created_at, updated_at, deleted_at, server_seq
-		FROM projects WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
+		FROM projects`, userID, request.Since, refused.projects)
+	projectRows, err := transaction.QueryContext(ctx, projectQuery, projectArgs...)
 	if err != nil {
 		return SyncResponse{}, err
 	}
@@ -119,10 +148,11 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 
-	entryRows, err := transaction.QueryContext(ctx, `
+	entryQuery, entryArgs := pullQuery(`
 		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
 		       server_seq, agent_session_id, paused_ms
-		FROM time_entries WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
+		FROM time_entries`, userID, request.Since, refused.timeEntries)
+	entryRows, err := transaction.QueryContext(ctx, entryQuery, entryArgs...)
 	if err != nil {
 		return SyncResponse{}, err
 	}
@@ -140,9 +170,10 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 
-	timeOffRows, err := transaction.QueryContext(ctx, `
+	timeOffQuery, timeOffArgs := pullQuery(`
 		SELECT id, kind, date_from, date_to, note, created_at, updated_at, deleted_at, server_seq
-		FROM time_off WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
+		FROM time_off`, userID, request.Since, refused.timeOff)
+	timeOffRows, err := transaction.QueryContext(ctx, timeOffQuery, timeOffArgs...)
 	if err != nil {
 		return SyncResponse{}, err
 	}
@@ -166,6 +197,30 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 	return response, nil
+}
+
+// refusedIDs holds the ids of pushed rows the last-write-wins guard left untouched,
+// per table, so the pull can hand the winning version back to the client.
+type refusedIDs struct {
+	projects    []string
+	timeEntries []string
+	timeOff     []string
+}
+
+// pullQuery completes a pull SELECT with the user filter, the cursor and the explicit
+// echo of refused ids. The id list is empty on every ordinary sync, in which case the
+// query is exactly the plain cursor scan.
+func pullQuery(selectClause string, userID string, since int64, refused []string) (string, []any) {
+	args := []any{userID, since}
+	condition := "server_seq > ?"
+	if len(refused) > 0 {
+		placeholders := strings.Repeat(",?", len(refused))[1:]
+		condition = fmt.Sprintf("(server_seq > ? OR id IN (%s))", placeholders)
+		for _, id := range refused {
+			args = append(args, id)
+		}
+	}
+	return fmt.Sprintf("%s WHERE user_id = ? AND %s ORDER BY server_seq", selectClause, condition), args
 }
 
 // allocateServerSeq reserves a contiguous block of server_seq values inside the
@@ -218,14 +273,18 @@ func validateChanges(changes SyncChanges) error {
 	if total > maxBatchRows {
 		return fmt.Errorf("batch of %d rows exceeds limit %d", total, maxBatchRows)
 	}
+	// Text limits count runes, matching validateTags and the character counts the
+	// clients enforce. Counting bytes would silently halve every limit for Cyrillic
+	// input and reject text the editor accepted.
+	maxTimestamp := time.Now().UnixMilli() + maxClockSkewMs
 	for _, project := range changes.Projects {
 		if err := uuid.Validate(project.ID); err != nil {
 			return fmt.Errorf("project id %q is not a UUID", project.ID)
 		}
-		if project.Name == "" || len(project.Name) > maxNameLength {
+		if project.Name == "" || utf8.RuneCountInString(project.Name) > maxNameLength {
 			return fmt.Errorf("project %s: name must be 1..%d chars", project.ID, maxNameLength)
 		}
-		if len(project.Color) > maxColorLength {
+		if utf8.RuneCountInString(project.Color) > maxColorLength {
 			return fmt.Errorf("project %s: color too long", project.ID)
 		}
 		if project.UpdatedAt <= 0 {
@@ -241,14 +300,25 @@ func validateChanges(changes SyncChanges) error {
 				return fmt.Errorf("time entry %s: project_id is not a UUID", entry.ID)
 			}
 		}
-		if len(entry.Description) > maxTextLength {
+		if utf8.RuneCountInString(entry.Description) > maxTextLength {
 			return fmt.Errorf("time entry %s: description too long", entry.ID)
 		}
 		if entry.StartedAt <= 0 || entry.UpdatedAt <= 0 {
 			return fmt.Errorf("time entry %s: started_at and updated_at are required", entry.ID)
 		}
-		if entry.StoppedAt != nil && *entry.StoppedAt < entry.StartedAt {
-			return fmt.Errorf("time entry %s: stopped_at is before started_at", entry.ID)
+		if entry.StartedAt > maxTimestamp {
+			return fmt.Errorf("time entry %s: started_at is too far in the future", entry.ID)
+		}
+		if entry.StoppedAt != nil {
+			if *entry.StoppedAt < entry.StartedAt {
+				return fmt.Errorf("time entry %s: stopped_at is before started_at", entry.ID)
+			}
+			if *entry.StoppedAt > maxTimestamp {
+				return fmt.Errorf("time entry %s: stopped_at is too far in the future", entry.ID)
+			}
+			if *entry.StoppedAt-entry.StartedAt > maxEntrySpanMs {
+				return fmt.Errorf("time entry %s: spans more than %d days", entry.ID, maxEntrySpanMs/(24*60*60*1000))
+			}
 		}
 		if err := validateTags(entry.Tags); err != nil {
 			return fmt.Errorf("time entry %s: %w", entry.ID, err)
@@ -272,7 +342,7 @@ func validateChanges(changes SyncChanges) error {
 		if toDate.Before(fromDate) {
 			return fmt.Errorf("time off %s: date_to is before date_from", timeOff.ID)
 		}
-		if len(timeOff.Note) > maxTextLength {
+		if utf8.RuneCountInString(timeOff.Note) > maxTextLength {
 			return fmt.Errorf("time off %s: note too long", timeOff.ID)
 		}
 		if timeOff.UpdatedAt <= 0 {

@@ -18,8 +18,9 @@
     localDateISO,
     sessionTag,
   } from "../lib/format";
-  import { groupDayEntries, taskSuggestions, wallClockMs, type TaskGroup } from "../lib/tasks";
+  import { groupDayEntries, SUGGESTION_WINDOW_DAYS, taskSuggestions, wallClockMs, type TaskGroup } from "../lib/tasks";
   import { t } from "../lib/i18n";
+  import { maxTextLength } from "../lib/limits";
   import DescriptionInput from "../lib/components/DescriptionInput.svelte";
   import EntryEditor from "../lib/components/EntryEditor.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
@@ -47,11 +48,23 @@
     appState.timeOff.find((timeOff) => timeOff.date_from <= todayISO && todayISO <= timeOff.date_to),
   );
 
-  // Finished entries from the last 7 days, grouped by day and then by task.
+  // The start of the feed window: midnight of the day SUGGESTION_WINDOW_DAYS-1 back.
+  // Cutting at a day boundary rather than a rolling 168 hours matters because the
+  // results are then bucketed into calendar day cards - a rolling cut leaves the oldest
+  // card holding only the entries after the current time of day, so its total silently
+  // disagrees with the same date in Reports and entries drop out of it one by one as
+  // the clock advances.
+  //
+  // It also keeps the one-second ticker out of the feed: derived from todayISO, this
+  // changes once a day, where clock.now would rescan the whole table every second.
+  const windowStart = $derived(
+    new Date(todayISO + "T00:00").getTime() - (SUGGESTION_WINDOW_DAYS - 1) * 86_400_000,
+  );
+
+  // Finished entries from the feed window, grouped by day and then by task.
   const recentDays = $derived.by(() => {
-    const weekAgo = clock.now - 7 * 24 * 3600 * 1000;
     const finished = appState.entries
-      .filter((entry) => entry.stopped_at !== null && entry.started_at >= weekAgo)
+      .filter((entry) => entry.stopped_at !== null && entry.started_at >= windowStart)
       .sort((left, right) => right.started_at - left.started_at);
     const days = new Map<string, TimeEntry[]>();
     for (const entry of finished) {
@@ -61,19 +74,19 @@
       days.set(day, bucket);
     }
     return [...days.entries()].map(
+      // Every entry here is finished, so entryDurationMs ignores the second argument -
+      // reading clock.now would subscribe the whole feed to the ticker for nothing.
       ([day, entries]) =>
-        [day, entries, groupDayEntries(entries, clock.now)] as [string, TimeEntry[], TaskGroup[]],
+        [day, entries, groupDayEntries(entries, windowStart)] as [string, TimeEntry[], TaskGroup[]],
     );
   });
 
   // The window the suggestions come from is derived once, not rebuilt per
   // keystroke: the instance holds more than ten thousand entries.
   const suggestionSource = $derived(
-    appState.entries.filter(
-      (entry) => entry.stopped_at === null || entry.started_at >= clock.now - 7 * 24 * 3600 * 1000,
-    ),
+    appState.entries.filter((entry) => entry.stopped_at === null || entry.started_at >= windowStart),
   );
-  const suggestions = $derived(taskSuggestions(suggestionSource, description, clock.now));
+  const suggestions = $derived(taskSuggestions(suggestionSource, description, windowStart));
 
   function projectName(projectID: string | null): string {
     return projectByID(projectID)?.name ?? "";
@@ -174,7 +187,9 @@
       <button onclick={() => stopTimer(entry.id)}>{t("Stop")}</button>
     {:else}
       <span class="when">
-        <span class="dur">{formatDurationShort(entryDurationMs(entry, clock.now))}</span>
+        <!-- The entry is finished, so its duration is fixed; reading clock.now here
+             would subscribe every row in the list to the one-second ticker. -->
+        <span class="dur">{formatDurationShort(entryDurationMs(entry, entry.stopped_at))}</span>
         <span class="range muted"><span class="from">{formatTime(entry.started_at)}</span><span class="to"
           >-{formatTime(entry.stopped_at)}</span
         ></span>
@@ -200,7 +215,7 @@
     class="row group-row"
     class:open={shown}
     aria-expanded={shown}
-    aria-controls={listID}
+    {...shown ? { "aria-controls": listID } : {}}
     onclick={() => toggleGroup(dayISO, group)}
   >
     <svg
@@ -286,6 +301,7 @@
     {suggestions}
     {projectName}
     onpick={applySuggestion}
+    maxlength={maxTextLength}
     placeholder={t("What are you working on?")}
     ariaLabel="Description"
   />

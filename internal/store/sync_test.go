@@ -113,6 +113,69 @@ func TestSyncLastWriteWins(t *testing.T) {
 	}
 }
 
+// A push the last-write-wins guard refuses writes nothing, so the winning version sits
+// at a server_seq the client cursor is already past and the plain cursor scan would not
+// carry it back. The client would keep its refused version forever while the header
+// reads "synced", so the response has to echo those rows explicitly.
+func TestSyncEchoesRefusedRows(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "refused@test.local")
+	ctx := context.Background()
+
+	entryID := uuid.NewString()
+	winner := TimeEntry{ID: entryID, Description: "winner", StartedAt: 1000, CreatedAt: 1000, UpdatedAt: 2000}
+	pushed, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{winner}}})
+	if err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+
+	// The client is fully caught up, then pushes an edit stamped with a clock that
+	// runs behind the stored version - exactly what a backwards clock jump produces.
+	stale := winner
+	stale.Description = "stale"
+	stale.UpdatedAt = 1500
+	response, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Since:   pushed.Seq,
+		Changes: SyncChanges{TimeEntries: []TimeEntry{stale}},
+	})
+	if err != nil {
+		t.Fatalf("stale push: %v", err)
+	}
+
+	if len(response.Changes.TimeEntries) != 1 {
+		t.Fatalf("expected the refused row echoed back, got %d rows", len(response.Changes.TimeEntries))
+	}
+	if got := response.Changes.TimeEntries[0].Description; got != "winner" {
+		t.Fatalf("expected the winning version, got %q", got)
+	}
+}
+
+// An accepted push must not drag unrelated rows along: the echo is scoped to the ids
+// the guard actually refused.
+func TestSyncAcceptedPushEchoesOnlyItsOwnRows(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "accepted@test.local")
+	ctx := context.Background()
+
+	first := TimeEntry{ID: uuid.NewString(), Description: "old", StartedAt: 1000, CreatedAt: 1000, UpdatedAt: 1000}
+	seeded, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{first}}})
+	if err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+
+	second := TimeEntry{ID: uuid.NewString(), Description: "new", StartedAt: 2000, CreatedAt: 2000, UpdatedAt: 2000}
+	response, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Since:   seeded.Seq,
+		Changes: SyncChanges{TimeEntries: []TimeEntry{second}},
+	})
+	if err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+	if len(response.Changes.TimeEntries) != 1 || response.Changes.TimeEntries[0].ID != second.ID {
+		t.Fatalf("expected only the pushed row echoed, got %+v", response.Changes.TimeEntries)
+	}
+}
+
 func TestSyncDeletePropagates(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "del@test.local")

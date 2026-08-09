@@ -52,6 +52,33 @@ func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEn
 	return entries, closeRows(rows)
 }
 
+// ListEntries returns the user's non-deleted entries, newest first. This is the
+// read-only snapshot the debug endpoint serves; the app itself never calls it, it
+// syncs.
+func (s *Store) ListEntries(ctx context.Context, userID string) ([]TimeEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
+		       server_seq, agent_session_id, paused_ms
+		FROM time_entries
+		WHERE user_id = ? AND deleted_at IS NULL
+		ORDER BY started_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	entries := []TimeEntry{}
+	for rows.Next() {
+		var entry TimeEntry
+		if err := rows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
+			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID,
+			&entry.PausedMs); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, closeRows(rows)
+}
+
 // GetTimeEntry returns a single non-deleted entry owned by the user.
 func (s *Store) GetTimeEntry(ctx context.Context, userID, entryID string) (TimeEntry, error) {
 	var entry TimeEntry

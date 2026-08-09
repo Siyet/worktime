@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Siyet/worktime/internal/config"
 	"github.com/Siyet/worktime/internal/store"
 )
 
@@ -73,12 +74,28 @@ func writeAgentResult(w http.ResponseWriter, session store.AgentSession, err err
 	}
 }
 
+// agentPolicy falls back to the production defaults for any duration left at zero.
+// A zero MaxPauseMs makes every gap past the idle threshold split the entry in two,
+// which is the opposite of the documented "a session owns exactly one time entry" -
+// config.Load can never produce it, but a Config built by hand in a test can, and then
+// the test pins behaviour no deployment has.
 func (s *server) agentPolicy() store.AgentPolicy {
-	return store.AgentPolicy{
+	policy := store.AgentPolicy{
 		IdleMs:     s.cfg.AgentIdle.Milliseconds(),
 		ToolMaxMs:  s.cfg.AgentToolMax.Milliseconds(),
 		MaxPauseMs: s.cfg.AgentMaxPause.Milliseconds(),
 	}
+	defaults := config.Defaults()
+	if policy.IdleMs <= 0 {
+		policy.IdleMs = defaults.AgentIdle.Milliseconds()
+	}
+	if policy.ToolMaxMs <= 0 {
+		policy.ToolMaxMs = defaults.AgentToolMax.Milliseconds()
+	}
+	if policy.MaxPauseMs <= 0 {
+		policy.MaxPauseMs = defaults.AgentMaxPause.Milliseconds()
+	}
+	return policy
 }
 
 func (s *server) handleAgentStart(w http.ResponseWriter, r *http.Request) {

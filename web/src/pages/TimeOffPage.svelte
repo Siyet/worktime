@@ -2,6 +2,7 @@
   import { appState, addTimeOff, deleteTimeOff } from "../lib/state/app.svelte";
   import { formatDateISO, localDateISO } from "../lib/format";
   import { t } from "../lib/i18n";
+  import { maxTextLength } from "../lib/limits";
   import Seg from "../lib/components/Seg.svelte";
   import TrashIcon from "../lib/components/TrashIcon.svelte";
   import type { TimeOffKind } from "../lib/types";
@@ -39,7 +40,13 @@
     <input type="date" bind:value={dateFrom} aria-label={t("From")} />
     <span class="muted">-</span>
     <input type="date" bind:value={dateTo} aria-label={t("To")} />
-    <input style="flex: 1; min-width: 8rem" placeholder={t("Note (optional)")} bind:value={note} aria-label={t("Note")} />
+    <input
+      style="flex: 1; min-width: 8rem"
+      placeholder={t("Note (optional)")}
+      bind:value={note}
+      maxlength={maxTextLength}
+      aria-label={t("Note")}
+    />
     <button class="primary" type="submit" disabled={dateTo < dateFrom}>{t("Add")}</button>
   </div>
   {#if dateTo < dateFrom}

@@ -32,6 +32,7 @@
 - **Time off as data** - vacation, sick leave and days off are first-class: shown in charts, counted in averages, never blocking tracking.
 - **Reports that answer questions** - interactive daily chart, custom report builder (group by, columns, rounding), CSV export and a printable PDF report.
 - **MCP server** - AI agents start/stop timers, log time off and query reports via Model Context Protocol.
+- **Automatic agent tracking** - Claude Code hooks track an agent session as one entry, named after the tracker task it is working on, and survive a crash without inflating the duration ([docs](docs/agent-tracking.md)).
 - **Multi-user** - Google sign-in, per-user data isolation. No billing, no clients, no seat pricing. Free forever.
 - **Six UI languages** - English, Russian, Spanish, German, French, Chinese; light and dark theme; 12/24h and date format preferences.
 - **Tiny footprint** - ~16MB RSS on the server, ~25KB gzip frontend bundle, 11MB binary.
@@ -84,7 +85,7 @@ Create an API token in Settings, then connect any MCP client to `https://your-ho
 claude mcp add --transport http worktime https://your-host/mcp --header "Authorization: Bearer <token>"
 ```
 
-Tools: `start_timer`, `stop_timer`, `stop_all_timers`, `list_running_timers`, `add_time_entry`, `list_projects`, `create_project`, `add_time_off`, `list_time_off`, `time_report`.
+Tools: `start_timer`, `stop_timer`, `stop_all_timers`, `list_running_timers`, `add_time_entry`, `list_projects`, `create_project`, `add_time_off`, `list_time_off`, `time_report`, `set_agent_task`.
 
 ## Development
 

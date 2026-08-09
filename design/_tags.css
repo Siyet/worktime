@@ -74,7 +74,8 @@ button.tag:focus-visible {
 /* --- entry row -------------------------------------------------------------
    Still .row.item flex. .main takes the slack with min-width:0, .when has a
    fixed basis, so no description or tag list can push the right column. */
-.item .main {
+.item .main,
+.group-row .main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -104,7 +105,8 @@ button.tag:focus-visible {
   color: var(--accent);
 }
 
-.item .meta {
+.item .meta,
+.group-row .meta {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -112,14 +114,16 @@ button.tag:focus-visible {
   font-size: 0.85rem;
 }
 
-.item .meta .proj {
+.item .meta .proj,
+.group-row .meta .proj {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 0 1 auto;
 }
 
-.item .when {
+.item .when,
+.group-row .when {
   flex: 0 0 auto;
   display: flex;
   align-items: baseline;
@@ -129,12 +133,14 @@ button.tag:focus-visible {
   text-align: right;
 }
 
-.item .when .dur {
+.item .when .dur,
+.group-row .when .dur {
   min-width: 4.4rem;
 }
 
 @media (max-width: 34rem) {
-  .item .when {
+  .item .when,
+  .group-row .when {
     flex-direction: column;
     align-items: flex-end;
     gap: 0;
@@ -142,11 +148,13 @@ button.tag:focus-visible {
   }
 
   /* The end time is derivable from the next row's start; it goes first. */
-  .item .when .to {
+  .item .when .to,
+  .group-row .when .to {
     display: none;
   }
 
-  .item .when .dur {
+  .item .when .dur,
+  .group-row .when .dur {
     min-width: 0;
   }
 
@@ -161,17 +169,20 @@ button.tag:focus-visible {
   /* One-truncation law: only .proj may ellipsize (the dot already encodes the
      project). Chips and the +N counter are atomic; when project + chips don't
      fit, the tag block wraps to its own line with full labels. */
-  .item .meta {
+  .item .meta,
+  .group-row .meta {
     flex-wrap: wrap;
     row-gap: 0.1rem;
   }
 
-  .item .meta .tags {
+  .item .meta .tags,
+  .group-row .meta .tags {
     flex: 0 0 auto;
     flex-wrap: wrap;
   }
 
-  .item .meta .tags .tag {
+  .item .meta .tags .tag,
+  .group-row .meta .tags .tag {
     flex: 0 0 auto;
   }
 }
@@ -681,4 +692,134 @@ tr.sumrow td {
   border-top: 1.2px solid #232936;
   border-bottom: none;
   background: transparent;
+}
+
+/* --- grouped task row ------------------------------------------------------
+   The summary of several entries of one task. Deliberately not .item: it is a
+   summary, not an entry, and counting entries must keep counting entries. */
+.group-row {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.group-row .desc-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.group-row .desc-static {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-row .count {
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.35rem;
+}
+
+/* Wall-clock time next to the sum, shown only when the two differ. */
+.wall {
+  font-size: 0.85rem;
+}
+
+.group-row .disclosure {
+  border: none;
+  background: transparent;
+  padding: 0.2rem 0.4rem;
+}
+
+.group-row .caret {
+  display: inline-block;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+
+.group-row .caret.open {
+  transform: rotate(90deg);
+}
+
+.members .item:first-child {
+  border-top: none;
+}
+
+.item.member {
+  padding-left: 1.25rem;
+}
+
+.session-tag {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+/* --- description suggestions ----------------------------------------------
+   Own listbox rather than <datalist>: picking a suggestion has to fill in the
+   project and the tags, and datalist fires no event for that. */
+.dinput {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.dinput > input {
+  width: 100%;
+  min-width: 0;
+}
+
+.dinput .menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 40dvh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  z-index: 6;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.dinput .menu button {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border-radius: 5px;
+}
+
+.dinput .menu button.active {
+  background: var(--hover);
+}
+
+.dinput .stext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dinput .smeta {
+  margin-left: auto;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 34rem) {
+  .item.member {
+    padding-left: 0.75rem;
+  }
 }

@@ -45,8 +45,105 @@
     <div class="row">
       <h3>Tue, Jul 29</h3>
       <span class="spacer"></span>
-      <span class="muted mono">6h 40m</span>
+      <!-- Wall-clock time, shown only when parallel work makes it differ from
+           the sum: "8h" inside 6h40m of clock reads as a mistake otherwise. -->
+      <span class="muted mono wall" title="On the clock: 6h 40m">6h 40m</span>
+      <span class="muted mono">8h 05m</span>
     </div>
+
+    <!-- One task picked up three times today. The summary row is not an entry:
+         it carries no .item, so anything counting entries keeps counting them. -->
+    <div class="row group-row">
+      <span class="dot" style="background: var(--accent)"></span>
+      <span class="main">
+        <span class="desc-line">
+          <span class="desc-static">MT-12345 Slow AMaaS quote creation</span>
+          <span class="count">×3</span>
+        </span>
+        <span class="meta muted">
+          <span class="proj">MySky</span>
+          <span class="tags"><span class="tag">development</span></span>
+        </span>
+      </span>
+      <span class="when">
+        <span class="dur">4h 25m</span>
+        <span class="range muted"><span class="from">09:15</span><span class="to">-18:02</span></span>
+      </span>
+      <span class="muted mono wall" title="3 entries overlapped; on the clock this is 3h 10m">3h 10m</span>
+      <button type="button" class="disclosure" aria-expanded="true" aria-controls="g-demo">
+        <span class="caret open">▸</span><span class="sr-only">Collapse</span>
+      </button>
+    </div>
+    <div class="members" id="g-demo">
+      <div class="row item member">
+        <span class="dot" style="background: var(--accent)"></span>
+        <span class="main">
+          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
+          <span class="meta muted">
+            <span class="proj">MySky</span>
+            <span class="tags"><span class="tag">development</span></span>
+            <!-- Which agent session this row came from; manual rows have none. -->
+            <span class="session-tag">#ab12cd34</span>
+          </span>
+        </span>
+        <span class="when">
+          <span class="dur">2h 05m</span>
+          <span class="range muted"><span class="from">09:15</span><span class="to">-11:20</span></span>
+        </span>
+        <span class="menu-wrap">
+          <button type="button" class="kebab icon" aria-label="Entry actions" aria-expanded="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+            </svg>
+          </button>
+        </span>
+      </div>
+      <div class="row item member">
+        <span class="dot" style="background: var(--accent)"></span>
+        <span class="main">
+          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
+          <span class="meta muted">
+            <span class="proj">MySky</span>
+            <span class="tags"><span class="tag">development</span></span>
+            <span class="session-tag">#7f0e91c2</span>
+          </span>
+        </span>
+        <span class="when">
+          <span class="dur">1h 15m</span>
+          <span class="range muted"><span class="from">10:40</span><span class="to">-11:55</span></span>
+        </span>
+        <span class="menu-wrap">
+          <button type="button" class="kebab icon" aria-label="Entry actions" aria-expanded="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+            </svg>
+          </button>
+        </span>
+      </div>
+      <div class="row item member">
+        <span class="dot" style="background: var(--accent)"></span>
+        <span class="main">
+          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
+          <span class="meta muted">
+            <span class="proj">MySky</span>
+            <span class="tags"><span class="tag">development</span></span>
+            <span class="session-tag">#ab12cd34</span>
+          </span>
+        </span>
+        <span class="when">
+          <span class="dur">1h 05m</span>
+          <span class="range muted"><span class="from">16:57</span><span class="to">-18:02</span></span>
+        </span>
+        <span class="menu-wrap">
+          <button type="button" class="kebab icon" aria-label="Entry actions" aria-expanded="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" />
+            </svg>
+          </button>
+        </span>
+      </div>
+    </div>
+
     <div class="row item">
       <span class="dot" style="background: var(--accent)"></span>
       <span class="main">

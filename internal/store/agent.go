@@ -8,11 +8,15 @@ package store
 // reconciliation job closes any session whose last heartbeat is older than
 // a grace period, at the moment of that last heartbeat.
 //
-// A session owns one *running* time entry at a time (the current segment).
-// A heartbeat after an idle gap longer than the idle threshold stops the
-// current segment at the previous heartbeat and opens a new one, so idle
-// time in the middle of a session is never billed. Trailing idle is trimmed
-// the same way on stop and by reconciliation.
+// A session owns exactly one time entry. A gap between signals longer than the
+// idle threshold is added to that entry's paused_ms and subtracted from its
+// duration, so idle time in the middle of a session is never billed and the
+// session still reads as one row; started_at and stopped_at stay real
+// timestamps, which is what the printed report, the CSV and the day boundaries
+// are built on. Trailing idle is trimmed on stop and by reconciliation. Only a
+// pause crossing the agent's local midnight, or one longer than the maximum
+// pause, cuts the entry in two - both are about which day the work belongs to,
+// not about idling.
 //
 // The entry is named after the tracker task the session belongs to, set
 // explicitly through the set_agent_task MCP tool. Until the task is known the

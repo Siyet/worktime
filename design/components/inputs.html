@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>WorkTime - Inputs</title>
 <link rel="stylesheet" href="../_shared.css" />
+<link rel="stylesheet" href="../_tags.css" />
 <style>
   .pselect { position: relative; display: inline-block; }
   .pselect > button { display: inline-flex; align-items: center; gap: 0.5rem; }
@@ -19,6 +20,40 @@
 </head>
 <body>
   <div class="stack">
+    <!-- Description field with task suggestions. The list opens on typing only,
+         never on a bare focus: on a narrow screen the start form wraps to three
+         rows and a popover on focus would cover the Start button. Each row shows
+         the project and tags that picking it will fill in. -->
+    <span class="dinput">
+      <input
+        value="write"
+        placeholder="What are you working on?"
+        role="combobox"
+        aria-expanded="true"
+        aria-autocomplete="list"
+        aria-controls="sugg-demo"
+        aria-activedescendant="sugg-demo-0"
+      />
+      <ul class="menu" id="sugg-demo" role="listbox" aria-label="Recent tasks">
+        <li role="option" aria-selected="true">
+          <button type="button" class="active" id="sugg-demo-0">
+            <span class="stext">Write e2e tests</span>
+            <span class="smeta muted">MySky · development</span>
+          </button>
+        </li>
+        <li role="option" aria-selected="false">
+          <button type="button" id="sugg-demo-1">
+            <span class="stext">Write docs</span>
+            <span class="smeta muted">MySky</span>
+          </button>
+        </li>
+        <li role="option" aria-selected="false">
+          <button type="button" id="sugg-demo-2">
+            <span class="stext">Rewrite the sync engine</span>
+          </button>
+        </li>
+      </ul>
+    </span>
     <input placeholder="What are you working on?" />
     <span class="pselect" id="psel">
       <button type="button"><span class="dot" style="background: var(--accent)"></span><span class="plabel">MySky</span><span class="caret">▾</span></button>

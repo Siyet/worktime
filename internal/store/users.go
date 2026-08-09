@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -18,54 +19,74 @@ const sessionTTL = 90 * 24 * time.Hour
 // FindOrCreateGoogleUser looks a user up by Google subject, creating the account on
 // first sign-in. Email is stored lowercase.
 //
-// A row found by email but carrying a different subject is adopted rather than
-// rejected. Google subjects are stable in practice but not guaranteed - an account
+// A row found by email but carrying a different Google subject is adopted only when
+// adoptByEmail is set. Subjects are stable in practice but not guaranteed - an account
 // deleted and recreated, or moved between a personal and a Workspace tenant on the same
-// address, arrives with a new one - and users.email is UNIQUE, so the insert would fail
-// and lock the owner out of their own data with no recovery path in the product.
+// address, arrives with a new one - and users.email is UNIQUE, so without adoption the
+// insert fails and the owner is locked out of their own data.
 //
-// Adopting by email is only safe because the caller has already verified the address:
-// google.go requires email_verified on the ID token and filters against
-// WORKTIME_ALLOWED_EMAILS. Weakening either of those turns this into account takeover.
-func (s *Store) FindOrCreateGoogleUser(ctx context.Context, googleSub, email, name, pictureURL string) (User, error) {
+// Adoption is an account takeover primitive whenever an address can change hands:
+// email_verified proves current control of the mailbox, not continuity of identity.
+// Whoever later acquires a lapsed domain or a reassigned Workspace address would
+// inherit the original account. So the decision belongs to the deployment, not to this
+// function - the caller enables it only when the instance restricts sign-in to an
+// explicit list of addresses, which makes controlling one of them equivalent to being
+// invited by the owner. Every adoption is logged, because it is the one operation here
+// that moves an existing account to a new credential.
+func (s *Store) FindOrCreateGoogleUser(
+	ctx context.Context, googleSub, email, name, pictureURL string, adoptByEmail bool,
+) (User, error) {
 	user := User{Email: email, Name: name, PictureURL: pictureURL}
 	now := time.Now().UnixMilli()
 
-	err := s.db.QueryRowContext(ctx,
-		"SELECT id FROM users WHERE google_sub = ?", googleSub,
-	).Scan(&user.ID)
-	if err == nil {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, err
+	}
+	defer transaction.Rollback()
+
+	err = transaction.QueryRowContext(ctx, "SELECT id FROM users WHERE google_sub = ?", googleSub).Scan(&user.ID)
+	switch {
+	case err == nil:
 		// The profile is refreshed on every sign-in: scanning the stored row over the
 		// fresh values instead froze the name and avatar at whatever they were the
-		// first time the account was seen.
-		if _, err := s.db.ExecContext(ctx,
-			"UPDATE users SET email = ?, name = ?, picture_url = ? WHERE id = ?",
-			email, name, pictureURL, user.ID); err != nil {
+		// first time the account was seen. The address is deliberately left alone -
+		// it is UNIQUE, so writing it here could fail against another row and turn a
+		// routine sign-in into a permanent lockout.
+		if _, err := transaction.ExecContext(ctx,
+			"UPDATE users SET name = ?, picture_url = ? WHERE id = ?", name, pictureURL, user.ID); err != nil {
 			return User{}, err
 		}
-		return user, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	case !errors.Is(err, sql.ErrNoRows):
 		return User{}, err
-	}
-
-	if err := s.db.QueryRowContext(ctx,
-		"SELECT id FROM users WHERE email = ?", email,
-	).Scan(&user.ID); err == nil {
-		if _, err := s.db.ExecContext(ctx,
-			"UPDATE users SET google_sub = ?, name = ?, picture_url = ? WHERE id = ?",
-			googleSub, name, pictureURL, user.ID); err != nil {
+	default:
+		var existingID string
+		err := transaction.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ?", email).Scan(&existingID)
+		switch {
+		case err == nil && !adoptByEmail:
+			return User{}, fmt.Errorf(
+				"%w: %s already belongs to another Google account on this instance", ErrInvalidInput, email)
+		case err == nil:
+			log.Printf("adopting account %s: google subject changed for %s", existingID, email)
+			if _, err := transaction.ExecContext(ctx,
+				"UPDATE users SET google_sub = ?, name = ?, picture_url = ? WHERE id = ?",
+				googleSub, name, pictureURL, existingID); err != nil {
+				return User{}, err
+			}
+			user.ID = existingID
+		case !errors.Is(err, sql.ErrNoRows):
 			return User{}, err
+		default:
+			user.ID = uuid.NewString()
+			if _, err := transaction.ExecContext(ctx,
+				"INSERT INTO users (id, google_sub, email, name, picture_url, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+				user.ID, googleSub, email, name, pictureURL, now); err != nil {
+				return User{}, err
+			}
 		}
-		return user, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return User{}, err
 	}
 
-	user.ID = uuid.NewString()
-	if _, err := s.db.ExecContext(ctx,
-		"INSERT INTO users (id, google_sub, email, name, picture_url, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		user.ID, googleSub, email, name, pictureURL, now); err != nil {
+	if err := transaction.Commit(); err != nil {
 		return User{}, err
 	}
 	return user, nil
@@ -73,7 +94,7 @@ func (s *Store) FindOrCreateGoogleUser(ctx context.Context, googleSub, email, na
 
 // EnsureDevUser returns the local development user, creating it if needed.
 func (s *Store) EnsureDevUser(ctx context.Context) (User, error) {
-	return s.FindOrCreateGoogleUser(ctx, "dev", "dev@worktime.local", "Dev User", "")
+	return s.FindOrCreateGoogleUser(ctx, "dev", "dev@worktime.local", "Dev User", "", false)
 }
 
 func (s *Store) GetUser(ctx context.Context, userID string) (User, error) {

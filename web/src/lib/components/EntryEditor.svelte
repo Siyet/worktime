@@ -10,7 +10,7 @@
   import { formatDurationShort, formatTime, localDateISO } from "../format";
   import { t } from "../i18n";
   import { maxTextLength } from "../limits";
-  import { SUGGESTION_WINDOW_DAYS, taskSuggestions } from "../tasks";
+  import { suggestionWindowStart, taskSuggestions } from "../tasks";
   import type { TimeEntry } from "../types";
   import {
     calendarDayDiff,
@@ -271,9 +271,7 @@
   // page uses. The source is narrowed in its own $derived so that typing rebuilds only
   // the suggestion list, not a copy of the entry table, and the cutoff is a day-level
   // value so the one-second ticker never enters the picture.
-  const suggestionCutoff = $derived(
-    new Date(localDateISO(clock.now) + "T00:00").getTime() - (SUGGESTION_WINDOW_DAYS - 1) * 86_400_000,
-  );
+  const suggestionCutoff = $derived(suggestionWindowStart(clock.now));
   const suggestionSource = $derived(
     appState.entries.filter(
       (entry) => entry.id !== entryID && (entry.stopped_at === null || entry.started_at >= suggestionCutoff),

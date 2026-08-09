@@ -123,6 +123,10 @@ run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 WT_STUB_CODE=200
 check "unreachable requests are spooled" "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 2
+# The spooled bodies are read before the flush, so the ordering check below compares
+# actual timestamps. Grepping the first line for a digit would pass in either order:
+# every current epoch-ms value starts with the same digit.
+spooled_first=$(tail -n +2 "$(find "$WORK/queue" -name '*.req' | sort | head -n 1)")
 reset_log flush
 run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 check "the queue is flushed with the next event" "$(wc -l < "$WT_STUB_LOG" | tr -d ' ')" 3
@@ -131,7 +135,7 @@ check "nothing is left in the queue" "$(find "$WORK/queue" -name '*.req' | wc -l
 # before its watermark, so the other order lets the live heartbeat book the outage as a
 # pause and then drops the spooled proof that it was work.
 check "the backlog is delivered before the live event" \
-    "$(head -n 1 "$WT_STUB_LOG" | cut -f2 | grep -c '"at":1' || true)" 1
+    "$(head -n 1 "$WT_STUB_LOG" | cut -f2)" "$spooled_first"
 
 # --- a stop replays the spooled start first -------------------------------------
 # stop on a session the server has never seen is a 404, which the hook classifies as

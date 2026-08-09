@@ -19,11 +19,15 @@ const (
 	maxTagsPerEntry = 8
 	maxTagLength    = 24
 	// Timestamps are unix milliseconds, so a client that ships seconds or nanoseconds
-	// instead writes a row that is either prehistoric or centuries out. Both bounds are
-	// deliberately loose - they exist to keep SUM(stopped_at - started_at) inside int64
-	// in the reports, not to second-guess the clock of an offline device.
+	// instead writes a row that is either prehistoric or centuries out. The bound is
+	// deliberately loose - a year covers any offline device and any plausible clock
+	// drift. It exists for two failure modes that have no other floor: a poisoned
+	// duration overflowing SUM(stopped_at - started_at) in the reports, and an
+	// updated_at in the far future, which under last-write-wins freezes the row against
+	// every honest edit from every device, permanently and with no way to repair it
+	// from inside the product.
 	maxClockSkewMs = 366 * 24 * 60 * 60 * 1000
-	maxEntrySpanMs = 366 * 24 * 60 * 60 * 1000
+	maxEntrySpanMs = maxClockSkewMs
 )
 
 // Sync applies client changes (last-write-wins by updated_at) and returns all rows
@@ -287,8 +291,8 @@ func validateChanges(changes SyncChanges) error {
 		if utf8.RuneCountInString(project.Color) > maxColorLength {
 			return fmt.Errorf("project %s: color too long", project.ID)
 		}
-		if project.UpdatedAt <= 0 {
-			return fmt.Errorf("project %s: updated_at is required", project.ID)
+		if project.UpdatedAt <= 0 || project.UpdatedAt > maxTimestamp {
+			return fmt.Errorf("project %s: updated_at is required and must not be in the future", project.ID)
 		}
 	}
 	for _, entry := range changes.TimeEntries {
@@ -305,6 +309,9 @@ func validateChanges(changes SyncChanges) error {
 		}
 		if entry.StartedAt <= 0 || entry.UpdatedAt <= 0 {
 			return fmt.Errorf("time entry %s: started_at and updated_at are required", entry.ID)
+		}
+		if entry.UpdatedAt > maxTimestamp {
+			return fmt.Errorf("time entry %s: updated_at is too far in the future", entry.ID)
 		}
 		if entry.StartedAt > maxTimestamp {
 			return fmt.Errorf("time entry %s: started_at is too far in the future", entry.ID)
@@ -345,8 +352,8 @@ func validateChanges(changes SyncChanges) error {
 		if utf8.RuneCountInString(timeOff.Note) > maxTextLength {
 			return fmt.Errorf("time off %s: note too long", timeOff.ID)
 		}
-		if timeOff.UpdatedAt <= 0 {
-			return fmt.Errorf("time off %s: updated_at is required", timeOff.ID)
+		if timeOff.UpdatedAt <= 0 || timeOff.UpdatedAt > maxTimestamp {
+			return fmt.Errorf("time off %s: updated_at is required and must not be in the future", timeOff.ID)
 		}
 	}
 	return nil

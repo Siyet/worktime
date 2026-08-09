@@ -182,7 +182,15 @@
     return chips.find((chip) => chip.key === key)?.color ?? "var(--border)";
   }
 
+  // A daily bar chart stops being readable long before it stops being drawable, and a
+  // mistyped year in the date field ("0202") asks for thousands of columns on every
+  // keystroke. The stat tiles and the tables still cover the whole range; only the
+  // drawing is dropped, and the caption below says so.
+  const maxChartDays = 400;
+  const chartTooWide = $derived(days.length > maxChartDays);
+
   const chartDays = $derived.by((): ChartDay[] => {
+    if (chartTooWide) return [];
     const perDay = new Map<string, Map<string, number>>();
     for (const entry of rangeEntries) {
       const bucket = perDay.get(entry.date) ?? new Map<string, number>();
@@ -447,14 +455,18 @@
       <span class="spacer"></span>
       <span class="muted hint">{t("click a day to filter the table")}</span>
     </div>
-    <DailyChart
-      days={chartDays}
-      {off}
-      {avgMinutes}
-      avgCaption={t("avg {h}h / work day", { h: (avgMinutes / 60).toFixed(1) })}
-      selected={dayFilter}
-      onselect={(day) => (dayFilter = day)}
-    />
+    {#if chartTooWide}
+      <p class="muted toowide">{t("The range is too wide to chart by day; the numbers below still cover all of it.")}</p>
+    {:else}
+      <DailyChart
+        days={chartDays}
+        {off}
+        {avgMinutes}
+        avgCaption={t("avg {h}h / work day", { h: (avgMinutes / 60).toFixed(1) })}
+        selected={dayFilter}
+        onselect={(day) => (dayFilter = day)}
+      />
+    {/if}
     <div class="legend">
       <span><span class="sw" style="background: var(--accent)"></span>{t("tracked hours")}</span>
       <span><span class="sw" style="background: rgba(96,125,190,0.3)"></span>{t("weekend")}</span>
@@ -756,6 +768,12 @@
 
   .overlap-toggle:has(input:checked) {
     color: var(--text);
+  }
+
+  .toowide {
+    margin: 1.2rem 0;
+    text-align: center;
+    font-size: 0.85rem;
   }
 
   .legend {

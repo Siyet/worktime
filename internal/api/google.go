@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"slices"
@@ -11,6 +12,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"github.com/Siyet/worktime/internal/store"
 )
 
 const stateCookieName = "wt_oauth_state"
@@ -108,7 +111,19 @@ func (s *server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.store.FindOrCreateGoogleUser(r.Context(), userinfo.Sub, email, userinfo.Name, userinfo.Picture)
+	// Taking over an existing account when Google reports a new subject for a known
+	// address is only allowed on an instance with an explicit allowlist. There,
+	// controlling one of the listed addresses already means the owner invited you. On an
+	// open instance the address alone proves nothing about identity continuity, so a
+	// lapsed domain or a reassigned Workspace address would hand over the account.
+	adoptByEmail := len(s.cfg.AllowedEmails) > 0
+	user, err := s.store.FindOrCreateGoogleUser(
+		r.Context(), userinfo.Sub, email, userinfo.Name, userinfo.Picture, adoptByEmail)
+	if errors.Is(err, store.ErrInvalidInput) {
+		log.Printf("sign-in refused: %v", err)
+		http.Error(w, "this address is already linked to a different Google account", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		log.Printf("find or create user: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

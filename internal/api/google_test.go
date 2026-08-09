@@ -104,7 +104,7 @@ func TestSessionCookieAuthAndLogout(t *testing.T) {
 	testServer := httptest.NewServer(NewRouter(dataStore, config.Config{}))
 	t.Cleanup(testServer.Close)
 
-	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-session", "session@test.local", "S", "")
+	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-session", "session@test.local", "S", "", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

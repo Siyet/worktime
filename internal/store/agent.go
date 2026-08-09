@@ -141,7 +141,9 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, params.SessionID)
 	}
 	now := time.Now().UnixMilli()
-	if params.StartedAt <= 0 {
+	// Same bound as sanitizeAgentSignal: a start stamped in the future would open an
+	// entry no later signal can advance and no reconciliation can close.
+	if params.StartedAt <= 0 || params.StartedAt > now+maxAgentSkewMs {
 		params.StartedAt = now
 	}
 	params.Source = truncateRunes(params.Source, maxAgentShortLength)
@@ -285,9 +287,11 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, si
 }
 
 // StopAgentSession closes the session and its running entry. Stopping an already
-// closed session is a no-op. The end is trimmed to the last heartbeat when the
-// stop arrives after more than the idle threshold of silence, so a stop delivered
-// late (e.g. from the offline queue) never inflates the duration.
+// closed session is a no-op. When the stop arrives after more than the idle threshold
+// of silence the end is trimmed back to the last heartbeat, so a stop delivered late
+// (e.g. from the offline queue) cannot inflate the duration - except that silence which
+// began with a tool_start is billed up to ToolMaxMs, because a running tool is the one
+// gap that is known to be work. See trailingEnd, which reconciliation shares.
 func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason string, signal AgentSignal, policy AgentPolicy) (AgentSession, error) {
 	if err := uuid.Validate(sessionID); err != nil {
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, sessionID)
@@ -319,20 +323,9 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 		return AgentSession{}, err
 	}
 
-	// The tail is trimmed to the last heartbeat, because a stop that arrives long after
-	// one proves nothing about the gap in between. The exception is the same one
-	// advanceAgentSession makes: a gap that opened with a tool call is work up to the
-	// cap, since PostToolUse only fires once the tool returns. Without it a session
-	// whose last act is a twenty-minute test run - interrupted, or with its PostToolUse
-	// hook killed alongside the process - bills those twenty minutes as zero, while the
-	// identical gap followed by a heartbeat bills all of them.
 	effectiveEnd := signal.At
 	if signal.At < session.LastHeartbeatAt || signal.At-session.LastHeartbeatAt > policy.IdleMs {
-		billable := int64(0)
-		if session.LastKind == AgentKindToolStart && signal.At > session.LastHeartbeatAt {
-			billable = min(signal.At-session.LastHeartbeatAt, policy.ToolMaxMs)
-		}
-		effectiveEnd = session.LastHeartbeatAt + billable
+		effectiveEnd = trailingEnd(session.LastHeartbeatAt, signal.At, session.LastKind, policy)
 	}
 	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now)
 	if err != nil {
@@ -352,10 +345,14 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 	return commitAgentSession(ctx, transaction, userID, sessionID)
 }
 
-// ReconcileAgentSessions closes every active session (across all users) whose
-// last heartbeat is older than the grace period, at the last heartbeat. This is
-// the layer that survives SIGKILL, OOM and network loss on the agent side.
-func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) (int, error) {
+// ReconcileAgentSessions closes every active session (across all users) whose last
+// heartbeat is older than the grace period. This is the layer that survives SIGKILL,
+// OOM and network loss on the agent side.
+//
+// The end is the last heartbeat, with the same tool_start allowance StopAgentSession
+// makes - a session killed mid-tool must not be worth less than one that managed to
+// send its stop.
+func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64, policy AgentPolicy) (int, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -368,9 +365,10 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 		timeEntryID     *string
 		entryServerSeq  *int64
 		lastHeartbeatAt int64
+		lastKind        string
 	}
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at
+		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at, last_kind
 		FROM agent_sessions WHERE status = ? AND last_heartbeat_at < ?`,
 		agentStatusActive, now-graceMs)
 	if err != nil {
@@ -380,7 +378,7 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	for rows.Next() {
 		var session staleSession
 		if err := rows.Scan(&session.id, &session.userID, &session.timeEntryID,
-			&session.entryServerSeq, &session.lastHeartbeatAt); err != nil {
+			&session.entryServerSeq, &session.lastHeartbeatAt, &session.lastKind); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -391,7 +389,8 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	}
 
 	for _, session := range stale {
-		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, session.lastHeartbeatAt, now)
+		endedAt := trailingEnd(session.lastHeartbeatAt, now, session.lastKind, policy)
+		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, endedAt, now)
 		if err != nil {
 			return 0, err
 		}
@@ -399,10 +398,10 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 			session.entryServerSeq = &seq
 		}
 		_, err = transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET status = ?, ended_at = last_heartbeat_at, end_reason = ?,
+			UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ?,
 			       entry_server_seq = ?, updated_at = ?
 			WHERE id = ? AND user_id = ?`,
-			agentStatusClosed, AgentEndReasonStale, session.entryServerSeq, now, session.id, session.userID)
+			agentStatusClosed, endedAt, AgentEndReasonStale, session.entryServerSeq, now, session.id, session.userID)
 		if err != nil {
 			return 0, err
 		}
@@ -1002,8 +1001,31 @@ func applyAgentMetadata(ctx context.Context, transaction *sql.Tx, userID string,
 	return err
 }
 
+// maxAgentSkewMs bounds how far ahead of the server an agent's clock may be. A signal
+// past it is not merely odd: it moves the session watermark into the future, and from
+// then on every real signal is discarded as stale while reconciliation - which selects
+// on last_heartbeat_at being old - can never pick the session up. The running entry
+// would then stay open forever with nothing able to close it.
+const maxAgentSkewMs = int64(24 * 60 * 60 * 1000)
+
+// trailingEnd decides where an entry ends when the session goes quiet for longer than
+// the idle threshold. The silence is not billed, because nothing proves anyone was
+// there - except when it opened with a tool call: PostToolUse fires only once the tool
+// returns, so a long Bash or Task looks exactly like an empty chair from here, and its
+// run is billed up to the cap.
+//
+// Both ways a session can end share this, or the same twenty-minute test run would be
+// worth twenty minutes when SessionEnd arrives and zero when the process was killed and
+// reconciliation closed the session instead.
+func trailingEnd(lastHeartbeatAt, silentUntil int64, lastKind string, policy AgentPolicy) int64 {
+	if lastKind != AgentKindToolStart || silentUntil <= lastHeartbeatAt {
+		return lastHeartbeatAt
+	}
+	return lastHeartbeatAt + min(silentUntil-lastHeartbeatAt, policy.ToolMaxMs)
+}
+
 func sanitizeAgentSignal(signal AgentSignal, now int64) AgentSignal {
-	if signal.At <= 0 {
+	if signal.At <= 0 || signal.At > now+maxAgentSkewMs {
 		signal.At = now
 	}
 	signal.Kind = truncateRunes(signal.Kind, maxAgentShortLength)

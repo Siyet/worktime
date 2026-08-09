@@ -105,7 +105,7 @@ func TestAPITokenAuth(t *testing.T) {
 	testServer := httptest.NewServer(NewRouter(dataStore, config.Config{DevAuth: false}))
 	t.Cleanup(testServer.Close)
 
-	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-token", "token@test.local", "Token User", "")
+	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-token", "token@test.local", "Token User", "", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

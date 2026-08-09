@@ -117,6 +117,11 @@ function sameStoredRow(local: SyncedRow, incoming: SyncedRow): boolean {
       if (localItems.some((item, index) => item !== incomingItems[index])) return false;
       continue;
     }
+    // A locally created row omits the server-owned fields entirely, while the server
+    // always sends them: paused_ms as 0 and agent_session_id as null. Comparing those
+    // as different would make every new timer's own echo look like a change and reload
+    // the whole state from disk - the exact cost this check exists to avoid.
+    if (localValue === undefined && (incomingValue === null || incomingValue === 0)) continue;
     if (localValue !== incomingValue) return false;
   }
   return true;

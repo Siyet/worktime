@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -20,7 +22,7 @@ func openTestStore(t *testing.T) *Store {
 
 func testUser(t *testing.T, testStore *Store, email string) User {
 	t.Helper()
-	user, err := testStore.FindOrCreateGoogleUser(context.Background(), "sub-"+email, email, "Test", "")
+	user, err := testStore.FindOrCreateGoogleUser(context.Background(), "sub-"+email, email, "Test", "", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -173,6 +175,54 @@ func TestSyncAcceptedPushEchoesOnlyItsOwnRows(t *testing.T) {
 	}
 	if len(response.Changes.TimeEntries) != 1 || response.Changes.TimeEntries[0].ID != second.ID {
 		t.Fatalf("expected only the pushed row echoed, got %+v", response.Changes.TimeEntries)
+	}
+}
+
+// Timestamps are milliseconds; a client shipping another unit, or one with a clock set
+// years ahead, writes rows nothing downstream can survive. An updated_at in the future
+// is the worst of them: last-write-wins then refuses every honest edit from every
+// device for as long as the row exists.
+func TestSyncRejectsTimestampsOutOfRange(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "bounds@test.local")
+	ctx := context.Background()
+	now := time.Now().UnixMilli()
+	farFuture := now + 2*maxClockSkewMs
+
+	cases := []struct {
+		name  string
+		entry TimeEntry
+	}{
+		{"started_at far ahead", TimeEntry{
+			ID: uuid.NewString(), StartedAt: farFuture, CreatedAt: now, UpdatedAt: now}},
+		{"stopped_at far ahead", TimeEntry{
+			ID: uuid.NewString(), StartedAt: now, StoppedAt: msPointer(farFuture), CreatedAt: now, UpdatedAt: now}},
+		{"updated_at far ahead", TimeEntry{
+			ID: uuid.NewString(), StartedAt: now, CreatedAt: now, UpdatedAt: farFuture}},
+		{"span longer than a year", TimeEntry{
+			ID: uuid.NewString(), StartedAt: now - 2*maxEntrySpanMs, StoppedAt: msPointer(now),
+			CreatedAt: now, UpdatedAt: now}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := testStore.Sync(ctx, user.ID, SyncRequest{
+				Changes: SyncChanges{TimeEntries: []TimeEntry{testCase.entry}},
+			})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected the push refused, got %v", err)
+			}
+		})
+	}
+
+	// An ordinary entry, including one that legitimately crosses midnight, still passes.
+	ordinary := TimeEntry{
+		ID: uuid.NewString(), StartedAt: now - 3*60*60*1000, StoppedAt: msPointer(now),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{ordinary}},
+	}); err != nil {
+		t.Fatalf("an ordinary entry must still push: %v", err)
 	}
 }
 

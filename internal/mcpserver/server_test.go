@@ -54,7 +54,7 @@ func newMCPFixture(t *testing.T) mcpFixture {
 	testServer := httptest.NewServer(api.NewRouter(dataStore, config.Config{}))
 	t.Cleanup(testServer.Close)
 
-	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-mcp", "mcp@test.local", "MCP User", "")
+	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-mcp", "mcp@test.local", "MCP User", "", false)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}

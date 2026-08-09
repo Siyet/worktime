@@ -72,24 +72,24 @@ func (s *server) handleReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-// handlePull serves read-only snapshots for debugging and simple integrations:
-// GET /api/projects and GET /api/entries. Each reads only the table it serves - going
-// through the sync path would materialise the user's whole history, tombstones
-// included, and throw two thirds of it away on every request.
-func (s *server) handlePull(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/projects" {
-		projects, err := s.store.ListProjects(r.Context(), currentUser(r).ID)
-		if err != nil {
-			log.Printf("pull projects: %v", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, projects)
+// handleListProjects and handleListEntries serve read-only snapshots for debugging and
+// simple integrations. Each reads only the table it serves - going through the sync path
+// would materialise the user's whole history, tombstones included, and throw two thirds
+// of it away on every request.
+func (s *server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.store.ListProjects(r.Context(), currentUser(r).ID)
+	if err != nil {
+		log.Printf("list projects: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func (s *server) handleListEntries(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.store.ListEntries(r.Context(), currentUser(r).ID)
 	if err != nil {
-		log.Printf("pull entries: %v", err)
+		log.Printf("list entries: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

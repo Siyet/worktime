@@ -106,13 +106,11 @@ func (d toolDeps) pushEntries(ctx context.Context, entries ...store.TimeEntry) e
 // answer "stopped" for a timer that is still running. Stepping past the stored value
 // keeps the intent of last-write-wins (this edit is the latest one) without trusting
 // either clock to be right.
-func stampUpdate(entry *store.TimeEntry, now int64) int64 {
-	stamp := now
-	if entry.UpdatedAt >= stamp {
-		stamp = entry.UpdatedAt + 1
+func stampUpdate(entry *store.TimeEntry, now int64) {
+	if entry.UpdatedAt >= now {
+		now = entry.UpdatedAt + 1
 	}
-	entry.UpdatedAt = stamp
-	return stamp
+	entry.UpdatedAt = now
 }
 
 func (d toolDeps) resolveProject(ctx context.Context, name string) (*store.Project, error) {
@@ -505,6 +503,11 @@ func (d toolDeps) timeReport(ctx context.Context, req *mcp.CallToolRequest, inpu
 	toDate, err := time.Parse(time.DateOnly, input.To)
 	if err != nil {
 		return nil, timeReportOut{}, fmt.Errorf("to must be YYYY-MM-DD: %w", err)
+	}
+	// A transposed range would otherwise answer "0:00:00" with an empty project list,
+	// which reads as "you did no work" rather than "you asked the wrong question".
+	if toDate.Before(fromDate) {
+		return nil, timeReportOut{}, fmt.Errorf("to (%s) is before from (%s)", input.To, input.From)
 	}
 	offsetMin := 0
 	if input.TZOffsetMin != nil {

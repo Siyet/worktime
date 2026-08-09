@@ -120,6 +120,8 @@ const ru: Dictionary = {
   Status: "Статус",
   "pending changes": "несинхронизированные изменения",
   "last synced": "последняя синхронизация",
+  "The range is too wide to chart by day; the numbers below still cover all of it.":
+    "Диапазон слишком широк для дневного графика; цифры ниже по-прежнему охватывают его целиком.",
   "changes were refused by the server and stay on this device until you edit them again.":
     "изменений отклонено сервером - они останутся на этом устройстве, пока вы их не измените.",
   Tags: "Теги",
@@ -294,6 +296,8 @@ const es: Dictionary = {
   Status: "Estado",
   "pending changes": "cambios pendientes",
   "last synced": "última sincronización",
+  "The range is too wide to chart by day; the numbers below still cover all of it.":
+    "El rango es demasiado amplio para un gráfico diario; las cifras siguientes lo cubren por completo.",
   "changes were refused by the server and stay on this device until you edit them again.":
     "cambios fueron rechazados por el servidor y permanecen en este dispositivo hasta que los edites de nuevo.",
   Tags: "Etiquetas",
@@ -467,6 +471,8 @@ const de: Dictionary = {
   Status: "Status",
   "pending changes": "ausstehende Änderungen",
   "last synced": "zuletzt synchronisiert",
+  "The range is too wide to chart by day; the numbers below still cover all of it.":
+    "Der Zeitraum ist zu groß für ein Tagesdiagramm; die Zahlen darunter decken ihn weiterhin vollständig ab.",
   "changes were refused by the server and stay on this device until you edit them again.":
     "Änderungen hat der Server abgelehnt - sie bleiben auf diesem Gerät, bis du sie erneut bearbeitest.",
   Tags: "Tags",
@@ -642,6 +648,8 @@ const fr: Dictionary = {
   Status: "Statut",
   "pending changes": "modifications en attente",
   "last synced": "dernière synchro",
+  "The range is too wide to chart by day; the numbers below still cover all of it.":
+    "La période est trop large pour un graphique par jour ; les chiffres ci-dessous la couvrent toujours entièrement.",
   "changes were refused by the server and stay on this device until you edit them again.":
     "modifications ont été refusées par le serveur et restent sur cet appareil jusqu'à ce que vous les modifiiez.",
   Tags: "Étiquettes",
@@ -814,6 +822,8 @@ const zh: Dictionary = {
   Status: "状态",
   "pending changes": "待同步更改",
   "last synced": "最后同步",
+  "The range is too wide to chart by day; the numbers below still cover all of it.":
+    "时间范围过宽，无法按天绘制图表；下面的数字仍然覆盖全部范围。",
   "changes were refused by the server and stay on this device until you edit them again.":
     "项更改被服务器拒绝，在你再次编辑之前它们只保留在本设备上。",
   Tags: "标签",

@@ -4,7 +4,7 @@
 // window and setInterval at module level, so these functions stay testable under
 // vitest's node environment. Tags are read inline as `entry.tags ?? []` for the
 // same reason report.ts does it - the field is absent on older rows.
-import { descriptionKey, entryDurationMs } from "./format";
+import { descriptionKey, entryDurationMs, localDateISO } from "./format";
 import type { TimeEntry } from "./types";
 
 export interface TaskGroup {
@@ -33,7 +33,19 @@ export interface TaskSuggestion {
 
 /** How far back suggestions look: exactly what the Timer page itself shows. */
 export const SUGGESTION_WINDOW_DAYS = 7;
-export const MAX_SUGGESTIONS = 8;
+const MAX_SUGGESTIONS = 8;
+
+// suggestionWindowStart is the single definition of that window's lower edge: midnight
+// of the day SUGGESTION_WINDOW_DAYS-1 back. Every surface derives it from here so the
+// feed and the suggestions that claim to mirror it cannot drift apart.
+//
+// It cuts at a day boundary rather than a rolling 168 hours because the feed groups its
+// results into calendar day cards - a rolling cut leaves the oldest card holding only
+// what happened after the current time of day. It also changes once a day rather than
+// once a second, which keeps the ticker out of every scan over the entry table.
+export function suggestionWindowStart(nowMs: number): number {
+  return new Date(localDateISO(nowMs) + "T00:00").getTime() - (SUGGESTION_WINDOW_DAYS - 1) * 86_400_000;
+}
 
 // A NUL byte cannot occur in a description, a UUID or a tag, so the parts of
 // the key can never run into each other.
@@ -48,7 +60,11 @@ export function taskKey(description: string, projectID: string | null, tags: str
 // groupDayEntries collapses repeats of the same task into one group. Entries
 // without a description are never grouped: an empty description says nothing
 // about what the work was, so two of them are not the same task.
-export function groupDayEntries(entries: TimeEntry[], now: number): TaskGroup[] {
+//
+// `now` is only read for entries that are still running, to measure them up to it. A
+// caller passing only finished entries can leave it out; passing anything else there -
+// a window bound, say - would silently give every running row a duration of zero.
+export function groupDayEntries(entries: TimeEntry[], now = 0): TaskGroup[] {
   const groups = new Map<string, TaskGroup>();
   for (const entry of entries) {
     const tags = entry.tags ?? [];

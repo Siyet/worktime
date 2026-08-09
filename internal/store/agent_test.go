@@ -446,7 +446,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 
 	// Reconciliation still owns the new entry, which is the point of keeping the
 	// session active through the cut.
-	closed, err := testStore.ReconcileAgentSessions(ctx, morning+testGraceMs+1000, testGraceMs)
+	closed, err := testStore.ReconcileAgentSessions(ctx, morning+testGraceMs+1000, testGraceMs, testPolicy)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -643,8 +643,50 @@ func TestAgentStopCapsTrailingToolRun(t *testing.T) {
 	if *session.EndedAt != toolStartedAt+testPolicy.ToolMaxMs {
 		t.Fatalf("expected the end capped at ToolMaxMs, got %d", *session.EndedAt)
 	}
-	if _, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID); err != nil {
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
 		t.Fatalf("get entry: %v", err)
+	}
+	// The session row and the entry are separate writes; the cap only means something
+	// if the entry followed it.
+	if entry.StoppedAt == nil || *entry.StoppedAt != toolStartedAt+testPolicy.ToolMaxMs {
+		t.Fatalf("expected the entry capped too, got %+v", entry.StoppedAt)
+	}
+}
+
+// A session killed mid-tool is closed by reconciliation rather than by a stop, and must
+// be worth the same as one that managed to send SessionEnd - otherwise the value of
+// twenty minutes of work depends on whether the process died cleanly.
+func TestAgentReconcileBillsTrailingToolRun(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-reconcile-tool@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	toolStartedAt := agentBaseMs + 60_000
+	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+		AgentSignal{At: toolStartedAt, Kind: AgentKindToolStart}, testPolicy); err != nil {
+		t.Fatalf("tool start: %v", err)
+	}
+
+	// The agent is SIGKILLed during the run, so no stop ever arrives.
+	toolRunMs := int64(20 * 60 * 1000)
+	closedAt := toolStartedAt + toolRunMs
+	closed, err := testStore.ReconcileAgentSessions(ctx, closedAt, testGraceMs, testPolicy)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("expected one session closed, got %d", closed)
+	}
+
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt == nil || *entry.StoppedAt != closedAt {
+		t.Fatalf("expected the tool run billed, got %+v", entry.StoppedAt)
 	}
 }
 
@@ -995,7 +1037,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 		t.Fatalf("start fresh: %v", err)
 	}
 
-	closed, err := testStore.ReconcileAgentSessions(ctx, now, testGraceMs)
+	closed, err := testStore.ReconcileAgentSessions(ctx, now, testGraceMs, testPolicy)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}

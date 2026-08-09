@@ -32,7 +32,12 @@ func main() {
 		defer ticker.Stop()
 		for {
 			closed, err := dataStore.ReconcileAgentSessions(
-				context.Background(), time.Now().UnixMilli(), cfg.AgentGrace.Milliseconds())
+				context.Background(), time.Now().UnixMilli(), cfg.AgentGrace.Milliseconds(),
+				store.AgentPolicy{
+					IdleMs:     cfg.AgentIdle.Milliseconds(),
+					ToolMaxMs:  cfg.AgentToolMax.Milliseconds(),
+					MaxPauseMs: cfg.AgentMaxPause.Milliseconds(),
+				})
 			if err != nil {
 				log.Printf("agent reconcile: %v", err)
 			} else if closed > 0 {

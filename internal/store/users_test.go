@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -14,12 +15,12 @@ func TestFindOrCreateGoogleUserAdoptsARotatedSubject(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
 
-	first, err := testStore.FindOrCreateGoogleUser(ctx, "sub-old", "person@test.local", "Person", "old.png")
+	first, err := testStore.FindOrCreateGoogleUser(ctx, "sub-old", "person@test.local", "Person", "old.png", true)
 	if err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
 
-	second, err := testStore.FindOrCreateGoogleUser(ctx, "sub-new", "person@test.local", "Person", "old.png")
+	second, err := testStore.FindOrCreateGoogleUser(ctx, "sub-new", "person@test.local", "Person", "old.png", true)
 	if err != nil {
 		t.Fatalf("sign-in with a rotated subject: %v", err)
 	}
@@ -28,7 +29,7 @@ func TestFindOrCreateGoogleUserAdoptsARotatedSubject(t *testing.T) {
 	}
 
 	// And the new subject is the one that resolves from now on.
-	again, err := testStore.FindOrCreateGoogleUser(ctx, "sub-new", "person@test.local", "Person", "old.png")
+	again, err := testStore.FindOrCreateGoogleUser(ctx, "sub-new", "person@test.local", "Person", "old.png", true)
 	if err != nil {
 		t.Fatalf("repeat sign-in: %v", err)
 	}
@@ -37,15 +38,65 @@ func TestFindOrCreateGoogleUserAdoptsARotatedSubject(t *testing.T) {
 	}
 }
 
+// Adoption hands an existing account to a new credential on the strength of the address
+// alone, which only means "the owner invited you" on an instance with an allowlist. An
+// open instance must refuse instead, or whoever later acquires a lapsed domain or a
+// reassigned Workspace address inherits the account.
+func TestFindOrCreateGoogleUserRefusesAdoptionWhenNotAllowed(t *testing.T) {
+	testStore := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := testStore.FindOrCreateGoogleUser(ctx, "sub-old", "person@test.local", "Person", "", false); err != nil {
+		t.Fatalf("first sign-in: %v", err)
+	}
+	_, err := testStore.FindOrCreateGoogleUser(ctx, "sub-attacker", "person@test.local", "Person", "", false)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected the sign-in refused, got %v", err)
+	}
+
+	// And the account still belongs to the original subject.
+	original, err := testStore.FindOrCreateGoogleUser(ctx, "sub-old", "person@test.local", "Person", "", false)
+	if err != nil {
+		t.Fatalf("original sign-in: %v", err)
+	}
+	if original.ID == "" {
+		t.Fatal("the original account must still resolve")
+	}
+}
+
+// The profile refresh must never write the UNIQUE email column: a routine sign-in
+// cannot be allowed to fail on another row's address.
+func TestFindOrCreateGoogleUserSurvivesAnEmailCollision(t *testing.T) {
+	testStore := openTestStore(t)
+	ctx := context.Background()
+
+	taken, err := testStore.FindOrCreateGoogleUser(ctx, "sub-a", "taken@test.local", "A", "", false)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := testStore.FindOrCreateGoogleUser(ctx, "sub-b", "own@test.local", "B", "", false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Google now reports the address that already belongs to the other account.
+	returning, err := testStore.FindOrCreateGoogleUser(ctx, "sub-b", "taken@test.local", "B", "new.png", false)
+	if err != nil {
+		t.Fatalf("a returning user must still sign in: %v", err)
+	}
+	if returning.ID == taken.ID {
+		t.Fatal("the sign-in must not resolve to the other account")
+	}
+}
+
 func TestFindOrCreateGoogleUserRefreshesTheProfile(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
 
-	created, err := testStore.FindOrCreateGoogleUser(ctx, "sub-1", "who@test.local", "Old Name", "old.png")
+	created, err := testStore.FindOrCreateGoogleUser(ctx, "sub-1", "who@test.local", "Old Name", "old.png", false)
 	if err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
-	if _, err := testStore.FindOrCreateGoogleUser(ctx, "sub-1", "who@test.local", "New Name", "new.png"); err != nil {
+	if _, err := testStore.FindOrCreateGoogleUser(ctx, "sub-1", "who@test.local", "New Name", "new.png", false); err != nil {
 		t.Fatalf("second sign-in: %v", err)
 	}
 
@@ -63,11 +114,11 @@ func TestFindOrCreateGoogleUserKeepsDistinctEmailsApart(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
 
-	one, err := testStore.FindOrCreateGoogleUser(ctx, "sub-a", "a@test.local", "A", "")
+	one, err := testStore.FindOrCreateGoogleUser(ctx, "sub-a", "a@test.local", "A", "", false)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	other, err := testStore.FindOrCreateGoogleUser(ctx, "sub-b", "b@test.local", "B", "")
+	other, err := testStore.FindOrCreateGoogleUser(ctx, "sub-b", "b@test.local", "B", "", false)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}

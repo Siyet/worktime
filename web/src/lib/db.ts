@@ -54,7 +54,10 @@ export async function saveServerRow(table: TableName, row: SyncedRow): Promise<v
 // One transaction per row would take tens of seconds on a 10k-row bootstrap;
 // batching brings it down to well under a second. Rows older than the local
 // version (pending local edits) are kept.
-export async function mergeServerRows(changes: Partial<Record<TableName, SyncedRow[]>>): Promise<boolean> {
+export async function mergeServerRows(
+  changes: Partial<Record<TableName, SyncedRow[]>>,
+  justPushed: ReadonlySet<string> = new Set(),
+): Promise<boolean> {
   const database = await db();
   const transaction = database.transaction([...TABLES, "dirty"], "readwrite");
   const dirty = transaction.objectStore("dirty");
@@ -64,12 +67,16 @@ export async function mergeServerRows(changes: Partial<Record<TableName, SyncedR
     if (incoming.length === 0) continue;
     const store = transaction.objectStore(table);
     for (const row of incoming) {
-      // A row that still holds a dirty marker has a local edit waiting to be pushed.
-      // The server copy arriving here is usually the echo of an earlier push and
-      // carries an identical updated_at, which would win the >= comparison below and
-      // silently revert the newer local edit. The echo never carries information the
-      // client does not already have, so skipping it is always safe.
-      if (await dirty.get(`${table}:${row.id}`)) continue;
+      // A row that still holds a dirty marker has a local edit waiting to be pushed,
+      // and the server copy would silently revert it.
+      //
+      // Rows pushed in this very request are the exception: their marker is only
+      // cleared after this merge, and the response can carry server-owned fields
+      // the client has no other way to learn (paused_ms, agent_session_id, a
+      // rename by the agent flow). Skipping those loses them for good - the
+      // cursor has already moved past that server_seq. The updated_at comparison
+      // below still protects an edit made while the push was in flight.
+      if (!justPushed.has(`${table}:${row.id}`) && (await dirty.get(`${table}:${row.id}`))) continue;
       const local = (await store.get(row.id)) as SyncedRow | undefined;
       if (!local || row.updated_at >= local.updated_at) {
         void store.put(row);

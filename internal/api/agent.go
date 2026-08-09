@@ -16,12 +16,13 @@ import (
 )
 
 type agentStartRequest struct {
-	StartedAt int64   `json:"started_at"`
-	Source    string  `json:"source"`
-	Cwd       string  `json:"cwd"`
-	GitBranch string  `json:"git_branch"`
-	Model     string  `json:"model"`
-	ProjectID *string `json:"project_id"`
+	StartedAt   int64   `json:"started_at"`
+	Source      string  `json:"source"`
+	Cwd         string  `json:"cwd"`
+	GitBranch   string  `json:"git_branch"`
+	Model       string  `json:"model"`
+	ProjectID   *string `json:"project_id"`
+	TZOffsetMin *int    `json:"tz_offset_min"`
 }
 
 // Metadata on heartbeat and stop is optional and additive: a hook shipped before
@@ -30,20 +31,23 @@ type agentStartRequest struct {
 // otherwise never learn its working directory or branch.
 type agentHeartbeatRequest struct {
 	At int64 `json:"at"`
-	// Activity ("prompt", "tool", "turn_end", "compact") is accepted for forward
-	// compatibility but not stored yet.
-	Activity  string `json:"activity"`
-	Cwd       string `json:"cwd"`
-	GitBranch string `json:"git_branch"`
-	Model     string `json:"model"`
+	// Activity names what produced the signal. "tool_start" is the one the server
+	// acts on: it says a tool is about to run, so the silence that follows is work
+	// rather than an empty chair.
+	Activity    string `json:"activity"`
+	Cwd         string `json:"cwd"`
+	GitBranch   string `json:"git_branch"`
+	Model       string `json:"model"`
+	TZOffsetMin *int   `json:"tz_offset_min"`
 }
 
 type agentStopRequest struct {
-	EndedAt   int64  `json:"ended_at"`
-	Reason    string `json:"reason"`
-	Cwd       string `json:"cwd"`
-	GitBranch string `json:"git_branch"`
-	Model     string `json:"model"`
+	EndedAt     int64  `json:"ended_at"`
+	Reason      string `json:"reason"`
+	Cwd         string `json:"cwd"`
+	GitBranch   string `json:"git_branch"`
+	Model       string `json:"model"`
+	TZOffsetMin *int   `json:"tz_offset_min"`
 }
 
 func decodeAgentBody(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -70,7 +74,11 @@ func writeAgentResult(w http.ResponseWriter, session store.AgentSession, err err
 }
 
 func (s *server) agentPolicy() store.AgentPolicy {
-	return store.AgentPolicy{IdleMs: s.cfg.AgentIdle.Milliseconds()}
+	return store.AgentPolicy{
+		IdleMs:     s.cfg.AgentIdle.Milliseconds(),
+		ToolMaxMs:  s.cfg.AgentToolMax.Milliseconds(),
+		MaxPauseMs: s.cfg.AgentMaxPause.Milliseconds(),
+	}
 }
 
 func (s *server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
@@ -79,13 +87,14 @@ func (s *server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session, err := s.store.StartAgentSession(r.Context(), currentUser(r).ID, store.AgentStart{
-		SessionID: chi.URLParam(r, "id"),
-		StartedAt: request.StartedAt,
-		Source:    request.Source,
-		Cwd:       request.Cwd,
-		GitBranch: request.GitBranch,
-		Model:     request.Model,
-		ProjectID: request.ProjectID,
+		SessionID:   chi.URLParam(r, "id"),
+		StartedAt:   request.StartedAt,
+		Source:      request.Source,
+		Cwd:         request.Cwd,
+		GitBranch:   request.GitBranch,
+		Model:       request.Model,
+		ProjectID:   request.ProjectID,
+		TZOffsetMin: request.TZOffsetMin,
 	}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }
@@ -96,10 +105,12 @@ func (s *server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session, err := s.store.AgentHeartbeat(r.Context(), currentUser(r).ID, chi.URLParam(r, "id"), store.AgentSignal{
-		At:        request.At,
-		Cwd:       request.Cwd,
-		GitBranch: request.GitBranch,
-		Model:     request.Model,
+		At:          request.At,
+		Kind:        request.Activity,
+		Cwd:         request.Cwd,
+		GitBranch:   request.GitBranch,
+		Model:       request.Model,
+		TZOffsetMin: request.TZOffsetMin,
 	}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }
@@ -111,10 +122,11 @@ func (s *server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := s.store.StopAgentSession(r.Context(), currentUser(r).ID, chi.URLParam(r, "id"), request.Reason,
 		store.AgentSignal{
-			At:        request.EndedAt,
-			Cwd:       request.Cwd,
-			GitBranch: request.GitBranch,
-			Model:     request.Model,
+			At:          request.EndedAt,
+			Cwd:         request.Cwd,
+			GitBranch:   request.GitBranch,
+			Model:       request.Model,
+			TZOffsetMin: request.TZOffsetMin,
 		}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }

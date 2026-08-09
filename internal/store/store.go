@@ -165,6 +165,19 @@ UPDATE agent_sessions
 SET entry_server_seq = (SELECT server_seq FROM time_entries WHERE time_entries.id = agent_sessions.time_entry_id)
 WHERE time_entry_id IS NOT NULL;
 `,
+	// 006: an idle gap inside an agent session no longer cuts the entry in two;
+	// it is accumulated in paused_ms and subtracted from the duration, so one
+	// session is one row. started_at and stopped_at stay real timestamps, which
+	// is what the printed report, the CSV and the day boundaries are built on.
+	// tz_offset_min is nullable on purpose: 0 is UTC, not "unknown", and only a
+	// known offset can tell whether a pause crossed the user's local midnight.
+	// last_kind remembers what the previous signal was, so the gap after a long
+	// tool run can be billed instead of silently vanishing into the pause.
+	`
+ALTER TABLE time_entries   ADD COLUMN paused_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_sessions ADD COLUMN tz_offset_min INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN last_kind TEXT NOT NULL DEFAULT '';
+`,
 }
 
 type Store struct {

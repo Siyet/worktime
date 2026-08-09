@@ -31,7 +31,7 @@ func (s *Store) ListProjects(ctx context.Context, userID string) ([]Project, err
 func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
-		       server_seq, agent_session_id
+		       server_seq, agent_session_id, paused_ms
 		FROM time_entries
 		WHERE user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL
 		ORDER BY started_at DESC`, userID)
@@ -42,7 +42,8 @@ func (s *Store) ListRunningEntries(ctx context.Context, userID string) ([]TimeEn
 	for rows.Next() {
 		var entry TimeEntry
 		if err := rows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
-			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID); err != nil {
+			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID,
+			&entry.PausedMs); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -56,10 +57,11 @@ func (s *Store) GetTimeEntry(ctx context.Context, userID, entryID string) (TimeE
 	var entry TimeEntry
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
-		       server_seq, agent_session_id
+		       server_seq, agent_session_id, paused_ms
 		FROM time_entries WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, entryID, userID,
 	).Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
-		&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID)
+		&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID,
+		&entry.PausedMs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TimeEntry{}, ErrNotFound
 	}

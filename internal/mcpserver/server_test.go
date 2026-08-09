@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,5 +240,31 @@ func TestMCPSetAgentTaskWithoutSession(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatalf("expected an error without an active session, got %+v", result)
+	}
+}
+
+func TestMCPElapsedExcludesAgentPause(t *testing.T) {
+	fixture := newMCPFixture(t)
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000, MaxPauseMs: 4 * 60 * 60 * 1000}
+	now := time.Now().UnixMilli()
+
+	// An hour of wall clock with a half hour of idling inside it: the agent asking
+	// "how long have I been on this" must be told half an hour.
+	sessionID := uuid.NewString()
+	if _, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+		SessionID: sessionID, StartedAt: now - 60*60_000,
+	}, policy); err != nil {
+		t.Fatalf("start agent session: %v", err)
+	}
+	if _, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+		store.AgentSignal{At: now - 30*60_000}, policy); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+
+	running := callTool(t, fixture.session, "list_running_timers", nil)
+	timer := running["timers"].([]any)[0].(map[string]any)
+	elapsed, _ := timer["elapsed"].(string)
+	if !strings.HasPrefix(elapsed, "0:29:") && !strings.HasPrefix(elapsed, "0:30:") {
+		t.Fatalf("expected about half an hour of billable time, got %q", elapsed)
 	}
 }

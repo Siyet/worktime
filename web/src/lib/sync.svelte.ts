@@ -99,8 +99,9 @@ async function postSync(changes: SyncChanges): Promise<{ status: number; payload
   return { status: response.status, payload: (await response.json()) as SyncResponse };
 }
 
-async function applyPayload(payload: SyncResponse): Promise<boolean> {
-  const merged = await mergeServerRows(payload.changes);
+async function applyPayload(payload: SyncResponse, pushed: PendingRow[] = []): Promise<boolean> {
+  const justPushed = new Set(pushed.map((item) => `${item.marker.table}:${item.marker.id}`));
+  const merged = await mergeServerRows(payload.changes, justPushed);
   await setCursor(payload.seq);
   return merged;
 }
@@ -115,7 +116,7 @@ async function pushChunk(
 ): Promise<{ merged: boolean; fatalStatus?: number }> {
   const result = await postSync(changesFrom(pending));
   if (result.payload) {
-    const merged = await applyPayload(result.payload);
+    const merged = await applyPayload(result.payload, pending);
     for (const item of pending) {
       await clearDirtyMarker(item.marker);
     }
@@ -136,7 +137,7 @@ async function pushChunk(
   for (const item of pending) {
     const single = await postSync(changesFrom([item]));
     if (single.payload) {
-      merged = (await applyPayload(single.payload)) || merged;
+      merged = (await applyPayload(single.payload, [item])) || merged;
       await clearDirtyMarker(item.marker);
       continue;
     }

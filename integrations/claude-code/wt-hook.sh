@@ -3,9 +3,10 @@
 # so agent working time is tracked automatically and survives crashes.
 #
 # Wired via .claude/settings.json (see settings.json.example next to this file):
-#   wt-hook.sh start      <- SessionStart (startup|resume|clear|compact|fork)
-#   wt-hook.sh heartbeat  <- UserPromptSubmit / PostToolUse / Stop / PreCompact
-#   wt-hook.sh stop       <- SessionEnd
+#   wt-hook.sh start       <- SessionStart (startup|resume|clear|compact|fork)
+#   wt-hook.sh heartbeat   <- UserPromptSubmit / PostToolUse / Stop / PreCompact
+#   wt-hook.sh tool_start  <- PreToolUse
+#   wt-hook.sh stop        <- SessionEnd
 #
 # Requires two environment variables:
 #   WORKTIME_URL    e.g. https://wt.example.com (no trailing slash)
@@ -83,6 +84,23 @@ collect_context() {
     BRANCH=$(json_escape "$BRANCH")
 }
 
+# UTC offset in minutes. Only a known offset lets the server tell whether a pause
+# crossed the local midnight, and 0 has to mean UTC rather than "unknown", so an
+# unparsable value is left out of the body entirely.
+tz_offset_min() {
+    zone=$(date +%z 2>/dev/null || true)
+    case "$zone" in
+        [+-][0-9][0-9][0-9][0-9])
+            sign=$(printf '%s' "$zone" | cut -c1)
+            hours=$(printf '%s' "$zone" | cut -c2-3)
+            minutes=$(printf '%s' "$zone" | cut -c4-5)
+            total=$((10#$hours * 60 + 10#$minutes))
+            [ "$sign" = "-" ] && total=$((-total))
+            printf '%s' "$total"
+            ;;
+    esac
+}
+
 # send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry)
 send() {
     code=$(curl -sS -o /dev/null -w '%{http_code}' -m 3 -X POST "$1" \
@@ -158,11 +176,20 @@ SOURCE=$(json_string source)
 case "$EVENT" in
     start)
         collect_context
+        TZ_FIELD=""
+        OFFSET=$(tz_offset_min)
+        [ -z "$OFFSET" ] || TZ_FIELD=",\"tz_offset_min\":$OFFSET"
         deliver "$SESSION_URL/start" \
-            "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"}"
+            "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
         ;;
     heartbeat)
         deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)}"
+        ;;
+    tool_start)
+        # PreToolUse, i.e. *before* the tool runs. Without it a twenty minute Bash
+        # or Task call is indistinguishable from an empty chair: every other hook
+        # fires only once the gap has already happened.
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms),\"activity\":\"tool_start\"}"
         ;;
     stop)
         # SessionEnd fires with reason=resume when the session is handed over to a

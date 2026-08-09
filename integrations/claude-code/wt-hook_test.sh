@@ -148,6 +148,27 @@ check "each spooled request is delivered exactly once" "$spooled" 5
 check "the queue is drained" "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 0
 check "the lock directory is released" "$(find "$WORK/queue" -name '.lock' | wc -l | tr -d ' ')" 0
 
+# --- the tool_start signal and the timezone -------------------------------------
+reset_log toolstart
+rm -rf "$WORK/queue"
+run_hook tool_start "{\"session_id\":\"$SESSION\"}"
+case "$(cut -f2 "$WT_STUB_LOG")" in
+    *'"activity":"tool_start"'*) result=marked ;;
+    *) result="unexpected: $(cut -f2 "$WT_STUB_LOG")" ;;
+esac
+check "PreToolUse marks the signal as a tool start" "$result" marked
+check "the tool start is a heartbeat" "$(cut -f1 "$WT_STUB_LOG")" \
+    "http://worktime.test/api/agent/sessions/$SESSION/heartbeat"
+
+reset_log tz
+rm -rf "$WORK/queue"
+run_hook start "{\"session_id\":\"$SESSION\",\"cwd\":\"/tmp/project\"}"
+case "$(cut -f2 "$WT_STUB_LOG")" in
+    *'"tz_offset_min":'[-0-9]*) result=sent ;;
+    *) result="missing: $(cut -f2 "$WT_STUB_LOG")" ;;
+esac
+check "start carries the local UTC offset in minutes" "$result" sent
+
 # --- the hook always exits 0 ----------------------------------------------------
 reset_log exitcode
 rm -rf "$WORK/queue"

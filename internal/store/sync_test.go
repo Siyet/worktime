@@ -280,3 +280,64 @@ func TestSyncCannotClaimAgentSession(t *testing.T) {
 		t.Fatalf("the edit itself must apply, got %q", after.Description)
 	}
 }
+
+func TestSyncPausedMsIsServerOwned(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "paused@test.local")
+	ctx := context.Background()
+
+	// A client creating a row cannot hand itself a pause: it would be free
+	// unbilled time on a row nobody but the client ever touched.
+	entryID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{{
+		ID: entryID, Description: "mine", StartedAt: 1000, StoppedAt: msPointer(4000),
+		CreatedAt: 1000, UpdatedAt: 1000, PausedMs: 999,
+	}}}}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	created, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if created.PausedMs != 0 {
+		t.Fatalf("insert must ignore paused_ms, got %d", created.PausedMs)
+	}
+
+	// The agent's own row keeps its pause across an ordinary edit, and the value
+	// reaches clients through the normal pull.
+	sessionID := uuid.NewString()
+	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	gap := testIdleMs + 60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+gap)
+
+	agentEntry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get agent entry: %v", err)
+	}
+	if agentEntry.PausedMs != gap {
+		t.Fatalf("expected the gap paused, got %d", agentEntry.PausedMs)
+	}
+	agentEntry.PausedMs = 0
+	agentEntry.Description = "edited"
+	pushEntry(t, testStore, user.ID, agentEntry)
+
+	pulled, err := testStore.Sync(ctx, user.ID, SyncRequest{Since: 0})
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	var seen *TimeEntry
+	for index := range pulled.Changes.TimeEntries {
+		if pulled.Changes.TimeEntries[index].ID == agentEntry.ID {
+			seen = &pulled.Changes.TimeEntries[index]
+		}
+	}
+	if seen == nil {
+		t.Fatal("the agent entry must come back in the pull")
+	}
+	if seen.PausedMs != gap {
+		t.Fatalf("an update must not change paused_ms, got %d", seen.PausedMs)
+	}
+	if seen.Description != "edited" {
+		t.Fatalf("the edit itself must apply, got %q", seen.Description)
+	}
+}

@@ -15,6 +15,14 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.worktime/wt-hook.sh\" tool_start", "async": true }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",

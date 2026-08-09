@@ -197,3 +197,39 @@ describe("buildCSV", () => {
     expect(lines[2]).toContain(",30");
   });
 });
+
+describe("toReportEntries with agent pauses", () => {
+  const base: TimeEntry = {
+    id: "paused",
+    project_id: null,
+    description: "agent work",
+    tags: [],
+    started_at: Date.parse("2026-07-01T09:00"),
+    stopped_at: Date.parse("2026-07-01T12:00"),
+    created_at: 0,
+    updated_at: 0,
+    deleted_at: null,
+  };
+
+  it("reports billable minutes, not the whole interval", () => {
+    const [entry] = toReportEntries([{ ...base, paused_ms: 60 * 60_000 }]);
+    expect(entry!.minutes).toBe(120);
+  });
+
+  it("leaves an entry without the field exactly as before", () => {
+    const [entry] = toReportEntries([base]);
+    expect(entry!.minutes).toBe(180);
+  });
+
+  it("models a paused entry as a shorter interval for overlaps-once", () => {
+    // The compressed interval is what keeps ordinary entries' numbers identical:
+    // a partner entry starting after the billable end no longer overlaps.
+    const paused = toReportEntries([{ ...base, paused_ms: 2 * 60 * 60_000 }]);
+    const partner = toReportEntries([
+      { ...base, id: "partner", started_at: Date.parse("2026-07-01T10:30"), stopped_at: Date.parse("2026-07-01T11:30") },
+    ]);
+    const shares = splitOverlapMinutes([...paused, ...partner]);
+    expect(shares.get("paused")).toBe(60);
+    expect(shares.get("partner")).toBe(60);
+  });
+});

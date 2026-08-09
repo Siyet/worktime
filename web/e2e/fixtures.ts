@@ -74,11 +74,14 @@ interface Fixtures {
   server: WorktimeServer;
   /** Running server WITHOUT dev auth (for sign-in screen tests). */
   serverNoAuth: WorktimeServer;
-  /**
-   * Server with agent thresholds compressed from minutes to seconds, so idle
-   * gaps and the reconciliation job can be observed inside a test timeout.
-   */
+  /** Server for agent-session tests: the reconciliation job runs every second. */
   agentServer: WorktimeServer;
+  /**
+   * Same, but a session goes stale after three seconds of silence, so the
+   * reconciliation path can be observed inside a test timeout. Kept separate:
+   * with that grace period no running row survives long enough to be clicked.
+   */
+  agentServerStale: WorktimeServer;
 }
 
 export const test = base.extend<Fixtures>({
@@ -97,11 +100,16 @@ export const test = base.extend<Fixtures>({
   agentServer: async ({}, use) => {
     const { server, child, dataDir } = await launchServer({
       devAuth: true,
-      env: {
-        WORKTIME_AGENT_IDLE: "2s",
-        WORKTIME_AGENT_GRACE: "3s",
-        WORKTIME_AGENT_RECONCILE: "1s",
-      },
+      env: { WORKTIME_AGENT_RECONCILE: "1s" },
+    });
+    await use(server);
+    child.kill();
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 3 });
+  },
+  agentServerStale: async ({}, use) => {
+    const { server, child, dataDir } = await launchServer({
+      devAuth: true,
+      env: { WORKTIME_AGENT_GRACE: "3s", WORKTIME_AGENT_RECONCILE: "1s" },
     });
     await use(server);
     child.kill();

@@ -60,13 +60,14 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		nextSeq++
 	}
 	for _, entry := range request.Changes.TimeEntries {
-		// agent_session_id is server-owned: a literal NULL on insert (the id comes
-		// from the client, so a pushed value could claim a foreign session) and
-		// absent from the update list (a push never rewrites it).
+		// agent_session_id and paused_ms are server-owned: literal values on insert
+		// (ids come from the client, so a pushed value could claim a foreign session
+		// or hand the row a pause it never had) and absent from the update list, so
+		// a push never rewrites them.
 		_, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
-			                          created_at, updated_at, deleted_at, server_seq, agent_session_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+			                          created_at, updated_at, deleted_at, server_seq, agent_session_id, paused_ms)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				project_id = excluded.project_id, description = excluded.description, tags = excluded.tags,
 				started_at = excluded.started_at, stopped_at = excluded.stopped_at,
@@ -120,7 +121,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 
 	entryRows, err := transaction.QueryContext(ctx, `
 		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
-		       server_seq, agent_session_id
+		       server_seq, agent_session_id, paused_ms
 		FROM time_entries WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
 	if err != nil {
 		return SyncResponse{}, err
@@ -128,7 +129,8 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	for entryRows.Next() {
 		var entry TimeEntry
 		if err := entryRows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
-			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID); err != nil {
+			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID,
+			&entry.PausedMs); err != nil {
 			entryRows.Close()
 			return SyncResponse{}, err
 		}

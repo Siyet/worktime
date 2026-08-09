@@ -26,8 +26,15 @@ type Config struct {
 	// reconciliation job closes it at the last heartbeat.
 	AgentGrace time.Duration
 	// AgentIdle is the largest gap between agent heartbeats still billed as
-	// continuous work; a larger gap splits the session into a new time entry.
+	// continuous work; a larger gap is subtracted from the entry as a pause
+	// instead of being billed.
 	AgentIdle time.Duration
+	// AgentToolMax caps how much of a gap that began with a tool call is still
+	// billed, so a hung tool cannot bill forever.
+	AgentToolMax time.Duration
+	// AgentMaxPause is the pause after which the entry is cut in two even when the
+	// agent's timezone is unknown, so a night break cannot merge two days.
+	AgentMaxPause time.Duration
 	// AgentReconcile is how often the reconciliation job runs. Configurable so the
 	// end-to-end suite can watch a session go stale inside a test timeout.
 	AgentReconcile time.Duration
@@ -43,6 +50,8 @@ func Load() Config {
 		BaseURL:            envOr("WORKTIME_BASE_URL", "http://localhost:8080"),
 		AgentGrace:         envDuration("WORKTIME_AGENT_GRACE", 10*time.Minute),
 		AgentIdle:          envDuration("WORKTIME_AGENT_IDLE", 10*time.Minute),
+		AgentToolMax:       envDuration("WORKTIME_AGENT_TOOL_MAX", 30*time.Minute),
+		AgentMaxPause:      envDuration("WORKTIME_AGENT_MAX_PAUSE", 4*time.Hour),
 		AgentReconcile:     envDuration("WORKTIME_AGENT_RECONCILE", time.Minute),
 	}
 	for _, email := range strings.Split(os.Getenv("WORKTIME_ALLOWED_EMAILS"), ",") {

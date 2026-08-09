@@ -66,9 +66,9 @@ func (s *Store) copyUserRows(ctx context.Context, alias, userID string) error {
 		 SELECT id, user_id, name, color, archived, created_at, updated_at, deleted_at, server_seq
 		 FROM projects WHERE user_id = ?`,
 		`INSERT INTO %[1]s.time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
-		                                 created_at, updated_at, deleted_at, server_seq, agent_session_id)
+		                                 created_at, updated_at, deleted_at, server_seq, agent_session_id, paused_ms)
 		 SELECT id, user_id, project_id, description, tags, started_at, stopped_at,
-		        created_at, updated_at, deleted_at, server_seq, agent_session_id
+		        created_at, updated_at, deleted_at, server_seq, agent_session_id, paused_ms
 		 FROM time_entries WHERE user_id = ?`,
 		`INSERT INTO %[1]s.time_off (id, user_id, kind, date_from, date_to, note, created_at, updated_at, deleted_at, server_seq)
 		 SELECT id, user_id, kind, date_from, date_to, note, created_at, updated_at, deleted_at, server_seq

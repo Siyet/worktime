@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,7 +17,11 @@ const (
 	agentBaseMs = int64(1_700_000_000_000)
 )
 
-var testPolicy = AgentPolicy{IdleMs: testIdleMs}
+var testPolicy = AgentPolicy{
+	IdleMs:     testIdleMs,
+	ToolMaxMs:  30 * 60 * 1000,
+	MaxPauseMs: 4 * 60 * 60 * 1000,
+}
 
 func startTestAgentSession(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64) AgentSession {
 	t.Helper()
@@ -240,38 +246,293 @@ func TestAgentHeartbeatFillsMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestAgentIdleGapSplitsSegments(t *testing.T) {
+func TestAgentIdleGapKeepsOneEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-idle@test.local")
 	ctx := context.Background()
 
 	sessionID := uuid.NewString()
 	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	firstEntryID := *started.TimeEntryID
+	entryID := *started.TimeEntryID
 
 	lastActive := agentBaseMs + 60_000
 	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 
-	// Silence longer than the idle threshold: the gap must not be billed.
-	afterIdle := lastActive + testIdleMs + 300_000
+	// Silence longer than the idle threshold: the gap must not be billed, but it
+	// must not cost the session its entry either - one session is one row.
+	gap := testIdleMs + 300_000
+	afterIdle := lastActive + gap
 	session := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
-	if *session.TimeEntryID == firstEntryID {
-		t.Fatal("expected a new segment entry after the idle gap")
+	if *session.TimeEntryID != entryID {
+		t.Fatal("an idle gap must not open a second entry")
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt != nil {
+		t.Fatalf("the entry must still be running: %+v", entry)
+	}
+	if entry.PausedMs != gap {
+		t.Fatalf("expected the whole gap paused, got %d of %d", entry.PausedMs, gap)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
+	}
+}
+
+func TestAgentDurationExcludesPause(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-duration@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	// A minute of work, twenty minutes of nothing, another minute, then stop.
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	resumed := agentBaseMs + 60_000 + 20*60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, resumed)
+	testHeartbeat(t, testStore, user.ID, sessionID, resumed+60_000)
+	testStop(t, testStore, user.ID, sessionID, resumed+60_000, "prompt_input_exit")
+
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	billable := *entry.StoppedAt - entry.StartedAt - entry.PausedMs
+	if billable != 120_000 {
+		t.Fatalf("expected two billed minutes, got %d ms (paused %d)", billable, entry.PausedMs)
+	}
+}
+
+func TestAgentPausedMsNeverExceedsSpan(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-pause-bounds@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	// Out of order, repeated and far apart signals in one go.
+	moments := []int64{60_000, 61_000, 20 * 60_000, 20*60_000 + 1, 90 * 60_000, 30 * 60_000, 95 * 60_000}
+	for _, offset := range moments {
+		if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+			AgentSignal{At: agentBaseMs + offset}, testPolicy); err != nil {
+			t.Fatalf("heartbeat at +%d: %v", offset, err)
+		}
+	}
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+95*60_000, "other")
+
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	span := *entry.StoppedAt - entry.StartedAt
+	if entry.PausedMs < 0 || entry.PausedMs > span {
+		t.Fatalf("paused_ms %d is outside 0..%d", entry.PausedMs, span)
+	}
+}
+
+func TestAgentLongToolRunBilledUpToCap(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-tool@test.local")
+	ctx := context.Background()
+
+	// A twenty minute tool call is work in full: PostToolUse only fires once the
+	// tool is done, so without the tool_start marker the gap looks like idling.
+	shortRun := uuid.NewString()
+	shortStarted := startTestAgentSession(t, testStore, user.ID, shortRun, agentBaseMs)
+	if _, err := testStore.AgentHeartbeat(ctx, user.ID, shortRun,
+		AgentSignal{At: agentBaseMs + 60_000, Kind: AgentKindToolStart}, testPolicy); err != nil {
+		t.Fatalf("tool start: %v", err)
+	}
+	testHeartbeat(t, testStore, user.ID, shortRun, agentBaseMs+60_000+20*60_000)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *shortStarted.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.PausedMs != 0 {
+		t.Fatalf("a tool run inside the cap must be billed in full, paused %d", entry.PausedMs)
 	}
 
-	firstEntry, err := testStore.GetTimeEntry(ctx, user.ID, firstEntryID)
+	// A forty five minute one bills the first thirty and pauses the rest: a hung
+	// tool must not bill forever, and one minute over the cap must not lose all.
+	longRun := uuid.NewString()
+	longStarted := startTestAgentSession(t, testStore, user.ID, longRun, agentBaseMs)
+	if _, err := testStore.AgentHeartbeat(ctx, user.ID, longRun,
+		AgentSignal{At: agentBaseMs + 60_000, Kind: AgentKindToolStart}, testPolicy); err != nil {
+		t.Fatalf("tool start: %v", err)
+	}
+	testHeartbeat(t, testStore, user.ID, longRun, agentBaseMs+60_000+45*60_000)
+	entry, err = testStore.GetTimeEntry(ctx, user.ID, *longStarted.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.PausedMs != 15*60_000 {
+		t.Fatalf("expected 15 minutes paused past the cap, got %d", entry.PausedMs)
+	}
+}
+
+func TestAgentResumeDoesNotPauseBilledTail(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-resume@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	endedAt := agentBaseMs + 5*60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, endedAt)
+	testStop(t, testStore, user.ID, sessionID, endedAt, "prompt_input_exit")
+
+	// --resume right away: the interval up to ended_at is already billed, so
+	// measuring the gap from the watermark would pause it a second time.
+	resumed := endedAt + 60_000
+	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: resumed,
+	}, testPolicy); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.PausedMs != 0 {
+		t.Fatalf("a one minute resume gap is under the idle threshold, paused %d", entry.PausedMs)
+	}
+	if entry.StoppedAt != nil {
+		t.Fatalf("the entry must be running again: %+v", entry)
+	}
+}
+
+func TestAgentMidnightGapSplitsEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-midnight@test.local")
+	ctx := context.Background()
+
+	// UTC+3: local midnight is 21:00 UTC, so 23:30 -> 00:30 local crosses it.
+	offset := 180
+	sessionID := uuid.NewString()
+	evening := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC).UnixMilli()
+	started, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: evening, TZOffsetMin: &offset,
+	}, testPolicy)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	lastEvening := time.Date(2026, 7, 1, 20, 30, 0, 0, time.UTC).UnixMilli()
+	testHeartbeat(t, testStore, user.ID, sessionID, lastEvening)
+
+	morning := time.Date(2026, 7, 1, 21, 30, 0, 0, time.UTC).UnixMilli()
+	session := testHeartbeat(t, testStore, user.ID, sessionID, morning)
+	if *session.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("a pause across the local midnight must open a new entry")
+	}
+	if session.Status != agentStatusActive {
+		t.Fatalf("the session must stay active after the cut: %+v", session)
+	}
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get first entry: %v", err)
 	}
-	if firstEntry.StoppedAt == nil || *firstEntry.StoppedAt != lastActive {
-		t.Fatalf("first segment must stop at the last heartbeat, got %+v", firstEntry)
+	if first.StoppedAt == nil || *first.StoppedAt != lastEvening {
+		t.Fatalf("the evening entry must end at the last activity: %+v", first)
 	}
-	secondEntry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get second entry: %v", err)
 	}
-	if secondEntry.StartedAt != afterIdle || secondEntry.StoppedAt != nil {
-		t.Fatalf("unexpected second segment: %+v", secondEntry)
+	if second.StartedAt != morning || second.PausedMs != 0 {
+		t.Fatalf("unexpected morning entry: %+v", second)
+	}
+
+	// Reconciliation still owns the new entry, which is the point of keeping the
+	// session active through the cut.
+	closed, err := testStore.ReconcileAgentSessions(ctx, morning+testGraceMs+1000, testGraceMs)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("expected the session to be reconciled, got %d", closed)
+	}
+}
+
+func TestAgentUnknownTimezoneNeverSplits(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-notz@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	evening := time.Date(2026, 7, 1, 20, 30, 0, 0, time.UTC).UnixMilli()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, evening)
+	morning := time.Date(2026, 7, 1, 21, 30, 0, 0, time.UTC).UnixMilli()
+	session := testHeartbeat(t, testStore, user.ID, sessionID, morning)
+	if *session.TimeEntryID != *started.TimeEntryID {
+		t.Fatal("without a known offset there is no local midnight to cut at")
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.PausedMs != morning-evening {
+		t.Fatalf("the whole gap must be paused, got %d", entry.PausedMs)
+	}
+}
+
+func TestAgentMaxPauseSplitsEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-maxpause@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	// Longer than the maximum pause and with no timezone known: the
+	// timezone-independent guard has to cut the entry anyway.
+	afterNight := agentBaseMs + 5*60*60*1000
+	session := testHeartbeat(t, testStore, user.ID, sessionID, afterNight)
+	if *session.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("a pause longer than the maximum must open a new entry")
+	}
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get first entry: %v", err)
+	}
+	if first.StoppedAt == nil || *first.StoppedAt != agentBaseMs {
+		t.Fatalf("unexpected first entry: %+v", first)
+	}
+}
+
+func TestAgentConcurrentHeartbeats(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-concurrent@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+
+	var waitGroup sync.WaitGroup
+	for index := int64(0); index < 4; index++ {
+		waitGroup.Add(1)
+		go func(offset int64) {
+			defer waitGroup.Done()
+			if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+				AgentSignal{At: agentBaseMs + 30_000 + offset}, testPolicy); err != nil {
+				t.Errorf("heartbeat: %v", err)
+			}
+		}(index * 10)
+	}
+	waitGroup.Wait()
+
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if *session.TimeEntryID != *started.TimeEntryID {
+		t.Fatal("concurrent heartbeats must not fork the entry")
+	}
+	if session.LastHeartbeatAt != agentBaseMs+30_030 {
+		t.Fatalf("the watermark must hold the newest signal, got %d", session.LastHeartbeatAt)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
 	}
 }
 
@@ -805,8 +1066,10 @@ func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 
 	sessionID := uuid.NewString()
 	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// An idle gap leaves the session with two entries; both belong to the task.
-	afterIdle := agentBaseMs + testIdleMs + 60_000
+	// A pause past the maximum leaves the session with two entries; both belong
+	// to the same task, and half the work would keep the technical name if only
+	// the current entry were renamed.
+	afterIdle := agentBaseMs + 5*60*60*1000
 	second := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
 	if *second.TimeEntryID == *started.TimeEntryID {
 		t.Fatal("expected two segments for this test")

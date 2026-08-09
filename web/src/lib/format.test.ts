@@ -44,6 +44,15 @@ describe("entryDurationMs", () => {
   it("never goes negative on a hand-edited boundary", () => {
     expect(entryDurationMs(makeEntry({ stopped_at: 999_000 }), 0)).toBe(0);
   });
+
+  it("subtracts the idle time an agent session recorded", () => {
+    expect(entryDurationMs(makeEntry({ paused_ms: 20_000 }), 0)).toBe(40_000);
+    expect(entryDurationMs(makeEntry({ stopped_at: null, paused_ms: 10_000 }), 1_030_000)).toBe(20_000);
+  });
+
+  it("clamps a pause larger than the interval a hand-edited boundary left", () => {
+    expect(entryDurationMs(makeEntry({ paused_ms: 999_999 }), 0)).toBe(0);
+  });
 });
 
 describe("sessionTag", () => {

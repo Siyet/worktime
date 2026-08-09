@@ -66,3 +66,30 @@ func TestBuildReport(t *testing.T) {
 		t.Fatalf("expected 2 vacation days inside window, got %+v", report.TimeOff)
 	}
 }
+
+func TestBuildReportExcludesAgentPause(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "report-pause@test.local")
+	ctx := context.Background()
+
+	// One agent session: a minute of work, a long gap, another minute, stop.
+	// The server report has to bill the two minutes, not the whole interval.
+	sessionID := uuid.NewString()
+	startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	resumed := agentBaseMs + 60_000 + 20*60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, resumed)
+	testHeartbeat(t, testStore, user.ID, sessionID, resumed+60_000)
+	testStop(t, testStore, user.ID, sessionID, resumed+60_000, "other")
+
+	report, err := testStore.BuildReport(ctx, user.ID, agentBaseMs-1000, resumed+120_000)
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(report.Projects) != 1 {
+		t.Fatalf("expected one project row, got %+v", report.Projects)
+	}
+	if report.Projects[0].TotalMs != 120_000 {
+		t.Fatalf("expected two billed minutes, got %d", report.Projects[0].TotalMs)
+	}
+}

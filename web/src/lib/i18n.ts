@@ -172,6 +172,7 @@ const ru: Dictionary = {
   Collapse: "Свернуть",
   "{n} entries overlapped; on the clock this is {wall}": "{n} записей шли одновременно, по часам это {wall}",
   "On the clock: {wall}": "По часам: {wall}",
+  "{n} of idle time inside this entry is not counted.": "{n} простоя внутри этой записи не учитывается.",
 };
 
 const es: Dictionary = {
@@ -343,6 +344,7 @@ const es: Dictionary = {
   Collapse: "Plegar",
   "{n} entries overlapped; on the clock this is {wall}": "{n} registros se solaparon; en reloj son {wall}",
   "On the clock: {wall}": "En reloj: {wall}",
+  "{n} of idle time inside this entry is not counted.": "{n} de inactividad dentro de este registro no se cuenta.",
 };
 
 const de: Dictionary = {
@@ -513,6 +515,7 @@ const de: Dictionary = {
   Collapse: "Zuklappen",
   "{n} entries overlapped; on the clock this is {wall}": "{n} Einträge überschnitten sich; nach der Uhr sind das {wall}",
   "On the clock: {wall}": "Nach der Uhr: {wall}",
+  "{n} of idle time inside this entry is not counted.": "{n} Leerlauf innerhalb dieses Eintrags wird nicht gezählt.",
 };
 
 const fr: Dictionary = {
@@ -685,6 +688,7 @@ const fr: Dictionary = {
   Collapse: "Replier",
   "{n} entries overlapped; on the clock this is {wall}": "{n} entrées se chevauchaient ; à l'horloge cela fait {wall}",
   "On the clock: {wall}": "À l'horloge : {wall}",
+  "{n} of idle time inside this entry is not counted.": "{n} d'inactivité dans cette entrée ne sont pas comptés.",
 };
 
 const zh: Dictionary = {
@@ -853,6 +857,7 @@ const zh: Dictionary = {
   Collapse: "折叠",
   "{n} entries overlapped; on the clock this is {wall}": "{n} 条记录同时进行，按时钟计为 {wall}",
   "On the clock: {wall}": "按时钟：{wall}",
+  "{n} of idle time inside this entry is not counted.": "这条记录中有 {n} 的空闲时间未计入。",
 };
 
 const dictionaries: Record<Exclude<Locale, "en">, Dictionary> = { ru, es, de, fr, zh };

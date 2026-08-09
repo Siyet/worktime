@@ -252,6 +252,11 @@
     ),
   );
 
+  // Idle time an agent session subtracted from this entry. durationLabel is
+  // computed from the form fields, not from the row, so the two would otherwise
+  // disagree with nothing on screen to explain the difference.
+  const pausedMs = $derived(current?.paused_ms ?? 0);
+
   function projectName(projectID: string | null): string {
     return projectByID(projectID)?.name ?? "";
   }
@@ -296,6 +301,12 @@
             <span>{t("next starts")} <b>{neighbours.nextStart}</b></span>
           {/if}
         </p>
+      {/if}
+
+      {#if pausedMs > 0}
+        <!-- Without this line the interval and the duration disagree by an
+             amount nothing on screen explains: the agent's idle time. -->
+        <p class="ed-hint">{t("{n} of idle time inside this entry is not counted.", { n: formatDurationShort(pausedMs) })}</p>
       {/if}
 
       {#if stoppedRemotely}

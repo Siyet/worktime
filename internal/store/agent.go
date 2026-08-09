@@ -49,7 +49,15 @@ const (
 	maxAgentTaskTitleLength = 200
 
 	agentSessionColumns = `id, project_id, source, status, started_at, last_heartbeat_at, ended_at, end_reason,
-		cwd, git_branch, model, time_entry_id, task_key, task_title, entry_server_seq, entry_user_named`
+		cwd, git_branch, model, time_entry_id, task_key, task_title, entry_server_seq, entry_user_named,
+		tz_offset_min, last_kind`
+
+	// AgentKindToolStart marks the signal sent before a tool runs. It is the only
+	// way the server can tell "a 20 minute Bash call" from "nobody was there":
+	// PostToolUse and SubagentStop both fire after the gap has already happened.
+	AgentKindToolStart = "tool_start"
+
+	msPerDay = int64(24 * 60 * 60 * 1000)
 )
 
 type AgentSession struct {
@@ -73,35 +81,52 @@ type AgentSession struct {
 	// EntryUserNamed records that the entry's description was chosen by the user,
 	// which stops the session from ever fixing the name again.
 	EntryUserNamed bool `json:"entry_user_named"`
+	// TZOffsetMin is the agent's UTC offset in minutes, nullable because 0 is a
+	// valid offset (UTC) and "unknown" has to stay distinguishable from it.
+	TZOffsetMin *int `json:"tz_offset_min"`
+	// LastKind is the kind of the previous signal (see AgentKindToolStart).
+	LastKind string `json:"last_kind"`
 }
 
 // AgentPolicy carries the thresholds an activity signal is judged against. It
 // travels as one value so that adding a threshold never grows a parameter list.
 type AgentPolicy struct {
 	// IdleMs is the largest gap between signals still billed as continuous work;
-	// a larger gap splits the session into a new time entry.
+	// a larger gap is not billed at all.
 	IdleMs int64
+	// ToolMaxMs caps how much of a gap that started with a tool call is still
+	// billed. A ceiling, not a switch: a 45 minute gap after a tool start bills
+	// the first 30 and pauses the rest, so a hung tool cannot bill forever and a
+	// tool one minute over the limit does not lose everything.
+	ToolMaxMs int64
+	// MaxPauseMs is the pause after which the entry is cut in two even when the
+	// timezone is unknown. Without it a night break would glue yesterday and
+	// today into one row dated yesterday.
+	MaxPauseMs int64
 }
 
 // AgentStart carries the payload of a start signal. Zero StartedAt means "now".
 type AgentStart struct {
-	SessionID string
-	StartedAt int64
-	Source    string
-	Cwd       string
-	GitBranch string
-	Model     string
-	ProjectID *string
+	SessionID   string
+	StartedAt   int64
+	Source      string
+	Cwd         string
+	GitBranch   string
+	Model       string
+	ProjectID   *string
+	TZOffsetMin *int
 }
 
 // AgentSignal is one activity report (heartbeat or stop). The metadata fields are
 // optional: they only fill values a lost start never delivered, and never
 // overwrite what the session already knows.
 type AgentSignal struct {
-	At        int64
-	Cwd       string
-	GitBranch string
-	Model     string
+	At          int64
+	Kind        string
+	Cwd         string
+	GitBranch   string
+	Model       string
+	TZOffsetMin *int
 }
 
 // StartAgentSession creates the session and its running time entry, or, when the
@@ -142,6 +167,7 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 			ID: params.SessionID, ProjectID: params.ProjectID, Source: params.Source,
 			Status: agentStatusActive, StartedAt: params.StartedAt, LastHeartbeatAt: params.StartedAt,
 			Cwd: params.Cwd, GitBranch: params.GitBranch, Model: params.Model,
+			TZOffsetMin: validTZOffset(params.TZOffsetMin),
 		}
 		entry, err := createAgentEntry(ctx, transaction, userID, session, params.StartedAt, now)
 		if err != nil {
@@ -149,11 +175,12 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 		}
 		_, err = transaction.ExecContext(ctx, `
 			INSERT INTO agent_sessions (id, user_id, project_id, source, status, started_at, last_heartbeat_at,
-			                            cwd, git_branch, model, time_entry_id, entry_server_seq, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			                            cwd, git_branch, model, tz_offset_min, time_entry_id, entry_server_seq,
+			                            created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.ID, userID, session.ProjectID, session.Source, session.Status,
 			session.StartedAt, session.LastHeartbeatAt, session.Cwd, session.GitBranch, session.Model,
-			entry.id, entry.serverSeq, now, now)
+			session.TZOffsetMin, entry.id, entry.serverSeq, now, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
@@ -176,14 +203,19 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 			}
 			session.ProjectID = params.ProjectID
 		}
+		if offset := validTZOffset(params.TZOffsetMin); offset != nil {
+			session.TZOffsetMin = offset
+		}
 		_, err = transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET project_id = ?, cwd = ?, git_branch = ?, model = ?, updated_at = ?
+			UPDATE agent_sessions SET project_id = ?, cwd = ?, git_branch = ?, model = ?, tz_offset_min = ?, updated_at = ?
 			WHERE id = ? AND user_id = ?`,
-			session.ProjectID, session.Cwd, session.GitBranch, session.Model, now, session.ID, userID)
+			session.ProjectID, session.Cwd, session.GitBranch, session.Model, session.TZOffsetMin,
+			now, session.ID, userID)
 		if err != nil {
 			return AgentSession{}, err
 		}
-		if err := advanceAgentSession(ctx, transaction, userID, &session, params.StartedAt, policy, now); err != nil {
+		signal := AgentSignal{At: params.StartedAt, Kind: "start", TZOffsetMin: session.TZOffsetMin}
+		if err := advanceAgentSession(ctx, transaction, userID, &session, signal, policy, now); err != nil {
 			return AgentSession{}, err
 		}
 	}
@@ -217,6 +249,7 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, si
 			ID: sessionID, Source: defaultAgentSource,
 			Status: agentStatusActive, StartedAt: signal.At, LastHeartbeatAt: signal.At,
 			Cwd: signal.Cwd, GitBranch: signal.GitBranch, Model: signal.Model,
+			TZOffsetMin: signal.TZOffsetMin, LastKind: signal.Kind,
 		}
 		entry, err := createAgentEntry(ctx, transaction, userID, session, signal.At, now)
 		if err != nil {
@@ -224,10 +257,12 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, si
 		}
 		_, err = transaction.ExecContext(ctx, `
 			INSERT INTO agent_sessions (id, user_id, source, status, started_at, last_heartbeat_at,
-			                            cwd, git_branch, model, time_entry_id, entry_server_seq, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			                            cwd, git_branch, model, tz_offset_min, last_kind,
+			                            time_entry_id, entry_server_seq, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.ID, userID, session.Source, session.Status, session.StartedAt, session.LastHeartbeatAt,
-			session.Cwd, session.GitBranch, session.Model, entry.id, entry.serverSeq, now, now)
+			session.Cwd, session.GitBranch, session.Model, session.TZOffsetMin, session.LastKind,
+			entry.id, entry.serverSeq, now, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
@@ -237,7 +272,7 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, si
 		if err := applyAgentMetadata(ctx, transaction, userID, &session, signal, now); err != nil {
 			return AgentSession{}, err
 		}
-		if err := advanceAgentSession(ctx, transaction, userID, &session, signal.At, policy, now); err != nil {
+		if err := advanceAgentSession(ctx, transaction, userID, &session, signal, policy, now); err != nil {
 			return AgentSession{}, err
 		}
 	}
@@ -477,14 +512,17 @@ type agentEntry struct {
 }
 
 // advanceAgentSession applies an activity signal at the given moment: it revives
-// a closed session, splits the segment after an idle gap, adopts or replaces an
-// entry that changed outside the agent flow, and always leaves the session active
-// with its watermark moved forward. Every branch runs through the same tail, so
-// the session can never end up closed while still holding a running entry - the
-// reconciliation job only looks at active sessions and would never close it.
-func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, at int64, policy AgentPolicy, now int64) error {
+// a closed session, subtracts an idle gap from the entry instead of cutting it,
+// adopts or replaces an entry that changed outside the agent flow, and always
+// leaves the session active with its watermark moved forward. Every branch runs
+// through the same tail, so the session can never end up closed while still
+// holding a running entry - the reconciliation job only looks at active sessions
+// and nothing else would ever close that row.
+func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, signal AgentSignal, policy AgentPolicy, now int64) error {
+	at := signal.At
 	// The last moment already paid for. Measuring the gap from the watermark alone
-	// would count the tail of a normally stopped session twice.
+	// would count the tail of a normally stopped session twice: after a stop the
+	// entry is already billed up to ended_at.
 	mark := session.LastHeartbeatAt
 	if session.EndedAt != nil && *session.EndedAt > mark {
 		mark = *session.EndedAt
@@ -501,23 +539,56 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		return err
 	}
 
+	opened := false
 	if current != nil && at-mark > policy.IdleMs {
-		// Idle longer than the threshold: the gap is not work. Close the segment at
-		// the last moment that was, and start a fresh one at the new signal.
-		if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, mark, now); err != nil {
-			return err
+		// A gap that started with a tool call is work up to the cap: PostToolUse
+		// only fires once the tool is done, so a long Bash or Task looks exactly
+		// like an empty chair from here.
+		billable := int64(0)
+		if session.LastKind == AgentKindToolStart {
+			billable = min(at-mark, policy.ToolMaxMs)
 		}
-		current = nil
+		workedUntil := mark + billable
+		if idle := at - workedUntil; idle > 0 {
+			switch {
+			case crossesLocalMidnight(workedUntil, at, session.TZOffsetMin) || idle > policy.MaxPauseMs:
+				// A pause across the local midnight has to cut: reports put an entry
+				// on the day it started, so gluing them would move this morning's work
+				// into yesterday and inflate that day's total.
+				if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, workedUntil, now); err != nil {
+					return err
+				}
+				current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
+				if err != nil {
+					return err
+				}
+				opened = true
+			default:
+				if err := addAgentPause(ctx, transaction, userID, current, idle, now); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	if current == nil {
 		current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
 		if err != nil {
 			return err
 		}
-	} else if err := reopenAgentEntry(ctx, transaction, userID, current, now); err != nil {
+		opened = true
+	}
+	if !opened {
 		// The session was stopped and is now active again: it continues writing into
 		// the row it already owns rather than leaving a second one behind.
-		return err
+		if err := reopenAgentEntry(ctx, transaction, userID, current, now); err != nil {
+			return err
+		}
+	}
+	if opened && signal.TZOffsetMin != nil {
+		// The offset is fixed when the entry opens and not touched again while it
+		// runs: a flight or a DST switch mid-entry would otherwise redefine which
+		// day the pause crossed.
+		session.TZOffsetMin = signal.TZOffsetMin
 	}
 	if err := renameAgentEntry(ctx, transaction, userID, *session, current, policy, now); err != nil {
 		return err
@@ -532,14 +603,69 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	session.TimeEntryID = &current.id
 	session.EntryServerSeq = &current.serverSeq
 	session.EntryUserNamed = current.userNamed
+	session.LastKind = truncateRunes(signal.Kind, maxAgentShortLength)
 	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions SET status = ?, ended_at = NULL, end_reason = NULL,
 		       time_entry_id = ?, entry_server_seq = ?, entry_user_named = ?,
-		       last_heartbeat_at = ?, updated_at = ?
+		       last_heartbeat_at = ?, last_kind = ?, tz_offset_min = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
 		agentStatusActive, current.id, current.serverSeq, current.userNamed,
-		session.LastHeartbeatAt, now, session.ID, userID)
+		session.LastHeartbeatAt, session.LastKind, session.TZOffsetMin, now, session.ID, userID)
 	return err
+}
+
+// crossesLocalMidnight reports whether the interval spans a local calendar day
+// boundary. An unknown offset never counts as a crossing: guessing UTC would cut
+// entries at the wrong moment for most of the planet, and MaxPauseMs is the
+// timezone-independent guard for that case.
+func crossesLocalMidnight(fromMs, toMs int64, offsetMin *int) bool {
+	if offsetMin == nil {
+		return false
+	}
+	shift := int64(*offsetMin) * 60_000
+	return floorDiv(fromMs+shift, msPerDay) != floorDiv(toMs+shift, msPerDay)
+}
+
+func floorDiv(value, divisor int64) int64 {
+	quotient := value / divisor
+	if value%divisor != 0 && (value < 0) != (divisor < 0) {
+		quotient--
+	}
+	return quotient
+}
+
+// validTZOffset drops values outside the range real timezones live in, so a
+// broken hook cannot move an entry to a different day.
+func validTZOffset(offsetMin *int) *int {
+	if offsetMin == nil || *offsetMin < -12*60 || *offsetMin > 14*60 {
+		return nil
+	}
+	return offsetMin
+}
+
+// addAgentPause records idle time inside the entry instead of cutting the entry
+// in two. The guard on server_seq keeps a row someone else has just changed from
+// being written blind; the caller has already checked ownership.
+func addAgentPause(ctx context.Context, transaction *sql.Tx, userID string, entry *agentEntry, pauseMs, now int64) error {
+	seq, err := allocateServerSeq(transaction, 1)
+	if err != nil {
+		return err
+	}
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE time_entries SET paused_ms = paused_ms + ?, updated_at = ?, server_seq = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
+		pauseMs, now, seq, entry.id, userID, entry.serverSeq)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		entry.serverSeq = seq
+	}
+	return nil
 }
 
 // resolveAgentEntry decides what happens to the row the session points at.
@@ -851,13 +977,17 @@ func applyAgentMetadata(ctx context.Context, transaction *sql.Tx, userID string,
 		session.Model = signal.Model
 		changed = true
 	}
+	if session.TZOffsetMin == nil && signal.TZOffsetMin != nil {
+		session.TZOffsetMin = signal.TZOffsetMin
+		changed = true
+	}
 	if !changed {
 		return nil
 	}
 	_, err := transaction.ExecContext(ctx, `
-		UPDATE agent_sessions SET cwd = ?, git_branch = ?, model = ?, updated_at = ?
+		UPDATE agent_sessions SET cwd = ?, git_branch = ?, model = ?, tz_offset_min = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
-		session.Cwd, session.GitBranch, session.Model, now, session.ID, userID)
+		session.Cwd, session.GitBranch, session.Model, session.TZOffsetMin, now, session.ID, userID)
 	return err
 }
 
@@ -865,9 +995,11 @@ func sanitizeAgentSignal(signal AgentSignal, now int64) AgentSignal {
 	if signal.At <= 0 {
 		signal.At = now
 	}
+	signal.Kind = truncateRunes(signal.Kind, maxAgentShortLength)
 	signal.Cwd = truncateRunes(signal.Cwd, maxAgentCwdLength)
 	signal.GitBranch = truncateRunes(signal.GitBranch, maxAgentBranchLength)
 	signal.Model = truncateRunes(signal.Model, maxAgentModelLength)
+	signal.TZOffsetMin = validTZOffset(signal.TZOffsetMin)
 	return signal
 }
 
@@ -885,7 +1017,8 @@ func scanAgentSession(row rowScanner) (AgentSession, error) {
 	err := row.Scan(&session.ID, &session.ProjectID, &session.Source, &session.Status,
 		&session.StartedAt, &session.LastHeartbeatAt, &session.EndedAt, &session.EndReason,
 		&session.Cwd, &session.GitBranch, &session.Model, &session.TimeEntryID,
-		&session.TaskKey, &session.TaskTitle, &session.EntryServerSeq, &session.EntryUserNamed)
+		&session.TaskKey, &session.TaskTitle, &session.EntryServerSeq, &session.EntryUserNamed,
+		&session.TZOffsetMin, &session.LastKind)
 	return session, err
 }
 

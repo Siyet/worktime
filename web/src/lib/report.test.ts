@@ -72,6 +72,12 @@ describe("groupKeysOf", () => {
     expect(groupKeysOf(makeEntry({ tags: ["a", "b", "c"] }), "tag")).toEqual(["a", "b", "c"]);
     expect(groupKeysOf(makeEntry({ tags: [] }), "tag")).toEqual([UNTAGGED_KEY]);
   });
+
+  it("groups descriptions by their normalised spelling, like the timer list", () => {
+    expect(groupKeysOf(makeEntry({ description: "API  Work " }), "description")).toEqual(
+      groupKeysOf(makeEntry({ description: "api work" }), "description"),
+    );
+  });
 });
 
 describe("apportion", () => {

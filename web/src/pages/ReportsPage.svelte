@@ -267,6 +267,15 @@
   const billableOf = (entry: ReportEntry) =>
     overlapOnce ? minutesOf(entry) : roundMinutes(entry.minutes, effectiveRounding);
 
+  // Description groups are keyed by the normalised spelling, so the label comes
+  // from the newest member instead - lowercased keys are not what was typed.
+  function newestDescription(rows: TableRow[]): string {
+    return rows.reduce(
+      (newest, row) => (row.entry.startedAt >= newest.startedAt ? row.entry : newest),
+      rows[0]!.entry,
+    ).description;
+  }
+
   const tableGroups = $derived.by(() => {
     const groups = new Map<string, { minutes: number; rows: TableRow[] }>();
     for (const entry of filteredEntries) {
@@ -293,7 +302,7 @@
           : groupBy === "project"
             ? chipName(key)
             : groupBy === "description"
-              ? key || t("(no description)")
+              ? newestDescription(bucket.rows) || t("(no description)")
               : key,
       color: groupBy === "project" ? chipColor(key) : null,
       minutes: bucket.minutes,

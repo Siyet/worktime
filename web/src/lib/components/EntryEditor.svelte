@@ -6,9 +6,10 @@
   // only the fields the user touched into whatever the row looks like at save
   // time, so a concurrent Stop (other device, MCP) is not undone and tags
   // written by another writer are not blanked.
-  import { appState, clock, entryTags, updateEntry } from "../state/app.svelte";
+  import { appState, clock, entryTags, projectByID, updateEntry } from "../state/app.svelte";
   import { formatDurationShort, formatTime, localDateISO } from "../format";
   import { t } from "../i18n";
+  import { taskSuggestions } from "../tasks";
   import type { TimeEntry } from "../types";
   import {
     calendarDayDiff,
@@ -19,6 +20,7 @@
     shiftDateISO,
     timeOfDayFromMs,
   } from "../time-input";
+  import DescriptionInput from "./DescriptionInput.svelte";
   import ProjectSelect from "./ProjectSelect.svelte";
   import TagPicker from "./TagPicker.svelte";
 
@@ -239,6 +241,25 @@
   const activeProjects = $derived(
     appState.projects.filter((project) => !project.archived).sort((a, b) => a.name.localeCompare(b.name)),
   );
+
+  // Renaming an entry to an existing task is what puts it into that task's
+  // group, so the same suggestions belong here.
+  const suggestions = $derived(
+    taskSuggestions(
+      appState.entries.filter((entry) => entry.id !== entryID),
+      draftDescription,
+      clock.now,
+    ),
+  );
+
+  function projectName(projectID: string | null): string {
+    return projectByID(projectID)?.name ?? "";
+  }
+
+  function applySuggestion(suggestion: { projectID: string | null; tags: string[] }) {
+    if (draftProjectID === null) draftProjectID = suggestion.projectID;
+    if (draftTags.length === 0) draftTags = [...suggestion.tags];
+  }
 </script>
 
 <dialog class="sheet" bind:this={dialogElement} aria-labelledby="ed-title" onclose={() => onclose()}>
@@ -283,7 +304,14 @@
 
       <div class="ed-field">
         <label class="ed-label" for="ed-desc">{t("Description")}</label>
-        <input id="ed-desc" bind:value={draftDescription} maxlength="2000" />
+        <DescriptionInput
+          id="ed-desc"
+          bind:value={draftDescription}
+          {suggestions}
+          {projectName}
+          onpick={applySuggestion}
+          maxlength={2000}
+        />
       </div>
 
       <div class="ed-field">

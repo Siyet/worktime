@@ -50,6 +50,8 @@ export interface WorktimeServer {
 
 interface ServerOptions {
   devAuth: boolean;
+  /** Extra environment for the server process (agent thresholds, for example). */
+  env?: Record<string, string>;
 }
 
 async function launchServer(options: ServerOptions): Promise<{ server: WorktimeServer; child: ChildProcess; dataDir: string }> {
@@ -59,6 +61,7 @@ async function launchServer(options: ServerOptions): Promise<{ server: WorktimeS
     WORKTIME_ADDR: `127.0.0.1:${port}`,
     WORKTIME_DB: path.join(dataDir, "e2e.db"),
     WORKTIME_DEV_AUTH: options.devAuth ? "1" : "",
+    ...options.env,
   };
   const child = spawn(binaryPath, [], { env: { ...process.env, ...env }, stdio: "ignore" });
   const url = `http://127.0.0.1:${port}`;
@@ -71,6 +74,11 @@ interface Fixtures {
   server: WorktimeServer;
   /** Running server WITHOUT dev auth (for sign-in screen tests). */
   serverNoAuth: WorktimeServer;
+  /**
+   * Server with agent thresholds compressed from minutes to seconds, so idle
+   * gaps and the reconciliation job can be observed inside a test timeout.
+   */
+  agentServer: WorktimeServer;
 }
 
 export const test = base.extend<Fixtures>({
@@ -82,6 +90,19 @@ export const test = base.extend<Fixtures>({
   },
   serverNoAuth: async ({}, use) => {
     const { server, child, dataDir } = await launchServer({ devAuth: false });
+    await use(server);
+    child.kill();
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 3 });
+  },
+  agentServer: async ({}, use) => {
+    const { server, child, dataDir } = await launchServer({
+      devAuth: true,
+      env: {
+        WORKTIME_AGENT_IDLE: "2s",
+        WORKTIME_AGENT_GRACE: "3s",
+        WORKTIME_AGENT_RECONCILE: "1s",
+      },
+    });
     await use(server);
     child.kill();
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 3 });

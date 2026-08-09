@@ -166,6 +166,12 @@ const ru: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Твои проекты, записи и отсутствия одним файлом SQLite.",
   "Download .sqlite": "Скачать .sqlite",
+  "Recent tasks": "Недавние задачи",
+  "{n} entries": "записей: {n}",
+  Expand: "Развернуть",
+  Collapse: "Свернуть",
+  "{n} entries overlapped; on the clock this is {wall}": "{n} записей шли одновременно, по часам это {wall}",
+  "On the clock: {wall}": "По часам: {wall}",
 };
 
 const es: Dictionary = {
@@ -331,6 +337,12 @@ const es: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Tus proyectos, registros y ausencias en un único archivo SQLite.",
   "Download .sqlite": "Descargar .sqlite",
+  "Recent tasks": "Tareas recientes",
+  "{n} entries": "{n} registros",
+  Expand: "Desplegar",
+  Collapse: "Plegar",
+  "{n} entries overlapped; on the clock this is {wall}": "{n} registros se solaparon; en reloj son {wall}",
+  "On the clock: {wall}": "En reloj: {wall}",
 };
 
 const de: Dictionary = {
@@ -495,6 +507,12 @@ const de: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Deine Projekte, Einträge und Abwesenheiten als eigenständige SQLite-Datei.",
   "Download .sqlite": ".sqlite herunterladen",
+  "Recent tasks": "Letzte Aufgaben",
+  "{n} entries": "{n} Einträge",
+  Expand: "Aufklappen",
+  Collapse: "Zuklappen",
+  "{n} entries overlapped; on the clock this is {wall}": "{n} Einträge überschnitten sich; nach der Uhr sind das {wall}",
+  "On the clock: {wall}": "Nach der Uhr: {wall}",
 };
 
 const fr: Dictionary = {
@@ -661,6 +679,12 @@ const fr: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Tes projets, entrées et absences dans un seul fichier SQLite.",
   "Download .sqlite": "Télécharger .sqlite",
+  "Recent tasks": "Tâches récentes",
+  "{n} entries": "{n} entrées",
+  Expand: "Déplier",
+  Collapse: "Replier",
+  "{n} entries overlapped; on the clock this is {wall}": "{n} entrées se chevauchaient ; à l'horloge cela fait {wall}",
+  "On the clock: {wall}": "À l'horloge : {wall}",
 };
 
 const zh: Dictionary = {
@@ -823,6 +847,12 @@ const zh: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "你的项目、记录和休假打包为一个 SQLite 文件。",
   "Download .sqlite": "下载 .sqlite",
+  "Recent tasks": "最近的任务",
+  "{n} entries": "{n} 条记录",
+  Expand: "展开",
+  Collapse: "折叠",
+  "{n} entries overlapped; on the clock this is {wall}": "{n} 条记录同时进行，按时钟计为 {wall}",
+  "On the clock: {wall}": "按时钟：{wall}",
 };
 
 const dictionaries: Record<Exclude<Locale, "en">, Dictionary> = { ru, es, de, fr, zh };

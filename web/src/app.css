@@ -328,8 +328,11 @@ button.tag:focus-visible {
 
 /* --- entry row -------------------------------------------------------------
    Still .row.item flex. .main takes the slack with min-width:0, .when has a
-   fixed basis, so no description or tag list can push the right column. */
-.item .main {
+   fixed basis, so no description or tag list can push the right column. The
+   grouped-task summary row shares the layout: it is the same row, for several
+   entries at once. */
+.item .main,
+.group-row .main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -359,7 +362,8 @@ button.tag:focus-visible {
   color: var(--accent);
 }
 
-.item .meta {
+.item .meta,
+.group-row .meta {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -367,14 +371,16 @@ button.tag:focus-visible {
   font-size: 0.85rem;
 }
 
-.item .meta .proj {
+.item .meta .proj,
+.group-row .meta .proj {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 0 1 auto;
 }
 
-.item .when {
+.item .when,
+.group-row .when {
   flex: 0 0 auto;
   display: flex;
   align-items: baseline;
@@ -384,12 +390,14 @@ button.tag:focus-visible {
   text-align: right;
 }
 
-.item .when .dur {
+.item .when .dur,
+.group-row .when .dur {
   min-width: 4.4rem;
 }
 
 @media (max-width: 34rem) {
-  .item .when {
+  .item .when,
+  .group-row .when {
     flex-direction: column;
     align-items: flex-end;
     gap: 0;
@@ -397,11 +405,13 @@ button.tag:focus-visible {
   }
 
   /* The end time is derivable from the next row's start; it goes first. */
-  .item .when .to {
+  .item .when .to,
+  .group-row .when .to {
     display: none;
   }
 
-  .item .when .dur {
+  .item .when .dur,
+  .group-row .when .dur {
     min-width: 0;
   }
 
@@ -416,17 +426,20 @@ button.tag:focus-visible {
   /* One-truncation law: only .proj may ellipsize (the dot already encodes the
      project). Chips and the +N counter are atomic; when project + chips don't
      fit, the tag block wraps to its own line with full labels. */
-  .item .meta {
+  .item .meta,
+  .group-row .meta {
     flex-wrap: wrap;
     row-gap: 0.1rem;
   }
 
-  .item .meta .tags {
+  .item .meta .tags,
+  .group-row .meta .tags {
     flex: 0 0 auto;
     flex-wrap: wrap;
   }
 
-  .item .meta .tags .tag {
+  .item .meta .tags .tag,
+  .group-row .meta .tags .tag {
     flex: 0 0 auto;
   }
 }

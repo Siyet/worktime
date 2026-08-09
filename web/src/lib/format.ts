@@ -1,4 +1,23 @@
 import { formattingLocale, hourCycle, prefs } from "./settings.svelte";
+import type { TimeEntry } from "./types";
+
+// The one place that knows what an entry's duration is. Running entries are
+// measured against `now`, which is what makes offline timers work at all.
+export function entryDurationMs(entry: TimeEntry, now: number): number {
+  return Math.max(0, (entry.stopped_at ?? now) - entry.started_at);
+}
+
+// Two spellings of the same task must not read as two tasks. Same argument as
+// normaliseTag in state/app.svelte.ts: descriptions are values, not ids.
+export function descriptionKey(description: string): string {
+  return description.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// The short form of an agent session id, matching what the server puts into an
+// entry name before the task is known (AgentSessionTag in internal/store).
+export function sessionTag(sessionID: string): string {
+  return sessionID.replaceAll("-", "").slice(0, 8).toLowerCase();
+}
 
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));

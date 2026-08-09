@@ -58,6 +58,27 @@ export async function seedDemoDataIfEmpty(): Promise<void> {
       startedAt += (minutes + 15 + Math.floor(random() * 40)) * 60_000;
     }
   }
+  // The same task picked up three times yesterday: the demo has to show what
+  // the grouped row looks like, not only single entries.
+  const yesterdayNine = new Date(now - day);
+  yesterdayNine.setHours(9, 0, 0, 0);
+  for (const [offsetMinutes, minutes] of [
+    [0, 55],
+    [130, 40],
+    [300, 70],
+  ]) {
+    const startedAt = yesterdayNine.getTime() + offsetMinutes! * 60_000;
+    entries.push({
+      id: uuidv7(),
+      project_id: projects[0]!.id,
+      description: "Code review",
+      started_at: startedAt,
+      stopped_at: startedAt + minutes! * 60_000,
+      created_at: startedAt,
+      updated_at: startedAt,
+      deleted_at: null,
+    });
+  }
   entries.push({
     id: uuidv7(),
     project_id: projects[0]!.id,

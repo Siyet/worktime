@@ -25,6 +25,10 @@ export interface TimeEntry {
   updated_at: number;
   deleted_at: number | null;
   server_seq?: number;
+  // Server-owned, and optional for the same reason as tags: rows written before
+  // agent tracking shipped, and rows from an unmigrated server, carry no key.
+  // Present only on rows an agent session produced.
+  agent_session_id?: string | null;
 }
 
 export type TimeOffKind = "sick" | "vacation" | "dayoff";

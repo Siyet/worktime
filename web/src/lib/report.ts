@@ -1,6 +1,6 @@
 // Pure report computations shared by the Reports page and the printable report.
 // All durations are whole minutes; days are local YYYY-MM-DD strings.
-import { localDateISO } from "./format";
+import { descriptionKey, localDateISO } from "./format";
 import { formattingLocale } from "./settings.svelte";
 import type { TimeEntry, TimeOff, TimeOffKind } from "./types";
 
@@ -47,10 +47,13 @@ export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {
 // the untagged bucket. Every entry has at least one key under every grouping,
 // and an entry's weight inside one of its groups is billable / keys.length, so
 // Σ groups = Σ entries regardless of the grouping.
+// Descriptions group by their normalised form, the same key the Timer page
+// groups by; the label has to be taken from an entry, not from the key, or
+// "API work" would be displayed as "api work".
 export function groupKeysOf(entry: ReportEntry, groupBy: GroupBy): string[] {
   if (groupBy === "project") return [entry.projectID ?? NO_PROJECT_KEY];
   if (groupBy === "day") return [entry.date];
-  if (groupBy === "description") return [entry.description];
+  if (groupBy === "description") return [descriptionKey(entry.description)];
   return entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY];
 }
 

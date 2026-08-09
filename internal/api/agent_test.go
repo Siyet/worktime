@@ -92,3 +92,31 @@ func TestAgentSessionEndpointErrors(t *testing.T) {
 		t.Fatalf("expected 404 stopping an unknown session, got %d", response.StatusCode)
 	}
 }
+
+func TestAgentHeartbeatAcceptsOptionalMetadata(t *testing.T) {
+	testServer := newAgentTestServer(t)
+	sessionID := uuid.NewString()
+	base := testServer.URL + "/api/agent/sessions/" + sessionID
+	startedAt := int64(1_700_000_000_000)
+
+	// A session first seen from a heartbeat (the start was lost) still learns its
+	// working directory and branch.
+	response, session := postAgentJSON(t, base+"/heartbeat", map[string]any{
+		"at": startedAt, "activity": "prompt", "cwd": "/home/dev/worktime", "git_branch": "main",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("heartbeat: expected 200, got %d", response.StatusCode)
+	}
+	if session.Cwd != "/home/dev/worktime" || session.GitBranch != "main" {
+		t.Fatalf("metadata was not stored: %+v", session)
+	}
+
+	// A hook shipped before those fields existed sends only "at" and keeps working.
+	response, session = postAgentJSON(t, base+"/heartbeat", map[string]any{"at": startedAt + 60_000})
+	if response.StatusCode != http.StatusOK || session.LastHeartbeatAt != startedAt+60_000 {
+		t.Fatalf("bare heartbeat: status %d, session %+v", response.StatusCode, session)
+	}
+	if session.Cwd != "/home/dev/worktime" {
+		t.Fatalf("a bare heartbeat must not clear metadata: %+v", session)
+	}
+}

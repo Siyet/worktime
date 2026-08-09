@@ -143,6 +143,28 @@ CREATE TABLE agent_sessions (
 );
 CREATE INDEX idx_agent_sessions_open ON agent_sessions(user_id, status, last_heartbeat_at);
 `,
+	// 005: an agent entry is named after the tracker task the session belongs to
+	// (set through the set_agent_task MCP tool), and until that is known after the
+	// session itself, so two concurrent sessions never share a name. Ownership of the
+	// produced row is tracked by server_seq: a mismatch means someone edited the row
+	// outside the agent flow. agent_session_id is the back reference an entry needs
+	// to be renamed later and to be labelled in the UI; it is the only column of this
+	// migration that reaches clients.
+	`
+ALTER TABLE agent_sessions ADD COLUMN entry_server_seq INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN entry_user_named INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_sessions ADD COLUMN task_key   TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_sessions ADD COLUMN task_title TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE time_entries ADD COLUMN agent_session_id TEXT;
+CREATE INDEX idx_time_entries_agent_session ON time_entries(agent_session_id);
+
+-- Live sessions must stay owners of their entries: without the backfill the first
+-- signal after the deploy would abandon a running row nobody could close anymore.
+UPDATE agent_sessions
+SET entry_server_seq = (SELECT server_seq FROM time_entries WHERE time_entries.id = agent_sessions.time_entry_id)
+WHERE time_entry_id IS NOT NULL;
+`,
 }
 
 type Store struct {

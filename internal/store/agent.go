@@ -13,6 +13,14 @@ package store
 // current segment at the previous heartbeat and opens a new one, so idle
 // time in the middle of a session is never billed. Trailing idle is trimmed
 // the same way on stop and by reconciliation.
+//
+// The entry is named after the tracker task the session belongs to, set
+// explicitly through the set_agent_task MCP tool. Until the task is known the
+// entry carries a short session tag, which keeps two concurrent sessions
+// visibly different rows. Ownership of the row is tracked through server_seq:
+// when it no longer matches what the session wrote last, the row was changed
+// outside the agent flow and the session either adopts it (a live row, edited)
+// or lets it go and opens a new one (deleted, or stopped by the user).
 
 import (
 	"context"
@@ -34,10 +42,14 @@ const (
 
 	defaultAgentSource = "claude-code"
 
-	maxAgentCwdLength    = 500
-	maxAgentBranchLength = 200
-	maxAgentModelLength  = 100
-	maxAgentShortLength  = 64
+	maxAgentCwdLength       = 500
+	maxAgentBranchLength    = 200
+	maxAgentModelLength     = 100
+	maxAgentShortLength     = 64
+	maxAgentTaskTitleLength = 200
+
+	agentSessionColumns = `id, project_id, source, status, started_at, last_heartbeat_at, ended_at, end_reason,
+		cwd, git_branch, model, time_entry_id, task_key, task_title, entry_server_seq, entry_user_named`
 )
 
 type AgentSession struct {
@@ -53,6 +65,22 @@ type AgentSession struct {
 	GitBranch       string  `json:"git_branch"`
 	Model           string  `json:"model"`
 	TimeEntryID     *string `json:"time_entry_id"`
+	TaskKey         string  `json:"task_key"`
+	TaskTitle       string  `json:"task_title"`
+	// EntryServerSeq is the server_seq the session itself last wrote to its entry.
+	// NULL means "ownership unknown" (a session from before the column existed).
+	EntryServerSeq *int64 `json:"entry_server_seq"`
+	// EntryUserNamed records that the entry's description was chosen by the user,
+	// which stops the session from ever fixing the name again.
+	EntryUserNamed bool `json:"entry_user_named"`
+}
+
+// AgentPolicy carries the thresholds an activity signal is judged against. It
+// travels as one value so that adding a threshold never grows a parameter list.
+type AgentPolicy struct {
+	// IdleMs is the largest gap between signals still billed as continuous work;
+	// a larger gap splits the session into a new time entry.
+	IdleMs int64
 }
 
 // AgentStart carries the payload of a start signal. Zero StartedAt means "now".
@@ -66,10 +94,20 @@ type AgentStart struct {
 	ProjectID *string
 }
 
+// AgentSignal is one activity report (heartbeat or stop). The metadata fields are
+// optional: they only fill values a lost start never delivered, and never
+// overwrite what the session already knows.
+type AgentSignal struct {
+	At        int64
+	Cwd       string
+	GitBranch string
+	Model     string
+}
+
 // StartAgentSession creates the session and its running time entry, or, when the
 // same session id is replayed (--continue / --resume), refreshes metadata and
 // treats the call as an activity signal. Replaying never duplicates entries.
-func (s *Store) StartAgentSession(ctx context.Context, userID string, params AgentStart, idleMs int64) (AgentSession, error) {
+func (s *Store) StartAgentSession(ctx context.Context, userID string, params AgentStart, policy AgentPolicy) (AgentSession, error) {
 	if err := uuid.Validate(params.SessionID); err != nil {
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, params.SessionID)
 	}
@@ -105,24 +143,24 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 			Status: agentStatusActive, StartedAt: params.StartedAt, LastHeartbeatAt: params.StartedAt,
 			Cwd: params.Cwd, GitBranch: params.GitBranch, Model: params.Model,
 		}
-		entryID, err := createAgentEntry(ctx, transaction, userID, session, params.StartedAt, now)
+		entry, err := createAgentEntry(ctx, transaction, userID, session, params.StartedAt, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
 		_, err = transaction.ExecContext(ctx, `
 			INSERT INTO agent_sessions (id, user_id, project_id, source, status, started_at, last_heartbeat_at,
-			                            cwd, git_branch, model, time_entry_id, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			                            cwd, git_branch, model, time_entry_id, entry_server_seq, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.ID, userID, session.ProjectID, session.Source, session.Status,
 			session.StartedAt, session.LastHeartbeatAt, session.Cwd, session.GitBranch, session.Model,
-			entryID, now, now)
+			entry.id, entry.serverSeq, now, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
 	case err != nil:
 		return AgentSession{}, err
 	default:
-		// Replay: refresh metadata first so a reopened segment gets a fresh description.
+		// Replay: start is the authoritative source of metadata, so it overwrites.
 		if params.Cwd != "" {
 			session.Cwd = params.Cwd
 		}
@@ -145,7 +183,7 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 		if err != nil {
 			return AgentSession{}, err
 		}
-		if err := advanceAgentSession(ctx, transaction, userID, &session, params.StartedAt, idleMs, now); err != nil {
+		if err := advanceAgentSession(ctx, transaction, userID, &session, params.StartedAt, policy, now); err != nil {
 			return AgentSession{}, err
 		}
 	}
@@ -155,15 +193,13 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 
 // AgentHeartbeat records an activity signal. An unknown session id is created
 // implicitly, so heartbeats surviving a lost start still produce a session.
-// A heartbeat on a closed session reopens it with a new segment.
-func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, at, idleMs int64) (AgentSession, error) {
+// A heartbeat on a closed session revives it.
+func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, signal AgentSignal, policy AgentPolicy) (AgentSession, error) {
 	if err := uuid.Validate(sessionID); err != nil {
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, sessionID)
 	}
 	now := time.Now().UnixMilli()
-	if at <= 0 {
-		at = now
-	}
+	signal = sanitizeAgentSignal(signal, now)
 
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -179,25 +215,29 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, at
 		}
 		session = AgentSession{
 			ID: sessionID, Source: defaultAgentSource,
-			Status: agentStatusActive, StartedAt: at, LastHeartbeatAt: at,
+			Status: agentStatusActive, StartedAt: signal.At, LastHeartbeatAt: signal.At,
+			Cwd: signal.Cwd, GitBranch: signal.GitBranch, Model: signal.Model,
 		}
-		entryID, err := createAgentEntry(ctx, transaction, userID, session, at, now)
+		entry, err := createAgentEntry(ctx, transaction, userID, session, signal.At, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
 		_, err = transaction.ExecContext(ctx, `
 			INSERT INTO agent_sessions (id, user_id, source, status, started_at, last_heartbeat_at,
-			                            time_entry_id, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			                            cwd, git_branch, model, time_entry_id, entry_server_seq, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.ID, userID, session.Source, session.Status, session.StartedAt, session.LastHeartbeatAt,
-			entryID, now, now)
+			session.Cwd, session.GitBranch, session.Model, entry.id, entry.serverSeq, now, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
 	case err != nil:
 		return AgentSession{}, err
 	default:
-		if err := advanceAgentSession(ctx, transaction, userID, &session, at, idleMs, now); err != nil {
+		if err := applyAgentMetadata(ctx, transaction, userID, &session, signal, now); err != nil {
+			return AgentSession{}, err
+		}
+		if err := advanceAgentSession(ctx, transaction, userID, &session, signal.At, policy, now); err != nil {
 			return AgentSession{}, err
 		}
 	}
@@ -209,14 +249,12 @@ func (s *Store) AgentHeartbeat(ctx context.Context, userID, sessionID string, at
 // closed session is a no-op. The end is trimmed to the last heartbeat when the
 // stop arrives after more than the idle threshold of silence, so a stop delivered
 // late (e.g. from the offline queue) never inflates the duration.
-func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID string, endedAt int64, reason string, idleMs int64) (AgentSession, error) {
+func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason string, signal AgentSignal, policy AgentPolicy) (AgentSession, error) {
 	if err := uuid.Validate(sessionID); err != nil {
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, sessionID)
 	}
 	now := time.Now().UnixMilli()
-	if endedAt <= 0 {
-		endedAt = now
-	}
+	signal = sanitizeAgentSignal(signal, now)
 	reason = truncateRunes(reason, maxAgentShortLength)
 	if reason == "" {
 		reason = "other"
@@ -238,18 +276,25 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID string, 
 	if session.Status == agentStatusClosed {
 		return session, nil
 	}
-
-	effectiveEnd := endedAt
-	if endedAt < session.LastHeartbeatAt || endedAt-session.LastHeartbeatAt > idleMs {
-		effectiveEnd = session.LastHeartbeatAt
-	}
-	if err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now); err != nil {
+	if err := applyAgentMetadata(ctx, transaction, userID, &session, signal, now); err != nil {
 		return AgentSession{}, err
 	}
+
+	effectiveEnd := signal.At
+	if signal.At < session.LastHeartbeatAt || signal.At-session.LastHeartbeatAt > policy.IdleMs {
+		effectiveEnd = session.LastHeartbeatAt
+	}
+	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if closed {
+		session.EntryServerSeq = &seq
+	}
 	_, err = transaction.ExecContext(ctx, `
-		UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ?, updated_at = ?
+		UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ?, entry_server_seq = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
-		agentStatusClosed, effectiveEnd, reason, now, sessionID, userID)
+		agentStatusClosed, effectiveEnd, reason, session.EntryServerSeq, now, sessionID, userID)
 	if err != nil {
 		return AgentSession{}, err
 	}
@@ -271,10 +316,11 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 		id              string
 		userID          string
 		timeEntryID     *string
+		entryServerSeq  *int64
 		lastHeartbeatAt int64
 	}
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT id, user_id, time_entry_id, last_heartbeat_at
+		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at
 		FROM agent_sessions WHERE status = ? AND last_heartbeat_at < ?`,
 		agentStatusActive, now-graceMs)
 	if err != nil {
@@ -283,7 +329,8 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	stale := []staleSession{}
 	for rows.Next() {
 		var session staleSession
-		if err := rows.Scan(&session.id, &session.userID, &session.timeEntryID, &session.lastHeartbeatAt); err != nil {
+		if err := rows.Scan(&session.id, &session.userID, &session.timeEntryID,
+			&session.entryServerSeq, &session.lastHeartbeatAt); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -294,13 +341,18 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	}
 
 	for _, session := range stale {
-		if err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, session.lastHeartbeatAt, now); err != nil {
+		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, session.lastHeartbeatAt, now)
+		if err != nil {
 			return 0, err
 		}
-		_, err := transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET status = ?, ended_at = last_heartbeat_at, end_reason = ?, updated_at = ?
+		if closed {
+			session.entryServerSeq = &seq
+		}
+		_, err = transaction.ExecContext(ctx, `
+			UPDATE agent_sessions SET status = ?, ended_at = last_heartbeat_at, end_reason = ?,
+			       entry_server_seq = ?, updated_at = ?
 			WHERE id = ? AND user_id = ?`,
-			agentStatusClosed, AgentEndReasonStale, now, session.id, session.userID)
+			agentStatusClosed, AgentEndReasonStale, session.entryServerSeq, now, session.id, session.userID)
 		if err != nil {
 			return 0, err
 		}
@@ -314,110 +366,526 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 
 // GetAgentSession returns a single session owned by the user.
 func (s *Store) GetAgentSession(ctx context.Context, userID, sessionID string) (AgentSession, error) {
-	session, err := scanAgentSession(s.db.QueryRowContext(ctx, `
-		SELECT id, project_id, source, status, started_at, last_heartbeat_at, ended_at, end_reason,
-		       cwd, git_branch, model, time_entry_id
-		FROM agent_sessions WHERE id = ? AND user_id = ?`, sessionID, userID))
+	session, err := scanAgentSession(s.db.QueryRowContext(ctx,
+		"SELECT "+agentSessionColumns+" FROM agent_sessions WHERE id = ? AND user_id = ?", sessionID, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentSession{}, ErrNotFound
 	}
 	return session, err
 }
 
-// --- internals ---
-
-// advanceAgentSession applies an activity signal at the given moment: it reopens
-// a closed session, splits the segment after an idle gap, or just advances the
-// heartbeat watermark. Out-of-order signals (at < watermark) only touch metadata.
-func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, at, idleMs, now int64) error {
-	switch {
-	case session.Status == agentStatusClosed:
-		entryID, err := createAgentEntry(ctx, transaction, userID, *session, at, now)
-		if err != nil {
-			return err
-		}
-		_, err = transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET status = ?, ended_at = NULL, end_reason = NULL,
-			       time_entry_id = ?, last_heartbeat_at = ?, updated_at = ?
-			WHERE id = ? AND user_id = ?`,
-			agentStatusActive, entryID, at, now, session.ID, userID)
-		return err
-	case at-session.LastHeartbeatAt > idleMs:
-		if err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, session.LastHeartbeatAt, now); err != nil {
-			return err
-		}
-		entryID, err := createAgentEntry(ctx, transaction, userID, *session, at, now)
-		if err != nil {
-			return err
-		}
-		_, err = transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET time_entry_id = ?, last_heartbeat_at = ?, updated_at = ?
-			WHERE id = ? AND user_id = ?`,
-			entryID, at, now, session.ID, userID)
-		return err
-	case at > session.LastHeartbeatAt:
-		_, err := transaction.ExecContext(ctx, `
-			UPDATE agent_sessions SET last_heartbeat_at = ?, updated_at = ?
-			WHERE id = ? AND user_id = ?`,
-			at, now, session.ID, userID)
-		return err
-	default:
-		return nil
+// ListActiveAgentSessions returns the user's open sessions, newest first.
+func (s *Store) ListActiveAgentSessions(ctx context.Context, userID string) ([]AgentSession, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+agentSessionColumns+` FROM agent_sessions
+		 WHERE user_id = ? AND status = ? ORDER BY started_at DESC`, userID, agentStatusActive)
+	if err != nil {
+		return nil, err
 	}
+	sessions := []AgentSession{}
+	for rows.Next() {
+		session, err := scanAgentSession(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, closeRows(rows)
 }
 
-// createAgentEntry opens a new running time entry (a segment) for the session
-// and returns its id. The entry gets a server_seq so clients pull it as usual.
-func createAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, startedAt, now int64) (string, error) {
+// AgentTaskSelector picks the session a task is attached to. An explicit session
+// id wins; otherwise the only active session is used, or the only active session
+// with a matching working directory. Attaching the wrong session silently is
+// worse than asking, so anything else is an error listing the candidates.
+type AgentTaskSelector struct {
+	SessionID string
+	Cwd       string
+}
+
+type AgentTaskResult struct {
+	Session        AgentSession
+	RenamedEntries int
+}
+
+// SetAgentTask names the session after a tracker task and renames every entry the
+// session has produced - not just the current one, because a session split by an
+// idle gap would otherwise leave half its work under the technical name. Entries
+// the user renamed by hand keep their name. Calling it again with the same key
+// changes nothing; with a different key it renames (the task can be corrected).
+func (s *Store) SetAgentTask(ctx context.Context, userID string, selector AgentTaskSelector, taskKey, taskTitle string) (AgentTaskResult, error) {
+	taskKey = strings.TrimSpace(truncateRunes(taskKey, maxAgentShortLength))
+	taskTitle = strings.TrimSpace(truncateRunes(taskTitle, maxAgentTaskTitleLength))
+	if taskKey == "" {
+		return AgentTaskResult{}, fmt.Errorf("%w: task_key is required", ErrInvalidInput)
+	}
+	now := time.Now().UnixMilli()
+
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentTaskResult{}, err
+	}
+	defer transaction.Rollback()
+
+	session, err := selectAgentSession(ctx, transaction, userID, selector)
+	if err != nil {
+		return AgentTaskResult{}, err
+	}
+	if session.TaskKey == taskKey && session.TaskTitle == taskTitle {
+		if err := transaction.Commit(); err != nil {
+			return AgentTaskResult{}, err
+		}
+		return AgentTaskResult{Session: session}, nil
+	}
+
+	previousName := agentEntryDescription(session)
+	session.TaskKey = taskKey
+	session.TaskTitle = taskTitle
+	newName := agentEntryDescription(session)
+
+	renamed, lastSeq, err := renameSessionEntries(ctx, transaction, userID, session, previousName, newName, now)
+	if err != nil {
+		return AgentTaskResult{}, err
+	}
+	if lastSeq != nil {
+		session.EntryServerSeq = lastSeq
+	}
+	_, err = transaction.ExecContext(ctx, `
+		UPDATE agent_sessions SET task_key = ?, task_title = ?, entry_server_seq = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		session.TaskKey, session.TaskTitle, session.EntryServerSeq, now, session.ID, userID)
+	if err != nil {
+		return AgentTaskResult{}, err
+	}
+
+	stored, err := commitAgentSession(ctx, transaction, userID, session.ID)
+	if err != nil {
+		return AgentTaskResult{}, err
+	}
+	return AgentTaskResult{Session: stored, RenamedEntries: renamed}, nil
+}
+
+// --- internals ---
+
+// agentEntry is the session's current entry as a signal handler sees it.
+type agentEntry struct {
+	id          string
+	description string
+	stoppedAt   *int64
+	serverSeq   int64
+	userNamed   bool
+}
+
+// advanceAgentSession applies an activity signal at the given moment: it revives
+// a closed session, splits the segment after an idle gap, adopts or replaces an
+// entry that changed outside the agent flow, and always leaves the session active
+// with its watermark moved forward. Every branch runs through the same tail, so
+// the session can never end up closed while still holding a running entry - the
+// reconciliation job only looks at active sessions and would never close it.
+func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, at int64, policy AgentPolicy, now int64) error {
+	// The last moment already paid for. Measuring the gap from the watermark alone
+	// would count the tail of a normally stopped session twice.
+	mark := session.LastHeartbeatAt
+	if session.EndedAt != nil && *session.EndedAt > mark {
+		mark = *session.EndedAt
+	}
+	// A stale signal (offline queue replay, an async heartbeat overtaken by the
+	// synchronous stop) only refreshes metadata: reviving a session at a moment
+	// already billed would open a second running entry out of thin air.
+	if at <= mark {
+		return nil
+	}
+
+	current, err := resolveAgentEntry(ctx, transaction, userID, session, now)
+	if err != nil {
+		return err
+	}
+
+	if current != nil && at-mark > policy.IdleMs {
+		// Idle longer than the threshold: the gap is not work. Close the segment at
+		// the last moment that was, and start a fresh one at the new signal.
+		if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, mark, now); err != nil {
+			return err
+		}
+		current = nil
+	}
+	if current == nil {
+		current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
+		if err != nil {
+			return err
+		}
+	} else if err := reopenAgentEntry(ctx, transaction, userID, current, now); err != nil {
+		// The session was stopped and is now active again: it continues writing into
+		// the row it already owns rather than leaving a second one behind.
+		return err
+	}
+	if err := renameAgentEntry(ctx, transaction, userID, *session, current, policy, now); err != nil {
+		return err
+	}
+
+	if at > session.LastHeartbeatAt {
+		session.LastHeartbeatAt = at
+	}
+	session.Status = agentStatusActive
+	session.EndedAt = nil
+	session.EndReason = nil
+	session.TimeEntryID = &current.id
+	session.EntryServerSeq = &current.serverSeq
+	session.EntryUserNamed = current.userNamed
+	_, err = transaction.ExecContext(ctx, `
+		UPDATE agent_sessions SET status = ?, ended_at = NULL, end_reason = NULL,
+		       time_entry_id = ?, entry_server_seq = ?, entry_user_named = ?,
+		       last_heartbeat_at = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		agentStatusActive, current.id, current.serverSeq, current.userNamed,
+		session.LastHeartbeatAt, now, session.ID, userID)
+	return err
+}
+
+// resolveAgentEntry decides what happens to the row the session points at.
+// Owning it (server_seq is still the one the session wrote) keeps it as is. A
+// changed row is adopted while it is alive - a project or tag edit must not cost
+// the session its entry - and only the right to fix the name is given up. A row
+// the user deleted or stopped is let go: continuing to write into a stopped row
+// would silently lose the rest of the session. Returns nil when the session has
+// to open a new entry.
+func resolveAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, now int64) (*agentEntry, error) {
+	if session.TimeEntryID == nil {
+		return nil, nil
+	}
+	var (
+		description string
+		stoppedAt   *int64
+		deletedAt   *int64
+		serverSeq   int64
+	)
+	err := transaction.QueryRowContext(ctx, `
+		SELECT description, stopped_at, deleted_at, server_seq FROM time_entries
+		WHERE id = ? AND user_id = ?`, *session.TimeEntryID, userID).
+		Scan(&description, &stoppedAt, &deletedAt, &serverSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if deletedAt != nil {
+		// A tombstone is never resurrected, and closing it would only rewrite it.
+		return nil, nil
+	}
+	// An unknown server_seq (a session predating the column) counts as ownership
+	// confirmed, otherwise the deploy would abandon every live session's entry.
+	owns := session.EntryServerSeq == nil || *session.EntryServerSeq == serverSeq
+	if owns && session.EntryServerSeq != nil {
+		return &agentEntry{
+			id: *session.TimeEntryID, description: description, stoppedAt: stoppedAt,
+			serverSeq: serverSeq, userNamed: session.EntryUserNamed,
+		}, nil
+	}
+	if !owns && stoppedAt != nil {
+		// Stopped by the user: detaching is what keeps the rest of the session
+		// tracked at all, and the row is already closed.
+		return nil, detachAgentEntry(ctx, transaction, userID, session, now)
+	}
+	// Adopted: whether the name is now the user's is decided by the name itself,
+	// so changing a project or a tag never permanently blocks renaming.
+	return &agentEntry{
+		id: *session.TimeEntryID, description: description, stoppedAt: stoppedAt,
+		serverSeq: serverSeq, userNamed: description != agentEntryDescription(*session),
+	}, nil
+}
+
+// detachAgentEntry is the guard on letting an entry go: a row that is somehow
+// still running is closed at the session's last activity first. Nothing closes
+// it afterwards - reconciliation walks sessions, and the session is about to
+// point somewhere else - so an orphan here would run forever. Deleted and
+// already stopped rows are left exactly as they are.
+func detachAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, now int64) error {
+	_, _, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, session.LastHeartbeatAt, now)
+	return err
+}
+
+// createAgentEntry opens a new running time entry (a segment) for the session.
+// The entry gets a server_seq so clients pull it as usual, and agent_session_id
+// so a later set_agent_task can find it.
+func createAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, startedAt, now int64) (*agentEntry, error) {
 	seq, err := allocateServerSeq(transaction, 1)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	entryID, err := uuid.NewV7()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	description := agentEntryDescription(session)
 	_, err = transaction.ExecContext(ctx, `
 		INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
-		                          created_at, updated_at, deleted_at, server_seq)
-		VALUES (?, ?, ?, ?, '[]', ?, NULL, ?, ?, NULL, ?)`,
-		entryID.String(), userID, session.ProjectID, agentEntryDescription(session), startedAt, now, now, seq)
+		                          created_at, updated_at, deleted_at, server_seq, agent_session_id)
+		VALUES (?, ?, ?, ?, '[]', ?, NULL, ?, ?, NULL, ?, ?)`,
+		entryID.String(), userID, session.ProjectID, description, startedAt, now, now, seq, session.ID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return entryID.String(), nil
+	return &agentEntry{id: entryID.String(), description: description, serverSeq: seq}, nil
 }
 
 // closeAgentEntry stops the segment's entry, but only while it is still running
 // and not deleted - a user who already stopped or removed the entry in the PWA
 // wins over the agent flow. MAX() guards against a manually edited started_at.
-func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, entryID *string, stoppedAt, now int64) error {
+// The reported flag says whether a row was actually written, which is what makes
+// the returned seq usable as the session's ownership marker.
+func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, entryID *string, stoppedAt, now int64) (int64, bool, error) {
 	if entryID == nil {
+		return 0, false, nil
+	}
+	seq, err := allocateServerSeq(transaction, 1)
+	if err != nil {
+		return 0, false, err
+	}
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE time_entries SET stopped_at = MAX(started_at, ?), updated_at = ?, server_seq = ?
+		WHERE id = ? AND user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL`,
+		stoppedAt, now, seq, *entryID, userID)
+	if err != nil {
+		return 0, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, false, err
+	}
+	return seq, affected > 0, nil
+}
+
+// reopenAgentEntry lets a revived session continue writing into the row it
+// already owns instead of opening a second one for the same work.
+func reopenAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, entry *agentEntry, now int64) error {
+	if entry.stoppedAt == nil {
 		return nil
 	}
 	seq, err := allocateServerSeq(transaction, 1)
 	if err != nil {
 		return err
 	}
-	_, err = transaction.ExecContext(ctx, `
-		UPDATE time_entries SET stopped_at = MAX(started_at, ?), updated_at = ?, server_seq = ?
-		WHERE id = ? AND user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL`,
-		stoppedAt, now, seq, *entryID, userID)
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE time_entries SET stopped_at = NULL, updated_at = ?, server_seq = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
+		now, seq, entry.id, userID, entry.serverSeq)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		entry.stoppedAt = nil
+		entry.serverSeq = seq
+	}
+	return nil
+}
+
+// renameAgentEntry fixes the entry's name when, and only when, it actually
+// changes: every write bumps server_seq and ships the row to every client, and
+// signals arrive far more often than names change. Entries closed long ago are
+// left alone - silently rewriting yesterday's row is not a rename anyone asked for.
+func renameAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, entry *agentEntry, policy AgentPolicy, now int64) error {
+	label := agentEntryDescription(session)
+	if entry.userNamed || label == entry.description {
+		return nil
+	}
+	if entry.stoppedAt != nil && *entry.stoppedAt < now-policy.IdleMs {
+		return nil
+	}
+	seq, err := allocateServerSeq(transaction, 1)
+	if err != nil {
+		return err
+	}
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE time_entries SET description = ?, updated_at = ?, server_seq = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
+		label, now, seq, entry.id, userID, entry.serverSeq)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		entry.description = label
+		entry.serverSeq = seq
+	}
+	return nil
+}
+
+// renameSessionEntries applies a new task name to every entry the session
+// produced. Only rows still carrying the previous automatic name are touched;
+// anything the user renamed keeps their wording.
+func renameSessionEntries(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, previousName, newName string, now int64) (int, *int64, error) {
+	if previousName == newName {
+		return 0, nil, nil
+	}
+	rows, err := transaction.QueryContext(ctx, `
+		SELECT id, description FROM time_entries
+		WHERE user_id = ? AND agent_session_id = ? AND deleted_at IS NULL
+		ORDER BY started_at`, userID, session.ID)
+	if err != nil {
+		return 0, nil, err
+	}
+	targets := []string{}
+	for rows.Next() {
+		var entryID, description string
+		if err := rows.Scan(&entryID, &description); err != nil {
+			rows.Close()
+			return 0, nil, err
+		}
+		if description != previousName {
+			continue
+		}
+		if session.TimeEntryID != nil && *session.TimeEntryID == entryID && session.EntryUserNamed {
+			continue
+		}
+		targets = append(targets, entryID)
+	}
+	if err := closeRows(rows); err != nil {
+		return 0, nil, err
+	}
+	if len(targets) == 0 {
+		return 0, nil, nil
+	}
+
+	seq, err := allocateServerSeq(transaction, len(targets))
+	if err != nil {
+		return 0, nil, err
+	}
+	var currentSeq *int64
+	for _, entryID := range targets {
+		if _, err := transaction.ExecContext(ctx, `
+			UPDATE time_entries SET description = ?, updated_at = ?, server_seq = ?
+			WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+			newName, now, seq, entryID, userID); err != nil {
+			return 0, nil, err
+		}
+		if session.TimeEntryID != nil && *session.TimeEntryID == entryID {
+			written := seq
+			currentSeq = &written
+		}
+		seq++
+	}
+	return len(targets), currentSeq, nil
+}
+
+// selectAgentSession resolves the session a task applies to, or explains why it
+// cannot: guessing between two live sessions would attach the work to the wrong one.
+func selectAgentSession(ctx context.Context, transaction *sql.Tx, userID string, selector AgentTaskSelector) (AgentSession, error) {
+	if selector.SessionID != "" {
+		session, err := getAgentSession(ctx, transaction, userID, selector.SessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return AgentSession{}, ErrNotFound
+		}
+		return session, err
+	}
+
+	rows, err := transaction.QueryContext(ctx,
+		"SELECT "+agentSessionColumns+` FROM agent_sessions
+		 WHERE user_id = ? AND status = ? ORDER BY started_at DESC`, userID, agentStatusActive)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	candidates := []AgentSession{}
+	for rows.Next() {
+		session, err := scanAgentSession(rows)
+		if err != nil {
+			rows.Close()
+			return AgentSession{}, err
+		}
+		candidates = append(candidates, session)
+	}
+	if err := closeRows(rows); err != nil {
+		return AgentSession{}, err
+	}
+
+	if len(candidates) == 0 {
+		return AgentSession{}, fmt.Errorf("%w: no active agent session; pass session_id", ErrInvalidInput)
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	if selector.Cwd != "" {
+		matched := []AgentSession{}
+		for _, candidate := range candidates {
+			if strings.EqualFold(candidate.Cwd, selector.Cwd) {
+				matched = append(matched, candidate)
+			}
+		}
+		if len(matched) == 1 {
+			return matched[0], nil
+		}
+		if len(matched) > 1 {
+			candidates = matched
+		}
+	}
+	listed := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		listed = append(listed, fmt.Sprintf("%s (cwd %q, started %s)",
+			candidate.ID, candidate.Cwd, time.UnixMilli(candidate.StartedAt).UTC().Format(time.RFC3339)))
+	}
+	return AgentSession{}, fmt.Errorf("%w: %d active agent sessions, pass session_id: %s",
+		ErrInvalidInput, len(candidates), strings.Join(listed, "; "))
+}
+
+// applyAgentMetadata fills session fields a lost start never delivered. Heartbeat
+// and stop are secondary sources: they never overwrite a known value.
+func applyAgentMetadata(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, signal AgentSignal, now int64) error {
+	changed := false
+	if session.Cwd == "" && signal.Cwd != "" {
+		session.Cwd = signal.Cwd
+		changed = true
+	}
+	if session.GitBranch == "" && signal.GitBranch != "" {
+		session.GitBranch = signal.GitBranch
+		changed = true
+	}
+	if session.Model == "" && signal.Model != "" {
+		session.Model = signal.Model
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	_, err := transaction.ExecContext(ctx, `
+		UPDATE agent_sessions SET cwd = ?, git_branch = ?, model = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		session.Cwd, session.GitBranch, session.Model, now, session.ID, userID)
 	return err
 }
 
-func getAgentSession(ctx context.Context, transaction *sql.Tx, userID, sessionID string) (AgentSession, error) {
-	return scanAgentSession(transaction.QueryRowContext(ctx, `
-		SELECT id, project_id, source, status, started_at, last_heartbeat_at, ended_at, end_reason,
-		       cwd, git_branch, model, time_entry_id
-		FROM agent_sessions WHERE id = ? AND user_id = ?`, sessionID, userID))
+func sanitizeAgentSignal(signal AgentSignal, now int64) AgentSignal {
+	if signal.At <= 0 {
+		signal.At = now
+	}
+	signal.Cwd = truncateRunes(signal.Cwd, maxAgentCwdLength)
+	signal.GitBranch = truncateRunes(signal.GitBranch, maxAgentBranchLength)
+	signal.Model = truncateRunes(signal.Model, maxAgentModelLength)
+	return signal
 }
 
-func scanAgentSession(row *sql.Row) (AgentSession, error) {
+func getAgentSession(ctx context.Context, transaction *sql.Tx, userID, sessionID string) (AgentSession, error) {
+	return scanAgentSession(transaction.QueryRowContext(ctx,
+		"SELECT "+agentSessionColumns+" FROM agent_sessions WHERE id = ? AND user_id = ?", sessionID, userID))
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAgentSession(row rowScanner) (AgentSession, error) {
 	var session AgentSession
 	err := row.Scan(&session.ID, &session.ProjectID, &session.Source, &session.Status,
 		&session.StartedAt, &session.LastHeartbeatAt, &session.EndedAt, &session.EndReason,
-		&session.Cwd, &session.GitBranch, &session.Model, &session.TimeEntryID)
+		&session.Cwd, &session.GitBranch, &session.Model, &session.TimeEntryID,
+		&session.TaskKey, &session.TaskTitle, &session.EntryServerSeq, &session.EntryUserNamed)
 	return session, err
 }
 
@@ -464,23 +932,35 @@ func commitAgentSession(ctx context.Context, transaction *sql.Tx, userID, sessio
 	return session, nil
 }
 
+// agentEntryDescription names an agent entry after the task it belongs to.
+// Until the task is known the entry carries a short, stable session tag, so two
+// concurrent Claude Code sessions never look like one row and never collide.
+// Nothing here depends on the working directory or the git branch: both are
+// unknown when a lost start makes a heartbeat create the session, and the branch
+// changes inside a session, which is exactly how one session used to end up
+// under two different names.
 func agentEntryDescription(session AgentSession) string {
+	if session.TaskKey != "" {
+		if session.TaskTitle != "" {
+			return session.TaskKey + " " + session.TaskTitle
+		}
+		return session.TaskKey
+	}
 	base := session.Source
 	if base == "" || base == defaultAgentSource {
 		base = "Claude Code"
 	}
-	context := session.GitBranch
-	if context == "" && session.Cwd != "" {
-		cwd := strings.TrimRight(session.Cwd, "/\\")
-		if separator := strings.LastIndexAny(cwd, "/\\"); separator >= 0 {
-			cwd = cwd[separator+1:]
-		}
-		context = cwd
+	return base + " #" + AgentSessionTag(session.ID)
+}
+
+// AgentSessionTag is the short form of a session id used in entry names and in
+// the UI: the first eight hex characters of the UUID.
+func AgentSessionTag(sessionID string) string {
+	tag := strings.ToLower(strings.ReplaceAll(sessionID, "-", ""))
+	if len(tag) > 8 {
+		tag = tag[:8]
 	}
-	if context != "" {
-		return base + " (" + context + ")"
-	}
-	return base
+	return tag
 }
 
 func truncateRunes(value string, limit int) string {

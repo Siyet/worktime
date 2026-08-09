@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,16 +15,49 @@ const (
 	agentBaseMs = int64(1_700_000_000_000)
 )
 
+var testPolicy = AgentPolicy{IdleMs: testIdleMs}
+
 func startTestAgentSession(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64) AgentSession {
 	t.Helper()
 	session, err := testStore.StartAgentSession(context.Background(), userID, AgentStart{
 		SessionID: sessionID, StartedAt: startedAt, Source: "claude-code",
 		Cwd: "C:\\Users\\dev\\Projects\\WorkTime", GitBranch: "main",
-	}, testIdleMs)
+	}, testPolicy)
 	if err != nil {
 		t.Fatalf("start agent session: %v", err)
 	}
 	return session
+}
+
+func testHeartbeat(t *testing.T, testStore *Store, userID, sessionID string, at int64) AgentSession {
+	t.Helper()
+	session, err := testStore.AgentHeartbeat(context.Background(), userID, sessionID, AgentSignal{At: at}, testPolicy)
+	if err != nil {
+		t.Fatalf("heartbeat at %d: %v", at, err)
+	}
+	return session
+}
+
+func testStop(t *testing.T, testStore *Store, userID, sessionID string, endedAt int64, reason string) AgentSession {
+	t.Helper()
+	session, err := testStore.StopAgentSession(context.Background(), userID, sessionID, reason,
+		AgentSignal{At: endedAt}, testPolicy)
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	return session
+}
+
+// pushEntry replays a client edit of an entry through the normal sync path, which
+// is what an edit in the PWA looks like to the agent flow.
+func pushEntry(t *testing.T, testStore *Store, userID string, entry TimeEntry) {
+	t.Helper()
+	entry.UpdatedAt++
+	if _, err := testStore.Sync(context.Background(), userID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{entry}},
+	}); err != nil {
+		t.Fatalf("push entry: %v", err)
+	}
 }
 
 func TestAgentStartCreatesRunningEntry(t *testing.T) {
@@ -31,7 +65,8 @@ func TestAgentStartCreatesRunningEntry(t *testing.T) {
 	user := testUser(t, testStore, "agent-start@test.local")
 	ctx := context.Background()
 
-	session := startTestAgentSession(t, testStore, user.ID, uuid.NewString(), agentBaseMs)
+	sessionID := uuid.NewString()
+	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 	if session.Status != agentStatusActive || session.LastHeartbeatAt != agentBaseMs {
 		t.Fatalf("unexpected session: %+v", session)
 	}
@@ -46,7 +81,7 @@ func TestAgentStartCreatesRunningEntry(t *testing.T) {
 	if entry.StartedAt != agentBaseMs || entry.StoppedAt != nil {
 		t.Fatalf("unexpected entry: %+v", entry)
 	}
-	if entry.Description != "Claude Code (main)" {
+	if entry.Description != "Claude Code #"+AgentSessionTag(sessionID) {
 		t.Fatalf("unexpected description: %q", entry.Description)
 	}
 
@@ -60,6 +95,71 @@ func TestAgentStartCreatesRunningEntry(t *testing.T) {
 	}
 }
 
+func TestAgentEntryNamedBySessionTag(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-name@test.local")
+	ctx := context.Background()
+
+	// One session known only from a heartbeat (a lost start), one started normally
+	// but without any metadata at all: neither may fall back to a bare "Claude Code".
+	fromHeartbeat := uuid.NewString()
+	testHeartbeat(t, testStore, user.ID, fromHeartbeat, agentBaseMs)
+	bare := uuid.NewString()
+	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{SessionID: bare, StartedAt: agentBaseMs}, testPolicy); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	names := map[string]string{}
+	for _, sessionID := range []string{fromHeartbeat, bare} {
+		session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+		if err != nil {
+			t.Fatalf("get session: %v", err)
+		}
+		entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+		if err != nil {
+			t.Fatalf("get entry: %v", err)
+		}
+		want := "Claude Code #" + AgentSessionTag(sessionID)
+		if entry.Description != want {
+			t.Fatalf("session %s: got %q, want %q", sessionID, entry.Description, want)
+		}
+		names[entry.Description] = sessionID
+	}
+	if len(names) != 2 {
+		t.Fatalf("two sessions must produce two distinct names, got %v", names)
+	}
+}
+
+func TestAgentEntryCarriesSessionID(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-backref@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.AgentSessionID == nil || *entry.AgentSessionID != sessionID {
+		t.Fatalf("agent entry must point back at its session, got %+v", entry.AgentSessionID)
+	}
+
+	manualID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{{
+		ID: manualID, Description: "manual", StartedAt: agentBaseMs, CreatedAt: agentBaseMs, UpdatedAt: agentBaseMs,
+	}}}}); err != nil {
+		t.Fatalf("push manual entry: %v", err)
+	}
+	manual, err := testStore.GetTimeEntry(ctx, user.ID, manualID)
+	if err != nil {
+		t.Fatalf("get manual entry: %v", err)
+	}
+	if manual.AgentSessionID != nil {
+		t.Fatalf("a manual entry must not claim a session, got %v", *manual.AgentSessionID)
+	}
+}
+
 func TestAgentStartReplayIsIdempotent(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-replay@test.local")
@@ -70,7 +170,7 @@ func TestAgentStartReplayIsIdempotent(t *testing.T) {
 	// A --resume replays SessionStart with the same session id a bit later.
 	replayed, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
 		SessionID: sessionID, StartedAt: agentBaseMs + 60_000, GitBranch: "feature",
-	}, testIdleMs)
+	}, testPolicy)
 	if err != nil {
 		t.Fatalf("replay start: %v", err)
 	}
@@ -96,26 +196,47 @@ func TestAgentStartReplayIsIdempotent(t *testing.T) {
 func TestAgentHeartbeatWatermarkMonotonic(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-hb@test.local")
-	ctx := context.Background()
 
 	sessionID := uuid.NewString()
 	startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 
-	session, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, agentBaseMs+120_000, testIdleMs)
-	if err != nil {
-		t.Fatalf("heartbeat: %v", err)
-	}
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+120_000)
 	if session.LastHeartbeatAt != agentBaseMs+120_000 {
 		t.Fatalf("expected watermark advance, got %+v", session)
 	}
 
 	// A delayed out-of-order heartbeat (offline queue replay) must not rewind it.
-	session, err = testStore.AgentHeartbeat(ctx, user.ID, sessionID, agentBaseMs+30_000, testIdleMs)
-	if err != nil {
-		t.Fatalf("late heartbeat: %v", err)
-	}
+	session = testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+30_000)
 	if session.LastHeartbeatAt != agentBaseMs+120_000 {
 		t.Fatalf("watermark rewound: %+v", session)
+	}
+}
+
+func TestAgentHeartbeatFillsMissingMetadata(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-meta@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs)
+
+	session, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+		AgentSignal{At: agentBaseMs + 1000, Cwd: "/home/dev/worktime", GitBranch: "main"}, testPolicy)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if session.Cwd != "/home/dev/worktime" || session.GitBranch != "main" {
+		t.Fatalf("heartbeat metadata must fill the gaps left by a lost start: %+v", session)
+	}
+
+	// A later heartbeat must not overwrite what the session already knows.
+	session, err = testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+		AgentSignal{At: agentBaseMs + 2000, GitBranch: "other"}, testPolicy)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if session.GitBranch != "main" {
+		t.Fatalf("heartbeat must not overwrite known metadata: %+v", session)
 	}
 }
 
@@ -129,16 +250,11 @@ func TestAgentIdleGapSplitsSegments(t *testing.T) {
 	firstEntryID := *started.TimeEntryID
 
 	lastActive := agentBaseMs + 60_000
-	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, lastActive, testIdleMs); err != nil {
-		t.Fatalf("heartbeat: %v", err)
-	}
+	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 
 	// Silence longer than the idle threshold: the gap must not be billed.
 	afterIdle := lastActive + testIdleMs + 300_000
-	session, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, afterIdle, testIdleMs)
-	if err != nil {
-		t.Fatalf("heartbeat after idle: %v", err)
-	}
+	session := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
 	if *session.TimeEntryID == firstEntryID {
 		t.Fatal("expected a new segment entry after the idle gap")
 	}
@@ -168,10 +284,7 @@ func TestAgentStopWithinIdleUsesEndedAt(t *testing.T) {
 	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 
 	endedAt := agentBaseMs + 120_000
-	session, err := testStore.StopAgentSession(ctx, user.ID, sessionID, endedAt, "prompt_input_exit", testIdleMs)
-	if err != nil {
-		t.Fatalf("stop: %v", err)
-	}
+	session := testStop(t, testStore, user.ID, sessionID, endedAt, "prompt_input_exit")
 	if session.Status != agentStatusClosed || session.EndedAt == nil || *session.EndedAt != endedAt {
 		t.Fatalf("unexpected session: %+v", session)
 	}
@@ -187,10 +300,7 @@ func TestAgentStopWithinIdleUsesEndedAt(t *testing.T) {
 	}
 
 	// A replayed stop is a no-op and keeps the original end.
-	again, err := testStore.StopAgentSession(ctx, user.ID, sessionID, endedAt+500_000, "other", testIdleMs)
-	if err != nil {
-		t.Fatalf("second stop: %v", err)
-	}
+	again := testStop(t, testStore, user.ID, sessionID, endedAt+500_000, "other")
 	if *again.EndedAt != endedAt || *again.EndReason != "prompt_input_exit" {
 		t.Fatalf("second stop must not change anything: %+v", again)
 	}
@@ -204,15 +314,10 @@ func TestAgentStopTrimsTrailingIdle(t *testing.T) {
 	sessionID := uuid.NewString()
 	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 	lastActive := agentBaseMs + 60_000
-	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, lastActive, testIdleMs); err != nil {
-		t.Fatalf("heartbeat: %v", err)
-	}
+	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 
 	// The stop arrives long after the last activity (terminal left open overnight).
-	session, err := testStore.StopAgentSession(ctx, user.ID, sessionID, lastActive+testIdleMs+1, "other", testIdleMs)
-	if err != nil {
-		t.Fatalf("stop: %v", err)
-	}
+	session := testStop(t, testStore, user.ID, sessionID, lastActive+testIdleMs+1, "other")
 	if *session.EndedAt != lastActive {
 		t.Fatalf("expected the end trimmed to the last heartbeat, got %+v", session)
 	}
@@ -225,47 +330,332 @@ func TestAgentStopTrimsTrailingIdle(t *testing.T) {
 	}
 }
 
-func TestAgentHeartbeatReopensClosedSession(t *testing.T) {
+func TestAgentReopenKeepsSameEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-reopen@test.local")
 	ctx := context.Background()
 
 	sessionID := uuid.NewString()
 	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	if _, err := testStore.StopAgentSession(ctx, user.ID, sessionID, agentBaseMs+60_000, "other", testIdleMs); err != nil {
-		t.Fatalf("stop: %v", err)
-	}
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+60_000, "other")
 
-	reopenedAt := agentBaseMs + 900_000
-	session, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, reopenedAt, testIdleMs)
-	if err != nil {
-		t.Fatalf("heartbeat: %v", err)
-	}
+	reopenedAt := agentBaseMs + 120_000
+	session := testHeartbeat(t, testStore, user.ID, sessionID, reopenedAt)
 	if session.Status != agentStatusActive || session.EndedAt != nil || session.EndReason != nil {
-		t.Fatalf("expected a reopened session, got %+v", session)
+		t.Fatalf("expected a revived session, got %+v", session)
 	}
-	if *session.TimeEntryID == *started.TimeEntryID {
-		t.Fatal("reopening must create a new entry")
+	if *session.TimeEntryID != *started.TimeEntryID {
+		t.Fatal("reviving must continue the session's own entry, not open a second one")
 	}
 	entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.StartedAt != reopenedAt || entry.StoppedAt != nil {
-		t.Fatalf("unexpected reopened entry: %+v", entry)
+	if entry.StartedAt != agentBaseMs || entry.StoppedAt != nil {
+		t.Fatalf("the revived entry must run again from its original start: %+v", entry)
+	}
+}
+
+func TestAgentStaleHeartbeatDoesNotReopen(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-stale@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	endedAt := agentBaseMs + 60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, endedAt)
+	testStop(t, testStore, user.ID, sessionID, endedAt, "clear")
+
+	// The async heartbeat hook loses the race with the synchronous SessionEnd and
+	// is delivered afterwards, carrying its original timestamp.
+	session := testHeartbeat(t, testStore, user.ID, sessionID, endedAt-5_000)
+	if session.Status != agentStatusClosed {
+		t.Fatalf("a stale heartbeat must not revive a closed session: %+v", session)
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt == nil || *entry.StoppedAt != endedAt {
+		t.Fatalf("the entry must stay closed: %+v", entry)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
+	}
+}
+
+func TestAgentLateStopClosesAtWatermark(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-late-stop@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	lastActive := agentBaseMs + 60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
+	testStop(t, testStore, user.ID, sessionID, lastActive+testIdleMs+1, "other")
+
+	// Work resumes: the session must pick its own entry back up rather than
+	// scatter the rest of the session over new rows.
+	session := testHeartbeat(t, testStore, user.ID, sessionID, lastActive+60_000)
+	if *session.TimeEntryID != *started.TimeEntryID {
+		t.Fatal("the revived session must continue its own entry")
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt != nil {
+		t.Fatalf("expected a running entry, got %+v", entry)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
+	}
+}
+
+func TestAgentManualStopStartsNewEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-manual-stop@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	manualStop := agentBaseMs + 30_000
+	entry.StoppedAt = &manualStop
+	pushEntry(t, testStore, user.ID, entry)
+
+	// The agent keeps working: its time has to land somewhere, so a new entry opens.
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if session.TimeEntryID == nil || *session.TimeEntryID == entry.ID {
+		t.Fatalf("expected a fresh entry after the manual stop, got %+v", session.TimeEntryID)
+	}
+	if session.EntryUserNamed {
+		t.Fatal("a fresh entry was never named by the user")
+	}
+	fresh, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get fresh entry: %v", err)
+	}
+	if fresh.StartedAt != agentBaseMs+60_000 || fresh.StoppedAt != nil {
+		t.Fatalf("unexpected fresh entry: %+v", fresh)
+	}
+
+	// Two more signals must reuse that entry: losing time_entry_id here would
+	// open a new row on every heartbeat.
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+90_000)
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+120_000)
+	if count := countUserEntries(t, testStore, user.ID); count != 2 {
+		t.Fatalf("expected exactly two entries, got %d", count)
+	}
+
+	stopped, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get stopped entry: %v", err)
+	}
+	if stopped.StoppedAt == nil || *stopped.StoppedAt != manualStop {
+		t.Fatalf("the manual stop must survive: %+v", stopped)
+	}
+}
+
+func TestAgentUserRenameKeepsSameEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-rename@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	entry.Description = "Refactoring the sync engine"
+	pushEntry(t, testStore, user.ID, entry)
+
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if *session.TimeEntryID != entry.ID {
+		t.Fatal("a renamed entry must be adopted, not abandoned")
+	}
+	if !session.EntryUserNamed {
+		t.Fatalf("expected the entry to be marked user-named: %+v", session)
+	}
+	after, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if after.Description != "Refactoring the sync engine" {
+		t.Fatalf("the user's name must win: %q", after.Description)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
+	}
+}
+
+func TestAgentUserNamedEntryNeverRenamed(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-usernamed@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	entry.Description = "My own name"
+	pushEntry(t, testStore, user.ID, entry)
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+30_000)
+
+	// A late start replay with fresh metadata, then a task assignment: neither
+	// may take the name back.
+	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: agentBaseMs + 60_000, GitBranch: "feature", Cwd: "/tmp/other",
+	}, testPolicy); err != nil {
+		t.Fatalf("late start: %v", err)
+	}
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-1", "Something"); err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	after, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if after.Description != "My own name" {
+		t.Fatalf("the user's name must survive, got %q", after.Description)
+	}
+}
+
+func TestAgentNewEntryResetsUserNamedFlag(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-reset@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	entry.Description = "Renamed by hand"
+	stoppedAt := agentBaseMs + 30_000
+	entry.StoppedAt = &stoppedAt
+	pushEntry(t, testStore, user.ID, entry)
+
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if session.EntryUserNamed {
+		t.Fatal("the fresh entry must not inherit the user-named flag")
+	}
+	fresh, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get fresh entry: %v", err)
+	}
+	if fresh.Description != "Claude Code #"+AgentSessionTag(sessionID) {
+		t.Fatalf("the fresh entry must carry the automatic name, got %q", fresh.Description)
+	}
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-77", ""); err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	renamed, err := testStore.GetTimeEntry(ctx, user.ID, fresh.ID)
+	if err != nil {
+		t.Fatalf("get renamed entry: %v", err)
+	}
+	if renamed.Description != "MT-77" {
+		t.Fatalf("the fresh entry must still be renamable, got %q", renamed.Description)
+	}
+}
+
+func TestAgentDeletedEntryNotResurrected(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-deleted@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	deletedAt := agentBaseMs + 10_000
+	entry.DeletedAt = &deletedAt
+	pushEntry(t, testStore, user.ID, entry)
+
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if session.TimeEntryID == nil || *session.TimeEntryID == entry.ID {
+		t.Fatal("a deleted entry must not be picked back up")
+	}
+	if _, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the tombstone must stay a tombstone, got %v", err)
+	}
+}
+
+func TestAgentMigratedSessionKeepsEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-migrated@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	// A session that existed before ownership tracking: server_seq unknown.
+	if _, err := testStore.db.ExecContext(ctx,
+		"UPDATE agent_sessions SET entry_server_seq = NULL WHERE id = ?", sessionID); err != nil {
+		t.Fatalf("simulate a pre-migration session: %v", err)
+	}
+
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if *session.TimeEntryID != *started.TimeEntryID {
+		t.Fatal("a session with unknown ownership must keep its entry, not abandon it")
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected exactly one entry, got %d", count)
+	}
+}
+
+func TestAgentDetachClosesOrphanEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-orphan@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	session.LastHeartbeatAt = agentBaseMs + 60_000
+
+	// Detaching is the one branch that could leave a running row behind with
+	// nobody left to close it, so the guard is exercised directly.
+	transaction, err := testStore.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer transaction.Rollback()
+	if err := detachAgentEntry(ctx, transaction, user.ID, &session, agentBaseMs+120_000); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StoppedAt == nil || *entry.StoppedAt != agentBaseMs+60_000 {
+		t.Fatalf("a detached running entry must be closed at the last activity, got %+v", entry)
 	}
 }
 
 func TestAgentHeartbeatAutoCreatesSession(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-auto@test.local")
-	ctx := context.Background()
 
 	sessionID := uuid.NewString()
-	session, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID, agentBaseMs, testIdleMs)
-	if err != nil {
-		t.Fatalf("heartbeat: %v", err)
-	}
+	session := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs)
 	if session.Status != agentStatusActive || session.StartedAt != agentBaseMs || session.TimeEntryID == nil {
 		t.Fatalf("expected an implicitly created session, got %+v", session)
 	}
@@ -283,7 +673,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 	stale := startTestAgentSession(t, testStore, user.ID, staleID, agentBaseMs)
 	freshID := uuid.NewString()
 	now := agentBaseMs + testGraceMs + 60_000
-	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{SessionID: freshID, StartedAt: now - 1000}, testIdleMs); err != nil {
+	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{SessionID: freshID, StartedAt: now - 1000}, testPolicy); err != nil {
 		t.Fatalf("start fresh: %v", err)
 	}
 
@@ -331,13 +721,13 @@ func TestAgentSessionForeignIDRejected(t *testing.T) {
 	sessionID := uuid.NewString()
 	startTestAgentSession(t, testStore, owner.ID, sessionID, agentBaseMs)
 
-	if _, err := testStore.StartAgentSession(ctx, intruder.ID, AgentStart{SessionID: sessionID, StartedAt: agentBaseMs}, testIdleMs); !errors.Is(err, ErrInvalidInput) {
+	if _, err := testStore.StartAgentSession(ctx, intruder.ID, AgentStart{SessionID: sessionID, StartedAt: agentBaseMs}, testPolicy); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput on start, got %v", err)
 	}
-	if _, err := testStore.AgentHeartbeat(ctx, intruder.ID, sessionID, agentBaseMs, testIdleMs); !errors.Is(err, ErrInvalidInput) {
+	if _, err := testStore.AgentHeartbeat(ctx, intruder.ID, sessionID, AgentSignal{At: agentBaseMs}, testPolicy); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput on heartbeat, got %v", err)
 	}
-	if _, err := testStore.StopAgentSession(ctx, intruder.ID, sessionID, agentBaseMs, "other", testIdleMs); !errors.Is(err, ErrNotFound) {
+	if _, err := testStore.StopAgentSession(ctx, intruder.ID, sessionID, "other", AgentSignal{At: agentBaseMs}, testPolicy); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound on stop, got %v", err)
 	}
 
@@ -362,15 +752,9 @@ func TestAgentManualEntryStopWins(t *testing.T) {
 	}
 	manualStop := agentBaseMs + 30_000
 	entry.StoppedAt = &manualStop
-	// updated_at must beat the row's wall-clock updated_at or last-write-wins drops the edit.
-	entry.UpdatedAt = entry.UpdatedAt + 1
-	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{entry}}}); err != nil {
-		t.Fatalf("manual stop: %v", err)
-	}
+	pushEntry(t, testStore, user.ID, entry)
 
-	if _, err := testStore.StopAgentSession(ctx, user.ID, sessionID, agentBaseMs+90_000, "other", testIdleMs); err != nil {
-		t.Fatalf("agent stop: %v", err)
-	}
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+90_000, "other")
 	after, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
@@ -394,7 +778,7 @@ func TestAgentStartValidatesProject(t *testing.T) {
 
 	session, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
 		SessionID: uuid.NewString(), StartedAt: agentBaseMs, ProjectID: &projectID,
-	}, testIdleMs)
+	}, testPolicy)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -409,7 +793,213 @@ func TestAgentStartValidatesProject(t *testing.T) {
 	unknown := uuid.NewString()
 	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
 		SessionID: uuid.NewString(), StartedAt: agentBaseMs, ProjectID: &unknown,
-	}, testIdleMs); !errors.Is(err, ErrInvalidInput) {
+	}, testPolicy); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput for an unknown project, got %v", err)
 	}
+}
+
+func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	// An idle gap leaves the session with two entries; both belong to the task.
+	afterIdle := agentBaseMs + testIdleMs + 60_000
+	second := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
+	if *second.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("expected two segments for this test")
+	}
+
+	result, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{}, "MT-12345", "Slow AMaaS quote creation")
+	if err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	if result.RenamedEntries != 2 {
+		t.Fatalf("expected both segments renamed, got %d", result.RenamedEntries)
+	}
+	if result.Session.TaskKey != "MT-12345" || result.Session.TaskTitle != "Slow AMaaS quote creation" {
+		t.Fatalf("unexpected session: %+v", result.Session)
+	}
+	for _, entryID := range []string{*started.TimeEntryID, *second.TimeEntryID} {
+		entry, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+		if err != nil {
+			t.Fatalf("get entry: %v", err)
+		}
+		if entry.Description != "MT-12345 Slow AMaaS quote creation" {
+			t.Fatalf("unexpected description: %q", entry.Description)
+		}
+	}
+
+	// The session keeps its entry: a rename must not cost it ownership.
+	after := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle+60_000)
+	if *after.TimeEntryID != *second.TimeEntryID {
+		t.Fatal("the session must keep the entry it renamed")
+	}
+}
+
+func TestSetAgentTaskWithoutTitleUsesKey(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-key@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-9", ""); err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.Description != "MT-9" {
+		t.Fatalf("unexpected description: %q", entry.Description)
+	}
+}
+
+func TestSetAgentTaskSkipsUserNamedEntries(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-user@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	entry.Description = "Chosen by the user"
+	pushEntry(t, testStore, user.ID, entry)
+
+	result, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-1", "Title")
+	if err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	if result.RenamedEntries != 0 {
+		t.Fatalf("expected nothing renamed, got %d", result.RenamedEntries)
+	}
+	after, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if after.Description != "Chosen by the user" {
+		t.Fatalf("the user's name must survive: %q", after.Description)
+	}
+}
+
+func TestSetAgentTaskAmbiguousSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-ambiguous@test.local")
+	ctx := context.Background()
+
+	first := uuid.NewString()
+	second := uuid.NewString()
+	startTestAgentSession(t, testStore, user.ID, first, agentBaseMs)
+	startTestAgentSession(t, testStore, user.ID, second, agentBaseMs+1000)
+
+	_, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{}, "MT-1", "Title")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+	if !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
+		t.Fatalf("the error must list the candidates, got %v", err)
+	}
+	for _, sessionID := range []string{first, second} {
+		session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+		if err != nil {
+			t.Fatalf("get session: %v", err)
+		}
+		if session.TaskKey != "" {
+			t.Fatalf("nothing may be attached on an ambiguous call: %+v", session)
+		}
+	}
+
+	// An explicit id resolves it, and so does a unique working directory.
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: second}, "MT-2", ""); err != nil {
+		t.Fatalf("set task by id: %v", err)
+	}
+	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: first, StartedAt: agentBaseMs + 2000, Cwd: "/home/dev/other",
+	}, testPolicy); err != nil {
+		t.Fatalf("refresh cwd: %v", err)
+	}
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "/home/dev/other"}, "MT-3", ""); err != nil {
+		t.Fatalf("set task by cwd: %v", err)
+	}
+	session, err := testStore.GetAgentSession(ctx, user.ID, first)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if session.TaskKey != "MT-3" {
+		t.Fatalf("cwd must pick the matching session, got %+v", session)
+	}
+}
+
+func TestSetAgentTaskIdempotent(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-idempotent@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-1", "First"); err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	seqAfterFirst := entry.ServerSeq
+
+	result, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-1", "First")
+	if err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+	if result.RenamedEntries != 0 {
+		t.Fatalf("a repeated call must change nothing, got %d renamed", result.RenamedEntries)
+	}
+	entry, err = testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.ServerSeq != seqAfterFirst {
+		t.Fatalf("a repeated call must not reship the row: seq %d -> %d", seqAfterFirst, entry.ServerSeq)
+	}
+
+	// A corrected task key renames again.
+	if _, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{SessionID: sessionID}, "MT-2", "Second"); err != nil {
+		t.Fatalf("correct the task: %v", err)
+	}
+	entry, err = testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.Description != "MT-2 Second" {
+		t.Fatalf("unexpected description: %q", entry.Description)
+	}
+}
+
+func TestSetAgentTaskScopedToUser(t *testing.T) {
+	testStore := openTestStore(t)
+	owner := testUser(t, testStore, "agent-task-owner@test.local")
+	intruder := testUser(t, testStore, "agent-task-intruder@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	startTestAgentSession(t, testStore, owner.ID, sessionID, agentBaseMs)
+
+	if _, err := testStore.SetAgentTask(ctx, intruder.ID, AgentTaskSelector{SessionID: sessionID}, "MT-1", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a foreign session, got %v", err)
+	}
+}
+
+func countUserEntries(t *testing.T, testStore *Store, userID string) int {
+	t.Helper()
+	var count int
+	if err := testStore.db.QueryRow(
+		"SELECT COUNT(*) FROM time_entries WHERE user_id = ? AND deleted_at IS NULL", userID).Scan(&count); err != nil {
+		t.Fatalf("count entries: %v", err)
+	}
+	return count
 }

@@ -3,13 +3,15 @@
 # so agent working time is tracked automatically and survives crashes.
 #
 # Wired via .claude/settings.json (see settings.json.example next to this file):
-#   wt-hook.sh start      <- SessionStart (startup|resume)
+#   wt-hook.sh start      <- SessionStart (startup|resume|clear|compact|fork)
 #   wt-hook.sh heartbeat  <- UserPromptSubmit / PostToolUse / Stop / PreCompact
 #   wt-hook.sh stop       <- SessionEnd
 #
 # Requires two environment variables:
 #   WORKTIME_URL    e.g. https://wt.example.com (no trailing slash)
 #   WORKTIME_TOKEN  a wt_... API token created in WorkTime settings
+# Optional:
+#   WORKTIME_HOOK_LOG  path to a debug log of every event seen by this hook
 #
 # Design constraints (do not "fix" these):
 #   - Always exits 0: a tracking failure must never block the agent.
@@ -24,6 +26,8 @@ EVENT="${1:-heartbeat}"
 BASE_URL="${WORKTIME_URL:-}"
 TOKEN="${WORKTIME_TOKEN:-}"
 QUEUE_DIR="${WORKTIME_QUEUE_DIR:-$HOME/.worktime/queue}"
+LOCK_DIR="$QUEUE_DIR/.lock"
+FLUSH_LIMIT=20
 
 [ -n "$BASE_URL" ] && [ -n "$TOKEN" ] || exit 0
 
@@ -32,8 +36,21 @@ INPUT=$(cat 2>/dev/null || true)
 # Extracts a top-level string field from the hook JSON on stdin. The value is
 # returned still JSON-escaped, which makes it safe to embed back into a JSON
 # body as-is (important for Windows paths with backslashes).
+#
+# The payload arrives as a single line and nests objects (tool_input carries its
+# own "cwd"), so the match has to be the FIRST occurrence of the key and must
+# not span other fields - a leading .* in sed silently returned the innermost
+# value instead.
 json_string() {
-    printf '%s' "$INPUT" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+    printf '%s' "$INPUT" |
+        grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" |
+        head -n 1 |
+        sed 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'
+}
+
+# Escapes a raw (not yet JSON) value for embedding into a body.
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 SESSION_ID=$(json_string session_id)
@@ -49,6 +66,23 @@ now_ms() {
     esac
 }
 
+# CWD_JSON is JSON-ready, CWD_PATH is the raw path for git. CLAUDE_PROJECT_DIR
+# wins over the payload's cwd: it is the project root, which is what the session
+# is actually about, while cwd follows whatever directory the agent stepped into.
+collect_context() {
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        CWD_PATH="$CLAUDE_PROJECT_DIR"
+        CWD_JSON=$(json_escape "$CWD_PATH")
+    else
+        CWD_JSON=$(json_string cwd)
+        # Unescape only for git; the JSON body reuses the escaped form verbatim.
+        CWD_PATH=$(printf '%s' "$CWD_JSON" | sed 's/\\\\/\\/g')
+    fi
+    BRANCH=""
+    [ -n "$CWD_PATH" ] && BRANCH=$(git -C "$CWD_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    BRANCH=$(json_escape "$BRANCH")
+}
+
 # send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry)
 send() {
     code=$(curl -sS -o /dev/null -w '%{http_code}' -m 3 -X POST "$1" \
@@ -62,41 +96,68 @@ send() {
     esac
 }
 
+# The queue is shared by every hook process of every session, and hooks run
+# concurrently, so an unlocked flush sends the same file twice. mkdir is atomic
+# everywhere, which makes it the lock. A hook killed mid-flush would leave the
+# lock behind forever and silently freeze the queue, hence both the trap and the
+# age-based takeover.
+lock_queue() {
+    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 1
+    if [ -d "$LOCK_DIR" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null; exit 0' EXIT INT TERM
+    return 0
+}
+
+unlock_queue() {
+    trap - EXIT INT TERM
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
 flush_queue() {
     [ -d "$QUEUE_DIR" ] || return 0
+    lock_queue || return 0
+    flushed=0
     for spooled in "$QUEUE_DIR"/*.req; do
         [ -f "$spooled" ] || continue
+        [ "$flushed" -lt "$FLUSH_LIMIT" ] || break
         url=$(head -n 1 "$spooled")
         body=$(tail -n +2 "$spooled")
         send "$url" "$body"
         case $? in
-            2) return 0 ;;          # still unreachable, keep the rest in order
+            2) break ;;             # still unreachable, keep the rest in order
             *) rm -f "$spooled" ;;  # delivered, or permanently rejected
         esac
+        flushed=$((flushed + 1))
     done
+    unlock_queue
 }
 
 deliver() {
     send "$1" "$2"
     [ $? -eq 2 ] || return 0    # delivered, or rejected for good - nothing to retry
-    mkdir -p "$QUEUE_DIR" 2>/dev/null || exit 0
-    # Cap the queue so a long outage cannot fill the disk.
-    [ "$(ls "$QUEUE_DIR" 2>/dev/null | wc -l)" -lt 1000 ] || exit 0
+    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
+    # Cap the queue so a long outage cannot fill the disk. Only spooled requests
+    # count; the lock directory must not push the queue over the cap.
+    count=$(find "$QUEUE_DIR" -maxdepth 1 -name '*.req' 2>/dev/null | wc -l)
+    [ "$count" -lt 1000 ] || return 0
     spool="$QUEUE_DIR/$(now_ms)-$$.req"
     { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool" 2>/dev/null || true
 }
 
-flush_queue
-
 SESSION_URL="$BASE_URL/api/agent/sessions/$SESSION_ID"
+REASON=$(json_string reason)
+SOURCE=$(json_string source)
+
+[ -z "${WORKTIME_HOOK_LOG:-}" ] || printf '%s %s %s %s %s\n' \
+    "$(now_ms)" "$EVENT" "$(json_string hook_event_name)" \
+    "$SOURCE$REASON" "$SESSION_ID" >> "$WORKTIME_HOOK_LOG" 2>/dev/null || true
 
 case "$EVENT" in
     start)
-        CWD_JSON=$(json_string cwd)
-        # Unescape only for git; the JSON body reuses the escaped form verbatim.
-        CWD_PATH=$(printf '%s' "$CWD_JSON" | sed 's/\\\\/\\/g')
-        BRANCH=""
-        [ -n "$CWD_PATH" ] && BRANCH=$(git -C "$CWD_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+        collect_context
         deliver "$SESSION_URL/start" \
             "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"}"
         ;;
@@ -104,10 +165,18 @@ case "$EVENT" in
         deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)}"
         ;;
     stop)
-        REASON=$(json_string reason)
-        [ -n "$REASON" ] || REASON=other
-        deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"}"
+        # SessionEnd fires with reason=resume when the session is handed over to a
+        # resumed one that keeps the same id: stopping here would close a session
+        # that is still working, and the next heartbeat would have to revive it.
+        if [ "$REASON" != "resume" ]; then
+            [ -n "$REASON" ] || REASON=other
+            deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"}"
+        fi
         ;;
 esac
+
+# The current event goes out first; the backlog follows on whatever budget is
+# left (SessionStart runs with a 5 second timeout).
+flush_queue
 
 exit 0

@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Siyet/worktime/internal/api"
@@ -26,7 +28,20 @@ func (t bearerTransport) RoundTrip(request *http.Request) (*http.Response, error
 	return t.base.RoundTrip(request)
 }
 
+// mcpFixture is a connected MCP client plus the store behind it, so tests can
+// set up server-side state (agent sessions) the tools then operate on.
+type mcpFixture struct {
+	session *mcp.ClientSession
+	store   *store.Store
+	userID  string
+}
+
 func newMCPSession(t *testing.T) *mcp.ClientSession {
+	t.Helper()
+	return newMCPFixture(t).session
+}
+
+func newMCPFixture(t *testing.T) mcpFixture {
 	t.Helper()
 
 	dataStore, err := store.Open(filepath.Join(t.TempDir(), "mcp-test.db"))
@@ -59,7 +74,7 @@ func newMCPSession(t *testing.T) *mcp.ClientSession {
 		t.Fatalf("connect MCP client: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
-	return session
+	return mcpFixture{session: session, store: dataStore, userID: user.ID}
 }
 
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) map[string]any {
@@ -161,5 +176,68 @@ func TestMCPRejectsWithoutToken(t *testing.T) {
 	transport := &mcp.StreamableClientTransport{Endpoint: testServer.URL + "/mcp"}
 	if _, err := client.Connect(t.Context(), transport, nil); err == nil {
 		t.Fatal("expected connection without token to fail")
+	}
+}
+
+func TestMCPSetAgentTask(t *testing.T) {
+	fixture := newMCPFixture(t)
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000}
+	startedAt := time.Now().UnixMilli() - 60_000
+
+	sessionID := uuid.NewString()
+	agentSession, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+		SessionID: sessionID, StartedAt: startedAt, Cwd: "/home/dev/worktime",
+	}, policy)
+	if err != nil {
+		t.Fatalf("start agent session: %v", err)
+	}
+
+	// Until the task is known the row carries the session tag, and the agent can
+	// see that from list_running_timers.
+	running := callTool(t, fixture.session, "list_running_timers", nil)
+	timers := running["timers"].([]any)
+	if len(timers) != 1 {
+		t.Fatalf("expected the agent entry to be running, got %+v", running)
+	}
+	timer := timers[0].(map[string]any)
+	if timer["session_tag"] != store.AgentSessionTag(sessionID) {
+		t.Fatalf("expected the session tag on the running timer, got %+v", timer)
+	}
+	if timer["task_key"] != nil {
+		t.Fatalf("expected no task yet, got %+v", timer)
+	}
+
+	result := callTool(t, fixture.session, "set_agent_task", map[string]any{
+		"task_key": "MT-12345", "task_title": "Slow AMaaS quote creation",
+	})
+	if result["session_id"] != sessionID || result["renamed_entries"].(float64) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	entry, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, *agentSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.Description != "MT-12345 Slow AMaaS quote creation" {
+		t.Fatalf("unexpected description: %q", entry.Description)
+	}
+
+	running = callTool(t, fixture.session, "list_running_timers", nil)
+	timer = running["timers"].([]any)[0].(map[string]any)
+	if timer["task_key"] != "MT-12345" {
+		t.Fatalf("expected the task key on the running timer, got %+v", timer)
+	}
+}
+
+func TestMCPSetAgentTaskWithoutSession(t *testing.T) {
+	fixture := newMCPFixture(t)
+	result, err := fixture.session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "set_agent_task", Arguments: map[string]any{"task_key": "MT-1"},
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error without an active session, got %+v", result)
 	}
 }

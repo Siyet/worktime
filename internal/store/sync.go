@@ -60,10 +60,13 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		nextSeq++
 	}
 	for _, entry := range request.Changes.TimeEntries {
+		// agent_session_id is server-owned: a literal NULL on insert (the id comes
+		// from the client, so a pushed value could claim a foreign session) and
+		// absent from the update list (a push never rewrites it).
 		_, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
-			                          created_at, updated_at, deleted_at, server_seq)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			                          created_at, updated_at, deleted_at, server_seq, agent_session_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 			ON CONFLICT(id) DO UPDATE SET
 				project_id = excluded.project_id, description = excluded.description, tags = excluded.tags,
 				started_at = excluded.started_at, stopped_at = excluded.stopped_at,
@@ -116,7 +119,8 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	}
 
 	entryRows, err := transaction.QueryContext(ctx, `
-		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at, server_seq
+		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
+		       server_seq, agent_session_id
 		FROM time_entries WHERE user_id = ? AND server_seq > ? ORDER BY server_seq`, userID, request.Since)
 	if err != nil {
 		return SyncResponse{}, err
@@ -124,7 +128,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	for entryRows.Next() {
 		var entry TimeEntry
 		if err := entryRows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
-			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq); err != nil {
+			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID); err != nil {
 			entryRows.Close()
 			return SyncResponse{}, err
 		}

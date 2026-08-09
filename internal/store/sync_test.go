@@ -229,3 +229,54 @@ func TestSyncMultipleRunningTimers(t *testing.T) {
 		t.Fatalf("expected 3 concurrent running timers, got %d", openCount)
 	}
 }
+
+func TestSyncCannotClaimAgentSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "claim@test.local")
+	ctx := context.Background()
+
+	agentSession := startTestAgentSession(t, testStore, user.ID, uuid.NewString(), agentBaseMs)
+
+	// A client creating a row cannot hand it a session: ids are generated on the
+	// client, so a pushed value would let it attach the row to a session it does
+	// not own. The column is server-owned in both directions.
+	foreign := agentSession.ID
+	entryID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{{
+		ID: entryID, Description: "mine", StartedAt: 1000, CreatedAt: 1000, UpdatedAt: 1000,
+		AgentSessionID: &foreign,
+	}}}}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	created, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if created.AgentSessionID != nil {
+		t.Fatalf("insert must ignore agent_session_id, got %v", *created.AgentSessionID)
+	}
+
+	// Editing the agent's own row does not clear or move the link either.
+	agentEntry, err := testStore.GetTimeEntry(ctx, user.ID, *agentSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get agent entry: %v", err)
+	}
+	agentEntry.AgentSessionID = nil
+	agentEntry.Description = "edited"
+	agentEntry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{
+		TimeEntries: []TimeEntry{agentEntry},
+	}}); err != nil {
+		t.Fatalf("push edit: %v", err)
+	}
+	after, err := testStore.GetTimeEntry(ctx, user.ID, agentEntry.ID)
+	if err != nil {
+		t.Fatalf("get agent entry: %v", err)
+	}
+	if after.AgentSessionID == nil || *after.AgentSessionID != agentSession.ID {
+		t.Fatalf("an update must not change agent_session_id, got %v", after.AgentSessionID)
+	}
+	if after.Description != "edited" {
+		t.Fatalf("the edit itself must apply, got %q", after.Description)
+	}
+}

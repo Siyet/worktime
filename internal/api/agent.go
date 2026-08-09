@@ -24,16 +24,26 @@ type agentStartRequest struct {
 	ProjectID *string `json:"project_id"`
 }
 
+// Metadata on heartbeat and stop is optional and additive: a hook shipped before
+// these fields existed keeps sending just "at" and keeps working. It exists
+// because a session created by a heartbeat that outran a lost start would
+// otherwise never learn its working directory or branch.
 type agentHeartbeatRequest struct {
 	At int64 `json:"at"`
 	// Activity ("prompt", "tool", "turn_end", "compact") is accepted for forward
 	// compatibility but not stored yet.
-	Activity string `json:"activity"`
+	Activity  string `json:"activity"`
+	Cwd       string `json:"cwd"`
+	GitBranch string `json:"git_branch"`
+	Model     string `json:"model"`
 }
 
 type agentStopRequest struct {
-	EndedAt int64  `json:"ended_at"`
-	Reason  string `json:"reason"`
+	EndedAt   int64  `json:"ended_at"`
+	Reason    string `json:"reason"`
+	Cwd       string `json:"cwd"`
+	GitBranch string `json:"git_branch"`
+	Model     string `json:"model"`
 }
 
 func decodeAgentBody(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -59,6 +69,10 @@ func writeAgentResult(w http.ResponseWriter, session store.AgentSession, err err
 	}
 }
 
+func (s *server) agentPolicy() store.AgentPolicy {
+	return store.AgentPolicy{IdleMs: s.cfg.AgentIdle.Milliseconds()}
+}
+
 func (s *server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 	var request agentStartRequest
 	if !decodeAgentBody(w, r, &request) {
@@ -72,7 +86,7 @@ func (s *server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		GitBranch: request.GitBranch,
 		Model:     request.Model,
 		ProjectID: request.ProjectID,
-	}, s.cfg.AgentIdle.Milliseconds())
+	}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }
 
@@ -81,8 +95,12 @@ func (s *server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !decodeAgentBody(w, r, &request) {
 		return
 	}
-	session, err := s.store.AgentHeartbeat(r.Context(), currentUser(r).ID,
-		chi.URLParam(r, "id"), request.At, s.cfg.AgentIdle.Milliseconds())
+	session, err := s.store.AgentHeartbeat(r.Context(), currentUser(r).ID, chi.URLParam(r, "id"), store.AgentSignal{
+		At:        request.At,
+		Cwd:       request.Cwd,
+		GitBranch: request.GitBranch,
+		Model:     request.Model,
+	}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }
 
@@ -91,7 +109,12 @@ func (s *server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	if !decodeAgentBody(w, r, &request) {
 		return
 	}
-	session, err := s.store.StopAgentSession(r.Context(), currentUser(r).ID,
-		chi.URLParam(r, "id"), request.EndedAt, request.Reason, s.cfg.AgentIdle.Milliseconds())
+	session, err := s.store.StopAgentSession(r.Context(), currentUser(r).ID, chi.URLParam(r, "id"), request.Reason,
+		store.AgentSignal{
+			At:        request.EndedAt,
+			Cwd:       request.Cwd,
+			GitBranch: request.GitBranch,
+			Model:     request.Model,
+		}, s.agentPolicy())
 	writeAgentResult(w, session, err)
 }

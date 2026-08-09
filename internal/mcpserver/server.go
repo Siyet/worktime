@@ -82,6 +82,12 @@ func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
 		Name:        "time_report",
 		Description: "Summarize tracked time by project and time-off days for a date range (inclusive).",
 	}, deps.timeReport)
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_agent_task",
+		Description: "Attach the running agent session to a tracker task and rename every time entry it produced. " +
+			"Call this as soon as the task number is known (look the title up in the tracker yourself): until then the " +
+			"work is tracked under a technical session tag like 'Claude Code #ab12cd34'.",
+	}, deps.setAgentTask)
 
 	return server
 }
@@ -189,6 +195,10 @@ type timerOut struct {
 	Project     string `json:"project,omitempty"`
 	StartedAt   string `json:"started_at"`
 	Elapsed     string `json:"elapsed,omitempty"`
+	// Agent rows only: the session that owns the row and the task it is attached
+	// to, so an agent can see whether set_agent_task still has to be called.
+	SessionTag string `json:"session_tag,omitempty"`
+	TaskKey    string `json:"task_key,omitempty"`
 }
 
 func (d toolDeps) startTimer(ctx context.Context, req *mcp.CallToolRequest, input startTimerIn) (*mcp.CallToolResult, timerOut, error) {
@@ -282,13 +292,46 @@ func (d toolDeps) listRunningTimers(ctx context.Context, req *mcp.CallToolReques
 		if entry.ProjectID != nil {
 			projectName = names[*entry.ProjectID]
 		}
-		out.Timers = append(out.Timers, timerOut{
+		timer := timerOut{
 			EntryID: entry.ID, Description: entry.Description, Project: projectName,
 			StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
 			Elapsed:   formatDuration(now - entry.StartedAt),
-		})
+		}
+		if entry.AgentSessionID != nil {
+			timer.SessionTag = store.AgentSessionTag(*entry.AgentSessionID)
+			if session, err := d.store.GetAgentSession(ctx, d.userID, *entry.AgentSessionID); err == nil {
+				timer.TaskKey = session.TaskKey
+			}
+		}
+		out.Timers = append(out.Timers, timer)
 	}
 	return nil, out, nil
+}
+
+type setAgentTaskIn struct {
+	TaskKey   string `json:"task_key" jsonschema:"tracker task key, e.g. MT-12345"`
+	TaskTitle string `json:"task_title,omitempty" jsonschema:"short task title, optional"`
+	SessionID string `json:"session_id,omitempty" jsonschema:"agent session id; omit when a single session is running"`
+	Cwd       string `json:"cwd,omitempty" jsonschema:"working directory, picks the session when several are running"`
+}
+
+type setAgentTaskOut struct {
+	SessionID      string `json:"session_id"`
+	TaskKey        string `json:"task_key"`
+	TaskTitle      string `json:"task_title,omitempty"`
+	RenamedEntries int    `json:"renamed_entries"`
+}
+
+func (d toolDeps) setAgentTask(ctx context.Context, req *mcp.CallToolRequest, input setAgentTaskIn) (*mcp.CallToolResult, setAgentTaskOut, error) {
+	result, err := d.store.SetAgentTask(ctx, d.userID,
+		store.AgentTaskSelector{SessionID: input.SessionID, Cwd: input.Cwd}, input.TaskKey, input.TaskTitle)
+	if err != nil {
+		return nil, setAgentTaskOut{}, err
+	}
+	return nil, setAgentTaskOut{
+		SessionID: result.Session.ID, TaskKey: result.Session.TaskKey, TaskTitle: result.Session.TaskTitle,
+		RenamedEntries: result.RenamedEntries,
+	}, nil
 }
 
 type addTimeEntryIn struct {

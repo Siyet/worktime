@@ -1,4 +1,4 @@
-.PHONY: dev-api dev-web build build-web test e2e lint
+.PHONY: dev-api dev-web build build-web test test-hook e2e lint
 
 dev-api:
 	go run ./cmd/worktime
@@ -22,6 +22,10 @@ build: build-web
 
 test:
 	go test ./...
+
+# The Claude Code hook is plain sh and is covered by neither go test nor Playwright.
+test-hook:
+	sh integrations/claude-code/wt-hook_test.sh
 
 e2e: build
 	cd web && npx playwright test

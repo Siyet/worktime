@@ -11,8 +11,6 @@ import (
 	"github.com/Siyet/worktime/internal/store"
 )
 
-const agentReconcileInterval = time.Minute
-
 func main() {
 	cfg := config.Load()
 
@@ -28,7 +26,7 @@ func main() {
 	// network loss on the agent side). The first pass runs at startup so sessions
 	// orphaned while the server itself was down are closed immediately.
 	go func() {
-		ticker := time.NewTicker(agentReconcileInterval)
+		ticker := time.NewTicker(cfg.AgentReconcile)
 		defer ticker.Stop()
 		for {
 			closed, err := dataStore.ReconcileAgentSessions(

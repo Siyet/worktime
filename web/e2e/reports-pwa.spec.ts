@@ -3,14 +3,22 @@ import { expect, pushBarrier, seedServer, test } from "./fixtures";
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
+// 9:00 local anchors every seed to the intended day. "An hour ago" lands in
+// yesterday when the suite runs after midnight, and on a Monday that is also the
+// previous calendar week, which empties the Week view.
+function todayNine(): number {
+  return new Date().setHours(9, 0, 0, 0);
+}
+
 test.describe("reports", () => {
   test("per-project totals for this week and this month", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
+    const base = todayNine();
     await seedServer(server.url, {
       projects: [{ id: projectID, name: "Backend" }],
       entries: [
-        { description: "seeded 2h", startedAt: Date.now() - 2 * HOUR, stoppedAt: Date.now() - 0.5 * HOUR, projectID },
-        { description: "seeded 30m", startedAt: Date.now() - 1 * HOUR, stoppedAt: Date.now() - 0.5 * HOUR },
+        { description: "seeded 2h", startedAt: base, stoppedAt: base + 1.5 * HOUR, projectID },
+        { description: "seeded 30m", startedAt: base + 2 * HOUR, stoppedAt: base + 2.5 * HOUR },
       ],
     });
 
@@ -33,10 +41,11 @@ test.describe("reports", () => {
     page,
     server,
   }) => {
+    const base = todayNine();
     await seedServer(server.url, {
       entries: [
-        { description: "old work", startedAt: Date.now() - 12 * DAY, stoppedAt: Date.now() - 12 * DAY + 2 * HOUR },
-        { description: "recent work", startedAt: Date.now() - 1 * HOUR, stoppedAt: Date.now() - 0.5 * HOUR },
+        { description: "old work", startedAt: base - 12 * DAY, stoppedAt: base - 12 * DAY + 2 * HOUR },
+        { description: "recent work", startedAt: base, stoppedAt: base + 0.5 * HOUR },
       ],
     });
 

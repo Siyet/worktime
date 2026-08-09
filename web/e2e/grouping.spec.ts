@@ -59,19 +59,19 @@ test.describe("task grouping", () => {
     await page.goto(server.url + "/#/");
     const card = await dayCard(page);
     const group = card.locator(".group-row").filter({ hasText: "Write e2e tests" });
-    await expect(group.locator(".count")).toHaveText("×3");
+    await expect(group.locator(".count-value")).toHaveText("3");
     await expect(group.locator(".when .dur")).toHaveText("3h 00m");
     // The summary row is not an entry: specs that count .item must keep counting
     // entries, so only the ungrouped "Standup" is one here.
     await expect(card.locator(".item")).toHaveCount(1);
     await expect(card.locator(".row > .mono").last()).toHaveText("3h 30m");
 
-    const disclosure = group.getByRole("button", { name: "Expand" });
-    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    await disclosure.click();
+    // The whole summary row is the control - a group has nothing else to click.
+    await expect(group).toHaveAttribute("aria-expanded", "false");
+    await group.click();
     await expect(card.locator(".item.member")).toHaveCount(3);
-    await expect(group.getByRole("button", { name: "Collapse" })).toHaveAttribute("aria-expanded", "true");
-    await group.getByRole("button", { name: "Collapse" }).click();
+    await expect(group).toHaveAttribute("aria-expanded", "true");
+    await group.click();
     await expect(card.locator(".item.member")).toHaveCount(0);
   });
 
@@ -88,16 +88,16 @@ test.describe("task grouping", () => {
     await page.goto(server.url + "/#/");
     const card = await dayCard(page);
     const group = card.locator(".group-row").filter({ hasText: "Repeated" });
-    await expect(group.locator(".count")).toHaveText("×3");
+    await expect(group.locator(".count-value")).toHaveText("3");
 
-    await group.getByRole("button", { name: "Expand" }).click();
+    await group.click();
     const member = card.locator(".item.member").first();
     await member.getByRole("button", { name: "Entry actions" }).click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
-    await expect(group.locator(".count")).toHaveText("×2");
+    await expect(group.locator(".count-value")).toHaveText("2");
 
     await page.getByRole("button", { name: "Undo" }).click();
-    await expect(group.locator(".count")).toHaveText("×3");
+    await expect(group.locator(".count-value")).toHaveText("3");
   });
 
   test("renaming an entry takes it out of the group", async ({ page, server }) => {
@@ -112,9 +112,9 @@ test.describe("task grouping", () => {
     await page.goto(server.url + "/#/");
     const card = await dayCard(page);
     const group = card.locator(".group-row").filter({ hasText: "Shared name" });
-    await expect(group.locator(".count")).toHaveText("×2");
+    await expect(group.locator(".count-value")).toHaveText("2");
 
-    await group.getByRole("button", { name: "Expand" }).click();
+    await group.click();
     const barrier = pushBarrier(page, "Its own thing");
     await card.locator(".item.member").first().locator(".desc").click();
     await page.locator("#ed-desc").fill("Its own thing");
@@ -161,7 +161,7 @@ test.describe("task grouping", () => {
     await page.goto(server.url + "/#/");
     const todayCard = await dayCard(page);
     const yesterdayCard = await dayCard(page, -1);
-    await todayCard.locator(".group-row").getByRole("button", { name: "Expand" }).click();
+    await todayCard.locator(".group-row").click();
 
     await expect(todayCard.locator(".item.member")).toHaveCount(2);
     await expect(yesterdayCard.locator(".item.member")).toHaveCount(0);
@@ -198,12 +198,12 @@ test.describe("task grouping", () => {
 
     const card = runningCard(page);
     const group = card.locator(".group-row");
-    await expect(group.locator(".count")).toHaveText("×2");
+    await expect(group.locator(".count-value")).toHaveText("2");
     // A collapsed running group has no Stop of its own: stopping several timers
     // at once would need an undo that does not exist.
     await expect(card.getByRole("button", { name: "Stop" })).toHaveCount(0);
 
-    await group.getByRole("button", { name: "Expand" }).click();
+    await group.click();
     await expect(card.locator(".item.member")).toHaveCount(2);
     await card.locator(".item.member").first().getByRole("button", { name: "Stop" }).click();
     await expect(card.locator(".item")).toHaveCount(1);

@@ -115,23 +115,57 @@
   function entrySessionTag(entry: TimeEntry): string {
     return entry.agent_session_id ? `#${sessionTag(entry.agent_session_id)}` : "";
   }
+
+  // The distinct agent sessions inside a group. Three fit; beyond that the row
+  // would be a wall of hex, so the rest become a counter.
+  function groupSessionTags(group: TaskGroup): string[] {
+    const tags = [...new Set(group.entries.map(entrySessionTag).filter((tag) => tag !== ""))];
+    return tags.length > 3 ? [...tags.slice(0, 3), `+${tags.length - 3}`] : tags;
+  }
 </script>
+
+<!-- The dial marks a wall-clock reading, so the two numbers next to each other
+     are never mistaken for one another. Same shape as the app's own logo. -->
+{#snippet dialIcon()}
+  <svg
+    width="11"
+    height="11"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>
+{/snippet}
 
 <!-- One row of the list. Groups of one render exactly like before, which keeps
      both the look and every existing selector intact. -->
 {#snippet entryRow(entry: TimeEntry, member: boolean)}
   {@const project = projectByID(entry.project_id)}
+  {@const tag = entrySessionTag(entry)}
   <div class="row item" class:member>
     <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
     <span class="main">
-      <button type="button" class="desc" onclick={() => (editingID = entry.id)}>
-        {entry.description || t("(no description)")}
+      <!-- Inside a group the description, the project and the tags are the same
+           on every member by construction - that is what made them a group. So a
+           member shows what actually differs: which session it came from, and
+           when. The full description stays one hover away. -->
+      <button
+        type="button"
+        class="desc"
+        class:session={member && tag !== ""}
+        title={member ? entry.description : undefined}
+        onclick={() => (editingID = entry.id)}
+      >
+        {member && tag !== "" ? tag : entry.description || t("(no description)")}
       </button>
-      <span class="meta muted">
-        {#if project}<span class="proj">{project.name}</span>{/if}
-        <TagChips tags={entryTags(entry)} />
-        {#if member && entrySessionTag(entry)}<span class="session-tag">{entrySessionTag(entry)}</span>{/if}
-      </span>
+      {#if !member}
+        <span class="meta muted">
+          {#if project}<span class="proj">{project.name}</span>{/if}
+          <TagChips tags={entryTags(entry)} />
+        </span>
+      {/if}
     </span>
     {#if entry.stopped_at === null}
       <span class="when">
@@ -150,24 +184,72 @@
   </div>
 {/snippet}
 
-<!-- A group of several entries. It deliberately does not carry .item: the row
-     is a summary, not an entry, and counting .item must keep counting entries. -->
+<!-- A group of several entries. The whole row is the control: a group has
+     nothing else to click, and a lone caret at the far right reads as another
+     kebab menu rather than as "there is more inside". It deliberately does not
+     carry .item - the row is a summary, not an entry, and counting .item must
+     keep counting entries. -->
 {#snippet groupRow(dayISO: string, group: TaskGroup, index: number)}
   {@const project = projectByID(group.projectID)}
   {@const listID = `g-${dayISO}-${index}`}
   {@const shown = isExpanded(dayISO, group)}
-  <div class="row group-row">
+  {@const sessions = groupSessionTags(group)}
+  {@const countLabel = t("{n} entries", { n: group.entries.length })}
+  <button
+    type="button"
+    class="row group-row"
+    class:open={shown}
+    aria-expanded={shown}
+    aria-controls={listID}
+    onclick={() => toggleGroup(dayISO, group)}
+  >
+    <svg
+      class="caret"
+      class:open={shown}
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
     <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
     <span class="main">
       <span class="desc-line">
         <span class="desc-static">{group.description || t("(no description)")}</span>
-        <span class="count" aria-label={t("{n} entries", { n: group.entries.length })}>
-          ×{group.entries.length}
+        <!-- Stacked lines plus the number: "several rows live here" without a
+             noun, which no plural rule can then get wrong. -->
+        <span class="count" title={countLabel}>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" />
+          </svg>
+          <span class="count-value">{group.entries.length}</span>
+          <span class="sr-only">{countLabel}</span>
         </span>
       </span>
       <span class="meta muted">
         {#if project}<span class="proj">{project.name}</span>{/if}
         <TagChips tags={group.tags} />
+        <!-- Which agent sessions are inside, so "one task worked twice in
+             parallel" is visible without unfolding. -->
+        {#if sessions.length > 0}<span class="sessions">{sessions.join(" ")}</span>{/if}
+        {#if group.wallMs !== group.totalMs}
+          <!-- Two hours of tracked time inside one hour of wall clock reads as a
+               mistake without the second number; the dial says which of the two
+               it is without a word of text. It sits here rather than in the
+               right column, where it would knock the duration out of the line
+               every other row keeps. -->
+          {@const overlapLabel = t("{n} entries overlapped; on the clock this is {wall}", {
+            n: group.entries.length,
+            wall: formatDurationShort(group.wallMs),
+          })}
+          <span class="wall mono" title={overlapLabel}>
+            {@render dialIcon()}{formatDurationShort(group.wallMs)}
+            <span class="sr-only">{overlapLabel}</span>
+          </span>
+        {/if}
       </span>
     </span>
     <span class="when">
@@ -178,33 +260,9 @@
         ></span>
       {/if}
     </span>
-    {#if group.wallMs !== group.totalMs}
-      <!-- Two hours of tracked time inside one hour of wall clock reads as a
-           mistake without the second number. -->
-      <span class="wall muted mono" title={t("{n} entries overlapped; on the clock this is {wall}", {
-        n: group.entries.length,
-        wall: formatDurationShort(group.wallMs),
-      })}>
-        {formatDurationShort(group.wallMs)}
-        <span class="sr-only"
-          >{t("{n} entries overlapped; on the clock this is {wall}", {
-            n: group.entries.length,
-            wall: formatDurationShort(group.wallMs),
-          })}</span
-        >
-      </span>
-    {/if}
-    <button
-      type="button"
-      class="disclosure"
-      aria-expanded={shown}
-      aria-controls={listID}
-      onclick={() => toggleGroup(dayISO, group)}
-    >
-      <span class="caret" class:open={shown}>▸</span>
-      <span class="sr-only">{shown ? t("Collapse") : t("Expand")}</span>
-    </button>
-  </div>
+    <span class="sr-only">{shown ? t("Collapse") : t("Expand")}</span>
+    <span class="menu-space" aria-hidden="true"></span>
+  </button>
   {#if shown}
     <div class="members" id={listID}>
       {#each group.entries as entry (entry.id)}
@@ -237,7 +295,7 @@
 </form>
 
 {#if running.length > 0}
-  <div class="card">
+  <div class="card" class:has-groups={runningGroups.some((group) => group.entries.length > 1)}>
     <h3>{t("Running")}</h3>
     {#each runningGroups as group, index (group.key)}
       {#if group.entries.length === 1}
@@ -252,16 +310,17 @@
 {#each recentDays as [day, entries, groups] (day)}
   {@const tracked = dayTotal(groups)}
   {@const wall = wallClockMs(entries, clock.now)}
-  <div class="card">
+  <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
     <div class="row">
       <h3>{formatDay(entries[0]!.started_at)}</h3>
       <span class="spacer"></span>
       {#if wall !== tracked}
-        <!-- Wall-clock time: how many hours the day actually took when
-             parallel work is counted once. Shown only when it differs. -->
-        <span class="muted mono wall" title={t("On the clock: {wall}", { wall: formatDurationShort(wall) })}>
-          {formatDurationShort(wall)}
-          <span class="sr-only">{t("On the clock: {wall}", { wall: formatDurationShort(wall) })}</span>
+        <!-- Wall-clock time: how many hours the day actually took when parallel
+             work is counted once. Shown only when it differs from the sum. -->
+        {@const wallLabel = t("On the clock: {wall}", { wall: formatDurationShort(wall) })}
+        <span class="muted mono wall" title={wallLabel}>
+          {@render dialIcon()}{formatDurationShort(wall)}
+          <span class="sr-only">{wallLabel}</span>
         </span>
       {/if}
       <span class="muted mono">{formatDurationShort(tracked)}</span>
@@ -290,18 +349,70 @@
     font-size: 0.95rem;
   }
 
-  .item,
-  .group-row {
+  .item {
     padding: 0.35rem 0;
     border-top: 1px solid var(--border);
+  }
+
+  /* The summary row is a real button spanning the whole width: the group has no
+     other action, so every part of it toggles. Button defaults are reset rather
+     than avoided, because the row has to keep looking like a row. */
+  .group-row {
+    width: 100%;
+    padding: 0.35rem 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  @media (hover: hover) {
+    .group-row:hover {
+      background: var(--hover);
+      border-color: var(--border);
+    }
+  }
+
+  /* An open group keeps the tint: the summary is the header of the block below
+     it, and the rail alone is a thin thing to carry that on its own. */
+  .group-row.open {
+    background: var(--hover);
+  }
+
+  /* The rail ties the unfolded entries to the row they came from; without it
+     the indent alone reads as a stray gap. */
+  .members {
+    position: relative;
+  }
+
+  .members::before {
+    content: "";
+    position: absolute;
+    left: 0.42rem;
+    top: 0;
+    bottom: 0.35rem;
+    width: 1px;
+    background: var(--border);
   }
 
   .members .item:first-child {
     border-top: none;
   }
 
-  .item.member {
-    padding-left: 1.25rem;
+  /* A card holding a group reserves the caret column on its plain rows too, so
+     every project dot in the card stays in one line - the same way a file tree
+     lines up leaves with folders. */
+  .has-groups .item {
+    padding-left: 1.5rem;
+  }
+
+  .item.member,
+  .has-groups .item.member {
+    padding-left: 2.4rem;
   }
 
   .elapsed {
@@ -322,38 +433,81 @@
     white-space: nowrap;
   }
 
-  .count {
-    flex: none;
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0 0.35rem;
+  .group-row .dot {
+    align-self: flex-start;
+    margin-top: 0.45rem;
   }
 
-  .session-tag {
+  /* Not dim: the count is what says "this row stands for several", so it has to
+     read before the description does. */
+  /* Deliberately not a pill: tag chips are pills, and a second pill on the same
+     line reads as another tag. Square, tinted and tabular says "counter". */
+  .count {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: none;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    border-radius: 5px;
+    padding: 0.05rem 0.35rem;
+  }
+
+  .count svg {
+    display: block;
+    color: var(--accent);
+  }
+
+  .sessions {
     font-family: var(--mono);
     font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .desc.session {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    color: var(--text-dim);
+  }
+
+  /* Stands in for the kebab the summary row does not have, so both columns of
+     numbers keep the same right edge as every other row. */
+  .menu-space {
+    flex: none;
+    width: 2.2rem;
   }
 
   .wall {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     font-size: 0.85rem;
+    white-space: nowrap;
   }
 
-  .disclosure {
-    border: none;
-    background: transparent;
-    padding: 0.2rem 0.4rem;
-  }
-
+  /* Leading position, where a disclosure chevron is read as hierarchy. On the
+     right it competed with the kebab of ordinary rows and read as a menu. */
   .caret {
-    display: inline-block;
+    flex: none;
+    display: block;
+    /* Pinned to the first line, like the twisty of a tree: on a narrow screen
+       the row grows to three lines and a centred chevron floats away from the
+       title it belongs to. */
+    align-self: flex-start;
+    margin-top: 0.3rem;
     color: var(--text-dim);
     transition: transform 0.12s ease;
   }
 
   .caret.open {
     transform: rotate(90deg);
+  }
+
+  .group-row:hover .caret {
+    color: var(--text);
   }
 
   /* Day totals like "3h 10m" must never break mid-value. */
@@ -396,8 +550,23 @@
       min-width: 0;
     }
 
-    .item.member {
-      padding-left: 0.75rem;
+    /* The summary title wraps like every other description below 34rem, instead
+       of being the one line in the list that truncates. */
+    .desc-static {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .has-groups .item {
+      padding-left: 1.2rem;
+    }
+
+    .item.member,
+    .has-groups .item.member {
+      padding-left: 1.9rem;
     }
   }
 </style>

@@ -107,14 +107,16 @@ test.describe("agent tracking", () => {
 
     const group = card.locator(".group-row").filter({ hasText: "MT-12345 Slow AMaaS quote creation" });
     await pollUI(page, async () => {
-      await expect(group.locator(".count")).toHaveText("×2");
+      await expect(group.locator(".count-value")).toHaveText("2");
     });
     // A collapsed running group cannot be stopped in one click: undo is per entry.
     await expect(card.getByRole("button", { name: "Stop" })).toHaveCount(0);
 
-    await group.getByRole("button", { name: "Expand" }).click();
+    await group.click();
     await expect(card.locator(".item.member")).toHaveCount(2);
-    const tags = await card.locator(".item.member .session-tag").allInnerTexts();
+    // Inside a group the description is the same on every member, so a member
+    // is labelled by the session it came from.
+    const tags = await card.locator(".item.member .desc.session").allInnerTexts();
     expect(tags).toHaveLength(2);
     expect(tags[0]).not.toBe(tags[1]);
   });

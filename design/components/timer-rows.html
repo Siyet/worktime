@@ -41,50 +41,53 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card has-groups">
     <div class="row">
       <h3>Tue, Jul 29</h3>
       <span class="spacer"></span>
       <!-- Wall-clock time, shown only when parallel work makes it differ from
            the sum: "8h" inside 6h40m of clock reads as a mistake otherwise. -->
-      <span class="muted mono wall" title="On the clock: 6h 40m">6h 40m</span>
+      <span class="muted mono wall" title="On the clock: 6h 40m">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>6h 40m
+      </span>
       <span class="muted mono">8h 05m</span>
     </div>
 
-    <!-- One task picked up three times today. The summary row is not an entry:
-         it carries no .item, so anything counting entries keeps counting them. -->
-    <div class="row group-row">
+    <!-- One task, worked twice: the whole row toggles, the amber counter says how
+         many rows are behind it, and the session tags say what they are. -->
+    <button type="button" class="row group-row open" aria-expanded="true" aria-controls="g-demo">
+      <svg class="caret open" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
       <span class="dot" style="background: var(--accent)"></span>
       <span class="main">
         <span class="desc-line">
           <span class="desc-static">MT-12345 Slow AMaaS quote creation</span>
-          <span class="count">×3</span>
+          <span class="count" title="3 entries">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" /></svg>
+            <span class="count-value">3</span>
+          </span>
         </span>
         <span class="meta muted">
           <span class="proj">MySky</span>
           <span class="tags"><span class="tag">development</span></span>
+          <span class="sessions">#ab12cd34 #7f0e91c2</span>
+          <!-- The dial marks a wall-clock reading: three entries that overlapped
+               are 4h 25m tracked but 3h 10m on the clock. -->
+          <span class="wall mono" title="3 entries overlapped; on the clock this is 3h 10m">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>3h 10m
+          </span>
         </span>
       </span>
       <span class="when">
         <span class="dur">4h 25m</span>
         <span class="range muted"><span class="from">09:15</span><span class="to">-18:02</span></span>
       </span>
-      <span class="muted mono wall" title="3 entries overlapped; on the clock this is 3h 10m">3h 10m</span>
-      <button type="button" class="disclosure" aria-expanded="true" aria-controls="g-demo">
-        <span class="caret open">▸</span><span class="sr-only">Collapse</span>
-      </button>
-    </div>
+      <span class="menu-space" aria-hidden="true"></span>
+    </button>
     <div class="members" id="g-demo">
       <div class="row item member">
         <span class="dot" style="background: var(--accent)"></span>
         <span class="main">
-          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
-          <span class="meta muted">
-            <span class="proj">MySky</span>
-            <span class="tags"><span class="tag">development</span></span>
-            <!-- Which agent session this row came from; manual rows have none. -->
-            <span class="session-tag">#ab12cd34</span>
-          </span>
+          <button type="button" class="desc session" title="MT-12345 Slow AMaaS quote creation">#ab12cd34</button>
         </span>
         <span class="when">
           <span class="dur">2h 05m</span>
@@ -101,12 +104,7 @@
       <div class="row item member">
         <span class="dot" style="background: var(--accent)"></span>
         <span class="main">
-          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
-          <span class="meta muted">
-            <span class="proj">MySky</span>
-            <span class="tags"><span class="tag">development</span></span>
-            <span class="session-tag">#7f0e91c2</span>
-          </span>
+          <button type="button" class="desc session" title="MT-12345 Slow AMaaS quote creation">#7f0e91c2</button>
         </span>
         <span class="when">
           <span class="dur">1h 15m</span>
@@ -123,12 +121,7 @@
       <div class="row item member">
         <span class="dot" style="background: var(--accent)"></span>
         <span class="main">
-          <button type="button" class="desc">MT-12345 Slow AMaaS quote creation</button>
-          <span class="meta muted">
-            <span class="proj">MySky</span>
-            <span class="tags"><span class="tag">development</span></span>
-            <span class="session-tag">#ab12cd34</span>
-          </span>
+          <button type="button" class="desc session" title="MT-12345 Slow AMaaS quote creation">#ab12cd34</button>
         </span>
         <span class="when">
           <span class="dur">1h 05m</span>
@@ -143,7 +136,6 @@
         </span>
       </div>
     </div>
-
     <div class="row item">
       <span class="dot" style="background: var(--accent)"></span>
       <span class="main">

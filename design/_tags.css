@@ -695,11 +695,33 @@ tr.sumrow td {
 }
 
 /* --- grouped task row ------------------------------------------------------
-   The summary of several entries of one task. Deliberately not .item: it is a
-   summary, not an entry, and counting entries must keep counting entries. */
+   The summary of several entries of one task, and the whole row is the control:
+   a group has nothing else to click, and a lone caret at the far right read as
+   another kebab menu instead of "there is more inside". Deliberately not .item:
+   it is a summary, not an entry, and counting entries must keep counting them. */
 .group-row {
+  width: 100%;
   padding: 0.35rem 0;
+  border: none;
   border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .group-row:hover {
+    background: var(--hover);
+    border-color: var(--border);
+  }
+}
+
+/* An open group keeps the tint: the summary is the header of the block below. */
+.group-row.open {
+  background: var(--hover);
 }
 
 .group-row .desc-line {
@@ -715,47 +737,110 @@ tr.sumrow td {
   white-space: nowrap;
 }
 
-.group-row .count {
+.group-row .dot {
+  align-self: flex-start;
+  margin-top: 0.45rem;
+}
+
+/* Deliberately not a pill: tag chips are pills, and a second pill on the same
+   line reads as another tag. Square, tinted and tabular says "counter". */
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   flex: none;
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: 5px;
+  padding: 0.05rem 0.35rem;
 }
 
-/* Wall-clock time next to the sum, shown only when the two differ. */
-.wall {
-  font-size: 0.85rem;
+.count svg {
+  display: block;
+  color: var(--accent);
 }
 
-.group-row .disclosure {
-  border: none;
-  background: transparent;
-  padding: 0.2rem 0.4rem;
-}
-
-.group-row .caret {
-  display: inline-block;
+/* Leading position, where a disclosure chevron is read as hierarchy, pinned to
+   the first line like the twisty of a tree. */
+.caret {
+  flex: none;
+  display: block;
+  align-self: flex-start;
+  margin-top: 0.3rem;
   color: var(--text-dim);
   transition: transform 0.12s ease;
 }
 
-.group-row .caret.open {
+.caret.open {
   transform: rotate(90deg);
+}
+
+.group-row:hover .caret {
+  color: var(--text);
+}
+
+/* Stands in for the kebab the summary row does not have, so both columns of
+   numbers keep the same right edge as every other row. */
+.menu-space {
+  flex: none;
+  width: 2.2rem;
+}
+
+/* Wall-clock time, marked with a dial so two durations side by side are never
+   mistaken for one another. */
+.wall {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sessions {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* The rail ties the unfolded entries to the row they came from. */
+.members {
+  position: relative;
+}
+
+.members::before {
+  content: "";
+  position: absolute;
+  left: 0.42rem;
+  top: 0;
+  bottom: 0.35rem;
+  width: 1px;
+  background: var(--border);
 }
 
 .members .item:first-child {
   border-top: none;
 }
 
-.item.member {
-  padding-left: 1.25rem;
+/* A card holding a group reserves the caret column on its plain rows too, so
+   every project dot in the card stays in one line. */
+.has-groups .item {
+  padding-left: 1.5rem;
 }
 
-.session-tag {
+.item.member,
+.has-groups .item.member {
+  padding-left: 2.4rem;
+}
+
+/* Inside a group the description, project and tags are identical on every
+   member by construction, so a member is labelled by its session instead. */
+.desc.session {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
 }
 
 /* --- description suggestions ----------------------------------------------
@@ -819,7 +904,20 @@ tr.sumrow td {
 }
 
 @media (max-width: 34rem) {
-  .item.member {
-    padding-left: 0.75rem;
+  .group-row .desc-static {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .has-groups .item {
+    padding-left: 1.2rem;
+  }
+
+  .item.member,
+  .has-groups .item.member {
+    padding-left: 1.9rem;
   }
 }

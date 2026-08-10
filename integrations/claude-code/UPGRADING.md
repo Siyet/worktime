@@ -23,7 +23,14 @@ tracking, redo both steps or the old behaviour silently stays.
      the only signal sent *before* a tool runs, so without it a twenty minute
      `Bash` or `Task` is subtracted from the entry as idle time.
 
-3. **Tell the agent to name its work.** Entries are called
+3. **Check the MCP server is actually connected**: `claude mcp list` must show
+   `worktime` as connected, and `claude mcp add --scope user --transport http
+   worktime "$WORKTIME_URL/mcp" --header 'Authorization: Bearer
+   ${WORKTIME_TOKEN}'` adds it if it is missing. Hooks and MCP are independent:
+   time can be tracked perfectly while every `set_agent_task` call fails, and
+   the only symptom is that entries keep their session tag.
+
+4. **Tell the agent to name its work.** Entries are called
    `Claude Code #ab12cd34` until the session is attached to a tracker task with
    the `set_agent_task` MCP tool. Adding a line to the project's `CLAUDE.md`
    ("call set_agent_task with the task number as soon as you know it") is what

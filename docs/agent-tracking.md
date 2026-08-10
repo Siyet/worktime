@@ -126,6 +126,20 @@ an agent is working - splits its work in two rows rather than losing it.
    upgrade is not optional**: the `SessionStart` matcher and the `PreToolUse`
    hook live in your settings file, and an old copy silently keeps the old
    behaviour.
+5. Connect the MCP server, or the agent has no `set_agent_task` to call and
+   every entry stays under its session tag:
+
+   ```sh
+   claude mcp add --scope user --transport http worktime "$WORKTIME_URL/mcp" \
+       --header 'Authorization: Bearer ${WORKTIME_TOKEN}'
+   ```
+
+   The `${WORKTIME_TOKEN}` is expanded when the server is contacted, so the
+   token stays in the environment instead of being copied into
+   `~/.claude.json`. `claude mcp list` must show the server as connected: the
+   hooks and the MCP server are two independent halves, and tracked time with
+   an unreachable `/mcp` looks exactly like a working setup until you notice
+   nothing is ever named.
 
 Set `WORKTIME_HOOK_LOG=~/wt-hook.log` to record every event the hook sees; it
 is the fastest way to tell whether a hook fires at all.

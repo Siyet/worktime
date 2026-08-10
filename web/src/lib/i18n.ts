@@ -185,7 +185,8 @@ const ru: Dictionary = {
   Expand: "Развернуть",
   Collapse: "Свернуть",
   "{n} entries overlapped; on the clock this is {wall}": "{n} записей шли одновременно, по часам это {wall}",
-  "On the clock: {wall}": "По часам: {wall}",
+  "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
+    "{wall} по часам, {tracked} затрекано - параллельная работа считается один раз",
   "{n} of idle time inside this entry is not counted.": "{n} простоя внутри этой записи не учитывается.",
 };
 
@@ -371,7 +372,8 @@ const es: Dictionary = {
   Expand: "Desplegar",
   Collapse: "Plegar",
   "{n} entries overlapped; on the clock this is {wall}": "{n} registros se solaparon; en reloj son {wall}",
-  "On the clock: {wall}": "En reloj: {wall}",
+  "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
+    "{wall} en reloj, {tracked} registrados - el trabajo en paralelo se cuenta una vez",
   "{n} of idle time inside this entry is not counted.": "{n} de inactividad dentro de este registro no se cuenta.",
 };
 
@@ -556,7 +558,8 @@ const de: Dictionary = {
   Expand: "Aufklappen",
   Collapse: "Zuklappen",
   "{n} entries overlapped; on the clock this is {wall}": "{n} Einträge überschnitten sich; nach der Uhr sind das {wall}",
-  "On the clock: {wall}": "Nach der Uhr: {wall}",
+  "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
+    "{wall} nach der Uhr, {tracked} erfasst - parallele Arbeit zählt einmal",
   "{n} of idle time inside this entry is not counted.": "{n} Leerlauf innerhalb dieses Eintrags wird nicht gezählt.",
 };
 
@@ -743,7 +746,8 @@ const fr: Dictionary = {
   Expand: "Déplier",
   Collapse: "Replier",
   "{n} entries overlapped; on the clock this is {wall}": "{n} entrées se chevauchaient ; à l'horloge cela fait {wall}",
-  "On the clock: {wall}": "À l'horloge : {wall}",
+  "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
+    "{wall} à l'horloge, {tracked} suivies - le travail en parallèle est compté une fois",
   "{n} of idle time inside this entry is not counted.": "{n} d'inactivité dans cette entrée ne sont pas comptés.",
 };
 
@@ -926,7 +930,8 @@ const zh: Dictionary = {
   Expand: "展开",
   Collapse: "折叠",
   "{n} entries overlapped; on the clock this is {wall}": "{n} 条记录同时进行，按时钟计为 {wall}",
-  "On the clock: {wall}": "按时钟：{wall}",
+  "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
+    "按时钟 {wall}，记录 {tracked} - 并行的工作只计一次",
   "{n} of idle time inside this entry is not counted.": "这条记录中有 {n} 的空闲时间未计入。",
 };
 

@@ -353,15 +353,23 @@
       <h3>{formatDay(entries[0]!.started_at)}</h3>
       <span class="spacer"></span>
       {#if wall !== tracked}
-        <!-- Wall-clock time: how many hours the day actually took when parallel
-             work is counted once. Shown only when it differs from the sum. -->
-        {@const wallLabel = t("On the clock: {wall}", { wall: formatDurationShort(wall) })}
-        <span class="muted mono wall" title={wallLabel}>
-          {@render dialIcon()}{formatDurationShort(wall)}
-          <span class="sr-only">{wallLabel}</span>
+        <!-- Two readings of one day: how much was tracked, and how much clock time
+             it took with parallel work counted once. Side by side and unlabelled
+             they read as the same number printed twice, so they get a divider and
+             one sentence that says which is which. -->
+        {@const totalsLabel = t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once", {
+          wall: formatDurationShort(wall),
+          tracked: formatDurationShort(tracked),
+        })}
+        <span class="muted mono totals" title={totalsLabel}>
+          <span class="wall">{@render dialIcon()}{formatDurationShort(wall)}</span>
+          <span class="sep" aria-hidden="true">/</span>
+          <span class="tracked">{formatDurationShort(tracked)}</span>
+          <span class="sr-only">{totalsLabel}</span>
         </span>
+      {:else}
+        <span class="muted mono tracked">{formatDurationShort(tracked)}</span>
       {/if}
-      <span class="muted mono">{formatDurationShort(tracked)}</span>
     </div>
     {#each groups as group, index (group.key)}
       {#if group.entries.length === 1}
@@ -538,6 +546,18 @@
     gap: 0.25rem;
     font-size: 0.85rem;
     white-space: nowrap;
+  }
+
+  /* The day's two figures as one unit, with a divider that has to be visible
+     without hovering: a tooltip explains the pair, it cannot separate it. */
+  .totals {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .totals .sep {
+    color: var(--text-dim);
   }
 
   /* Leading position, where a disclosure chevron is read as hierarchy. On the

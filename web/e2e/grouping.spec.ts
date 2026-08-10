@@ -181,10 +181,16 @@ test.describe("task grouping", () => {
     const group = card.locator(".group-row").filter({ hasText: "Parallel agents" });
     await expect(group.locator(".when .dur")).toHaveText("2h 00m");
     await expect(group.locator(".wall")).toContainText("1h 00m");
-    // The day header carries the same pair, so the two never disagree.
+    // The day header carries the same pair, so the two never disagree - with a
+    // divider between them, because unlabelled they read as one number twice.
     const header = card.locator(".row").first();
     await expect(header.locator(".wall")).toContainText("1h 00m");
-    await expect(header.locator(".mono").last()).toHaveText("2h 00m");
+    await expect(header.locator(".totals .sep")).toHaveText("/");
+    await expect(header.locator(".tracked")).toHaveText("2h 00m");
+    await expect(header.locator(".totals")).toHaveAttribute(
+      "title",
+      "1h 00m on the clock, 2h 00m tracked - work that ran in parallel is counted once",
+    );
   });
 
   test("two running timers of one task are one row, stopped from the unfolded list", async ({ page, server }) => {

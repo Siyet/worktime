@@ -18,6 +18,17 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # web/embed.go embeds web/dist, and go:embed fails the build outright when the
+      # directory is absent - which it is in a fresh checkout. Even `go vet` needs it.
+      - run: npm ci --no-fund --no-audit
+        working-directory: web
+      - run: npm run build
+        working-directory: web
       - run: go vet ./...
       - run: go test ./...
 
@@ -41,8 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The hook is plain sh, reached by neither go test nor Playwright.
-      - run: sh integrations/claude-code/wt-hook_test.sh
+      # The hook is plain sh, reached by neither go test nor Playwright. It runs under
+      # whatever /bin/sh the user has, so it is exercised under dash as well as bash -
+      # a bashism passes unnoticed on a machine where sh is bash, which is most of them.
+      - run: dash integrations/claude-code/wt-hook_test.sh
+      - run: bash integrations/claude-code/wt-hook_test.sh
 
   e2e:
     runs-on: ubuntu-latest

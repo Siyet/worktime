@@ -92,9 +92,12 @@ tz_offset_min() {
     case "$zone" in
         [+-][0-9][0-9][0-9][0-9])
             sign=$(printf '%s' "$zone" | cut -c1)
-            hours=$(printf '%s' "$zone" | cut -c2-3)
-            minutes=$(printf '%s' "$zone" | cut -c4-5)
-            total=$((10#$hours * 60 + 10#$minutes))
+            # The leading zero is stripped by hand rather than with bash's 10# prefix:
+            # this script runs under whatever /bin/sh is, and in dash 10# is a syntax
+            # error, while a bare 08 or 09 would be read as invalid octal.
+            hours=$(printf '%s' "$zone" | cut -c2-3 | sed 's/^0//')
+            minutes=$(printf '%s' "$zone" | cut -c4-5 | sed 's/^0//')
+            total=$(( ${hours:-0} * 60 + ${minutes:-0} ))
             [ "$sign" = "-" ] && total=$((-total))
             printf '%s' "$total"
             ;;

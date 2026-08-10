@@ -109,6 +109,14 @@ an agent is working - splits its work in two rows rather than losing it.
 
 ## Setup
 
+The short way: **Settings -> Connect an agent** downloads a setup prompt for
+Claude Code or for Codex. Paste it into a fresh agent session and the agent does
+everything below itself, then proves the tracking works by sending a signal
+through the hook and reading it back. Each download issues its own API token and
+writes it into the file, so treat the file as a secret.
+
+By hand:
+
 1. Create an API token in WorkTime (Settings -> API tokens).
 2. Copy `integrations/claude-code/wt-hook.sh` to `~/.worktime/wt-hook.sh` and
    make it executable (`chmod +x`). On Windows the script runs under Git Bash,
@@ -144,6 +152,11 @@ an agent is working - splits its work in two rows rather than losing it.
 Set `WORKTIME_HOOK_LOG=~/wt-hook.log` to record every event the hook sees; it
 is the fastest way to tell whether a hook fires at all.
 
+`WORKTIME_AGENT_SOURCE` names the client in the `start` signal (default
+`claude-code`). Codex delivers the same payload shape on the same events, so the
+same script serves it - set the variable to `codex` and its untitled entries read
+`Codex #ab12cd34` instead of being filed under Claude Code's name.
+
 Upgrading an existing setup: see `integrations/claude-code/UPGRADING.md`.
 
 ## API
@@ -173,6 +186,19 @@ POST /api/agent/sessions/{id}/stop
   -> closes the session and its running entry; no-op if already closed (404 if
      the session never existed)
 ```
+
+```
+GET /api/agent/hook.sh
+GET /api/agent/hook-settings.json
+  -> the hook script and the hook wiring this binary was built with; same Bearer
+     auth as everything else under /api
+```
+
+The two assets are served by the instance rather than linked from GitHub on
+purpose: the hook and the endpoints it posts to are one protocol, and a fork or
+a server that has not been upgraded yet would otherwise install a hook that
+speaks a different version than its own server. `hook-settings.json` is a
+fragment to merge into the user's settings, never a file to copy over.
 
 A signal older than the last billed moment (a spooled heartbeat delivered after
 the stop) only refreshes metadata: it can neither revive the session nor open a

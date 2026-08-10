@@ -10,7 +10,10 @@
     type TimeFormatSetting,
   } from "../lib/settings.svelte";
   import { t } from "../lib/i18n";
-  import { formatDate } from "../lib/format";
+  import { formatDate, formatTime } from "../lib/format";
+  import { downloadText } from "../lib/download";
+  import { setupPrompt, setupPromptFilename, type AgentClient } from "../lib/agentSetup";
+  import { uuidv7 } from "../lib/uuid";
   import type { User } from "../lib/types";
 
   // Language names are shown in their own language on purpose.
@@ -36,6 +39,9 @@
   let newTokenName = $state("");
   let freshToken = $state<string | null>(null);
   let loadError = $state(false);
+  let promptError = $state(false);
+  // Which download is in flight, so a double click cannot issue two tokens.
+  let issuing = $state<AgentClient | null>(null);
 
   async function load() {
     try {
@@ -69,6 +75,56 @@
   async function deleteToken(tokenID: string) {
     await fetch(`/api/tokens/${tokenID}`, { method: "DELETE" });
     await load();
+  }
+
+  // The prompt is only useful with a token in it, and a token's plaintext exists
+  // exactly once - at creation. So the download makes its own rather than asking
+  // the user to paste one in; the card says so, and the token shows up in the
+  // list above like any other, revocable. The name carries the time as well as
+  // the date: a second download would otherwise be indistinguishable from the
+  // first in the list, and revoking the right one is the whole point of listing.
+  async function downloadPrompt(client: AgentClient) {
+    promptError = false;
+    issuing = client;
+    let plaintext = "";
+    try {
+      const response = await fetch("/api/tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Local date and time: two downloads on one day would otherwise be
+        // indistinguishable in the list, and picking the right one to revoke is
+        // the whole reason they are listed.
+        body: JSON.stringify({ name: `${client} ${formatDate(Date.now())} ${formatTime(Date.now())}` }),
+      });
+      if (!response.ok) throw new Error("token refused");
+      plaintext = (await response.json()).plaintext;
+    } catch {
+      promptError = true;
+      issuing = null;
+      return;
+    }
+    // Past this point the token exists, so a failure here is not "no token".
+    try {
+      await load();
+      downloadText(
+        setupPromptFilename(client),
+        "text/markdown;charset=utf-8",
+        setupPrompt(client, {
+          origin: window.location.origin,
+          token: plaintext,
+          // Minted here rather than baked into the prompt: agent_sessions is keyed
+          // globally, so a constant probe id would belong to whoever ran it first
+          // and every other user of the instance would get a rejection, not a proof.
+          // uuidv7 rather than crypto.randomUUID, which a plain-http instance does
+          // not have - and this app generates every other id the same way.
+          probeSession: uuidv7(),
+        }),
+      );
+    } catch {
+      promptError = true;
+    } finally {
+      issuing = null;
+    }
   }
 </script>
 
@@ -162,6 +218,25 @@
 </div>
 
 <div class="card">
+  <h3>{t("Connect an agent")}</h3>
+  <p class="muted">
+    {t(
+      "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.",
+    )}
+  </p>
+  <div class="row wrap">
+    <button disabled={issuing !== null} onclick={() => downloadPrompt("claude-code")}>{t("Claude Code prompt")}</button>
+    <button disabled={issuing !== null} onclick={() => downloadPrompt("codex")}>{t("Codex prompt")}</button>
+  </div>
+  <p class="muted note">
+    {t("Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.")}
+  </p>
+  {#if promptError}
+    <p class="rejected" role="alert">{t("The token could not be created, so there is nothing to download.")}</p>
+  {/if}
+</div>
+
+<div class="card">
   <h3>{t("Export")}</h3>
   <p class="muted">{t("Your projects, entries and time off as a standalone SQLite database.")}</p>
   <a class="export-link" href="/api/export.sqlite" download>{t("Download .sqlite")}</a>
@@ -196,6 +271,20 @@
     margin: 0.4rem 0 0;
     font-size: 0.85rem;
     color: var(--danger);
+  }
+
+  /* Two buttons whose labels are translated: German and French leave no slack at
+     360px, and .row does not wrap on its own. */
+  .row.wrap {
+    flex-wrap: wrap;
+  }
+
+  /* The line about the token being written into the file: it has to be read
+     before the click, not after, so it sits with the buttons rather than in the
+     paragraph above them. */
+  .note {
+    margin: 0.6rem 0 0;
+    font-size: 0.85rem;
   }
 
   .avatar {

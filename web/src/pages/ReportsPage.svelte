@@ -18,6 +18,7 @@
     type GroupBy,
     type ReportEntry,
   } from "../lib/report";
+  import { downloadText } from "../lib/download";
   import { t } from "../lib/i18n";
   import DailyChart, { type ChartDay } from "../lib/components/DailyChart.svelte";
   import Seg from "../lib/components/Seg.svelte";
@@ -327,18 +328,7 @@
     // would clamp fractional shares back up to a full step, so it exports the
     // raw shares instead.
     const csv = buildCSV(filteredEntries, (projectID) => chipName(projectID ?? NO_PROJECT_KEY), effectiveRounding, minutesOf);
-    const blobURL = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const anchor = document.createElement("a");
-    anchor.href = blobURL;
-    anchor.download = "worktime-report.csv";
-    // The download is handed to the browser asynchronously, so the URL is released on
-    // the next tick - revoking it in the same task can invalidate the blob before the
-    // fetch behind the download starts. The anchor goes into the document because a
-    // synthetic click on a detached element does not navigate everywhere.
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(blobURL), 0);
+    downloadText("worktime-report.csv", "text/csv", csv);
   }
 
   function openPrint() {

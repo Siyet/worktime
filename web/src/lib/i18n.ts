@@ -170,6 +170,15 @@ const ru: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Твои проекты, записи и отсутствия одним файлом SQLite.",
   "Download .sqlite": "Скачать .sqlite",
+  "Connect an agent": "Подключить агента",
+  "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.":
+    "Скачай промпт настройки и вставь его в новую сессию агента. Агент поставит хуки, подключит MCP-сервер и проверит, что его время действительно учитывается.",
+  "Claude Code prompt": "Промпт для Claude Code",
+  "Codex prompt": "Промпт для Codex",
+  "Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.":
+    "Каждое скачивание выпускает новый API-токен и записывает его в файл - относись к файлу как к секрету, а ненужный токен отзови выше.",
+  "The token could not be created, so there is nothing to download.":
+    "Токен не создался, скачивать нечего.",
   "Recent tasks": "Недавние задачи",
   "{n} entries": "записей: {n}",
   "Repeat {task}": "Повторить «{task}»",
@@ -347,6 +356,15 @@ const es: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Tus proyectos, registros y ausencias en un único archivo SQLite.",
   "Download .sqlite": "Descargar .sqlite",
+  "Connect an agent": "Conectar un agente",
+  "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.":
+    "Descarga un prompt de configuración y pégalo en una sesión nueva del agente. El agente instala los hooks, conecta el servidor MCP y comprueba que su propio tiempo se registra.",
+  "Claude Code prompt": "Prompt para Claude Code",
+  "Codex prompt": "Prompt para Codex",
+  "Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.":
+    "Cada descarga emite un token de API nuevo y lo escribe en el archivo: trátalo como un secreto y revoca arriba el token cuando ya no haga falta.",
+  "The token could not be created, so there is nothing to download.":
+    "No se pudo crear el token, así que no hay nada que descargar.",
   "Recent tasks": "Tareas recientes",
   "{n} entries": "{n} registros",
   "Repeat {task}": "Repetir «{task}»",
@@ -523,6 +541,15 @@ const de: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Deine Projekte, Einträge und Abwesenheiten als eigenständige SQLite-Datei.",
   "Download .sqlite": ".sqlite herunterladen",
+  "Connect an agent": "Agent verbinden",
+  "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.":
+    "Lade einen Einrichtungs-Prompt herunter und füge ihn in eine neue Agentensitzung ein. Der Agent installiert die Hooks, verbindet den MCP-Server und weist nach, dass seine eigene Zeit erfasst wird.",
+  "Claude Code prompt": "Prompt für Claude Code",
+  "Codex prompt": "Prompt für Codex",
+  "Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.":
+    "Jeder Download stellt ein neues API-Token aus und schreibt es in die Datei - behandle die Datei als Geheimnis und widerrufe das Token oben, sobald es nicht mehr gebraucht wird.",
+  "The token could not be created, so there is nothing to download.":
+    "Das Token konnte nicht erstellt werden, es gibt also nichts zum Herunterladen.",
   "Recent tasks": "Letzte Aufgaben",
   "{n} entries": "{n} Einträge",
   "Repeat {task}": "„{task}“ wiederholen",
@@ -701,6 +728,15 @@ const fr: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "Tes projets, entrées et absences dans un seul fichier SQLite.",
   "Download .sqlite": "Télécharger .sqlite",
+  "Connect an agent": "Connecter un agent",
+  "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.":
+    "Télécharge un prompt de configuration et colle-le dans une nouvelle session de l'agent. L'agent installe les hooks, connecte le serveur MCP et prouve que son propre temps est bien suivi.",
+  "Claude Code prompt": "Prompt pour Claude Code",
+  "Codex prompt": "Prompt pour Codex",
+  "Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.":
+    "Chaque téléchargement émet un nouveau jeton d'API et l'écrit dans le fichier : traite le fichier comme un secret et révoque le jeton ci-dessus quand il ne sert plus.",
+  "The token could not be created, so there is nothing to download.":
+    "Le jeton n'a pas pu être créé, il n'y a donc rien à télécharger.",
   "Recent tasks": "Tâches récentes",
   "{n} entries": "{n} entrées",
   "Repeat {task}": "Répéter « {task} »",
@@ -875,6 +911,15 @@ const zh: Dictionary = {
   "Your projects, entries and time off as a standalone SQLite database.":
     "你的项目、记录和休假打包为一个 SQLite 文件。",
   "Download .sqlite": "下载 .sqlite",
+  "Connect an agent": "连接智能体",
+  "Download a setup prompt and paste it into a fresh agent session. The agent installs the hooks, connects the MCP server and proves its own time is being tracked.":
+    "下载配置提示词，粘贴到新的智能体会话里。智能体会安装钩子、连接 MCP 服务器，并验证自己的时间确实被记录。",
+  "Claude Code prompt": "Claude Code 提示词",
+  "Codex prompt": "Codex 提示词",
+  "Each download issues a new API token and writes it into the file - treat the file as a secret and revoke the token above when it is no longer needed.":
+    "每次下载都会签发一个新的 API 令牌并写入文件 - 请把该文件当作机密，不再需要时在上面撤销该令牌。",
+  "The token could not be created, so there is nothing to download.":
+    "令牌创建失败，没有可下载的内容。",
   "Recent tasks": "最近的任务",
   "{n} entries": "{n} 条记录",
   "Repeat {task}": "重复「{task}」",

@@ -28,6 +28,12 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 	// today; whatever adds the first rate limiter or audit log has to decide what it
 	// trusts rather than inherit a spoofable value.
 	router.Use(middleware.Recoverer)
+	// The pull is not paginated by design - a device bootstraps in one response - so on
+	// an instance with years of history that body is megabytes of JSON, which compresses
+	// by roughly an order of magnitude. Without this a phone on mobile data can fail to
+	// bootstrap at all: the request has a deadline, and no partial progress is possible
+	// because the cursor only advances on a complete payload.
+	router.Use(middleware.Compress(5))
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -38,7 +44,11 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		auth.Get("/config", s.handleAuthConfig)
 		auth.Get("/google", s.handleGoogleLogin)
 		auth.Get("/google/callback", s.handleGoogleCallback)
-		auth.Post("/logout", s.handleLogout)
+		// Signing out is a state change like any other: without this a page on a
+		// sibling host can log the owner out, since SameSite=Lax does not consider it
+		// cross-site. Nothing is destroyed - the local-first data survives in
+		// IndexedDB - but being logged out at random is not something to leave open.
+		auth.With(s.requireSameOrigin).Post("/logout", s.handleLogout)
 	})
 
 	router.Route("/api", func(api chi.Router) {
@@ -61,9 +71,13 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		})
 	})
 
+	// MCP accepts the session cookie as well as a Bearer token, so it needs the same
+	// cross-site guard as /api. A browser will not reach it today - the JSON content
+	// type forces a preflight, and no CORS headers are returned - but that is the
+	// browser's rule protecting the endpoint, not the endpoint protecting itself.
 	mcpHandler := mcpserver.NewHandler(dataStore)
-	router.With(s.requireAuth).Handle("/mcp", mcpHandler)
-	router.With(s.requireAuth).Handle("/mcp/*", mcpHandler)
+	router.With(s.requireAuth, s.requireSameOrigin).Handle("/mcp", mcpHandler)
+	router.With(s.requireAuth, s.requireSameOrigin).Handle("/mcp/*", mcpHandler)
 
 	router.NotFound(spaHandler())
 

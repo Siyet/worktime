@@ -135,7 +135,12 @@ async function postSync(changes: SyncChanges): Promise<{ status: number; payload
     // radio - leaves the promise pending forever, and syncInFlight is only released in
     // the finally of syncNow. Without a deadline that one request stops the tab from
     // ever syncing again, with the header stuck on "syncing" and no error anywhere.
-    signal: AbortSignal.timeout(30_000),
+    //
+    // The deadline is generous because the first sync of a device is one response
+    // carrying the whole history, and it either completes or starts over - there is no
+    // partial progress to keep. A tight timeout would leave a phone on a slow link
+    // unable to bootstrap at all, retrying the same megabytes every 30 seconds.
+    signal: AbortSignal.timeout(5 * 60_000),
   });
   if (!response.ok) return { status: response.status };
   return { status: response.status, payload: (await response.json()) as SyncResponse };

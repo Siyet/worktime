@@ -251,3 +251,31 @@ func TestCrossSiteWritesAreRefused(t *testing.T) {
 		t.Fatalf("a push from the host the request arrived on must work, got %d", status)
 	}
 }
+
+// Signing out is a state change too, and it sits outside /api - so it needs the guard
+// wired explicitly rather than inherited from the route group.
+func TestCrossSiteLogoutIsRefused(t *testing.T) {
+	testServer := newTestServer(t)
+
+	request, _ := http.NewRequest(http.MethodPost, testServer.URL+"/auth/logout", nil)
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected a cross-site logout refused, got %d", response.StatusCode)
+	}
+
+	same, _ := http.NewRequest(http.MethodPost, testServer.URL+"/auth/logout", nil)
+	same.Header.Set("Sec-Fetch-Site", "same-origin")
+	sameResponse, err := http.DefaultClient.Do(same)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer sameResponse.Body.Close()
+	if sameResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("the app's own logout must still work, got %d", sameResponse.StatusCode)
+	}
+}

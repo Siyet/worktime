@@ -43,8 +43,13 @@ const MAX_SUGGESTIONS = 8;
 // results into calendar day cards - a rolling cut leaves the oldest card holding only
 // what happened after the current time of day. It also changes once a day rather than
 // once a second, which keeps the ticker out of every scan over the entry table.
+// Days are stepped through the Date constructor rather than by subtracting fixed
+// milliseconds: a DST day is 23 or 25 hours long, so a fixed subtraction lands the
+// window edge at 01:00 or at 23:00 the previous day for a week after each change -
+// which silently drops an hour of entries out of the feed, or grows an eighth card.
 export function suggestionWindowStart(nowMs: number): number {
-  return new Date(localDateISO(nowMs) + "T00:00").getTime() - (SUGGESTION_WINDOW_DAYS - 1) * 86_400_000;
+  const today = new Date(localDateISO(nowMs) + "T00:00");
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() - (SUGGESTION_WINDOW_DAYS - 1)).getTime();
 }
 
 // A NUL byte cannot occur in a description, a UUID or a tag, so the parts of

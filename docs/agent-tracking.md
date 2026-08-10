@@ -185,11 +185,16 @@ end, so during real work they are seconds apart.
 
 - **Clean `/exit` or terminal close**: `SessionEnd` fires `stop`, the entry
   ends at the stop moment (or at the last heartbeat if the stop arrived after
-  more than the idle threshold of silence). `reason=resume` sends no stop: that
+  more than the idle threshold of silence - except that silence which began with
+  a `tool_start` is billed up to `WORKTIME_AGENT_TOOL_MAX`, because a running
+  tool is the one gap known to be work). `reason=resume` sends no stop: that
   session is being handed over to a resumed one with the same id.
 - **`kill -9`, OOM, machine sleep, SSH drop**: no stop ever arrives;
   reconciliation closes the session within the grace period with
-  `ended_at = last_heartbeat_at`.
+  `ended_at = last_heartbeat_at`. A trailing tool run is *not* extended here,
+  unlike on the stop path: a stop carries the moment work ended, reconciliation
+  only knows when the job happened to run, so billing from there would invent
+  time. An interrupted tool run is therefore under-counted rather than over-counted.
 - **Plan/usage limit mid-task**: same as above - whatever hook fires or not,
   the timer cannot stay open longer than the grace period after the last real
   activity.

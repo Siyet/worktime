@@ -354,13 +354,20 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 }
 
 // ReconcileAgentSessions closes every active session (across all users) whose last
-// heartbeat is older than the grace period. This is the layer that survives SIGKILL,
-// OOM and network loss on the agent side.
+// heartbeat is older than the grace period, at that last heartbeat. This is the layer
+// that survives SIGKILL, OOM and network loss on the agent side.
 //
-// The end is the last heartbeat, with the same tool_start allowance StopAgentSession
-// makes - a session killed mid-tool must not be worth less than one that managed to
-// send its stop.
-func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64, policy AgentPolicy) (int, error) {
+// It deliberately does NOT extend a trailing tool_start the way StopAgentSession does,
+// even though both close a session that went quiet mid-tool. The difference is what
+// each one knows. A stop carries the moment work actually ended, so the gap before it
+// can be measured and capped. Reconciliation has no such moment - only "now", which is
+// whenever the job happened to run: at least the grace period later, and after a server
+// restart possibly days later. Billing to the cap from there would invent time nobody
+// worked, and would make a killed session worth *more* than one that stopped cleanly.
+// Under-counting an interrupted tool run is the lesser error, and the only one that
+// keeps the promise this whole mechanism is built on: a lost stop can never inflate a
+// duration.
+func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) (int, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -373,10 +380,9 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64, 
 		timeEntryID     *string
 		entryServerSeq  *int64
 		lastHeartbeatAt int64
-		lastKind        string
 	}
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at, last_kind
+		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at
 		FROM agent_sessions WHERE status = ? AND last_heartbeat_at < ?`,
 		agentStatusActive, now-graceMs)
 	if err != nil {
@@ -386,7 +392,7 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64, 
 	for rows.Next() {
 		var session staleSession
 		if err := rows.Scan(&session.id, &session.userID, &session.timeEntryID,
-			&session.entryServerSeq, &session.lastHeartbeatAt, &session.lastKind); err != nil {
+			&session.entryServerSeq, &session.lastHeartbeatAt); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -397,7 +403,7 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64, 
 	}
 
 	for _, session := range stale {
-		endedAt := trailingEnd(session.lastHeartbeatAt, now, session.lastKind, policy)
+		endedAt := session.lastHeartbeatAt
 		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, endedAt, now)
 		if err != nil {
 			return 0, err

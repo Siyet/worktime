@@ -446,7 +446,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 
 	// Reconciliation still owns the new entry, which is the point of keeping the
 	// session active through the cut.
-	closed, err := testStore.ReconcileAgentSessions(ctx, morning+testGraceMs+1000, testGraceMs, testPolicy)
+	closed, err := testStore.ReconcileAgentSessions(ctx, morning+testGraceMs+1000, testGraceMs)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -695,39 +695,49 @@ func TestAgentWritesStayNewerThanAClientEdit(t *testing.T) {
 	}
 }
 
-// A session killed mid-tool is closed by reconciliation rather than by a stop, and must
-// be worth the same as one that managed to send SessionEnd - otherwise the value of
-// twenty minutes of work depends on whether the process died cleanly.
-func TestAgentReconcileBillsTrailingToolRun(t *testing.T) {
+// A stop carries the moment work ended, so StopAgentSession can measure a trailing tool
+// run and bill it up to the cap. Reconciliation knows no such moment - only when the
+// job happened to run, which is at least the grace period later and after a restart can
+// be days. Extending the entry from there would invent time nobody worked and make a
+// killed session worth more than one that stopped cleanly, so it closes at the last
+// heartbeat whatever the last signal was.
+func TestAgentReconcileNeverBillsPastTheLastHeartbeat(t *testing.T) {
 	testStore := openTestStore(t)
-	user := testUser(t, testStore, "agent-reconcile-tool@test.local")
 	ctx := context.Background()
 
-	sessionID := uuid.NewString()
-	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	toolStartedAt := agentBaseMs + 60_000
-	if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
-		AgentSignal{At: toolStartedAt, Kind: AgentKindToolStart}, testPolicy); err != nil {
-		t.Fatalf("tool start: %v", err)
-	}
+	for _, lastKind := range []string{"", AgentKindToolStart} {
+		name := "heartbeat"
+		if lastKind != "" {
+			name = lastKind
+		}
+		t.Run(name, func(t *testing.T) {
+			user := testUser(t, testStore, "agent-reconcile-"+name+"@test.local")
+			sessionID := uuid.NewString()
+			started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			lastSignalAt := agentBaseMs + 60_000
+			if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
+				AgentSignal{At: lastSignalAt, Kind: lastKind}, testPolicy); err != nil {
+				t.Fatalf("signal: %v", err)
+			}
 
-	// The agent is SIGKILLed during the run, so no stop ever arrives.
-	toolRunMs := int64(20 * 60 * 1000)
-	closedAt := toolStartedAt + toolRunMs
-	closed, err := testStore.ReconcileAgentSessions(ctx, closedAt, testGraceMs, testPolicy)
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if closed != 1 {
-		t.Fatalf("expected one session closed, got %d", closed)
-	}
+			// The machine is off overnight, so the job runs many hours later.
+			closed, err := testStore.ReconcileAgentSessions(ctx, lastSignalAt+12*60*60*1000, testGraceMs)
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if closed != 1 {
+				t.Fatalf("expected one session closed, got %d", closed)
+			}
 
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
-	if err != nil {
-		t.Fatalf("get entry: %v", err)
-	}
-	if entry.StoppedAt == nil || *entry.StoppedAt != closedAt {
-		t.Fatalf("expected the tool run billed, got %+v", entry.StoppedAt)
+			entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+			if err != nil {
+				t.Fatalf("get entry: %v", err)
+			}
+			if entry.StoppedAt == nil || *entry.StoppedAt != lastSignalAt {
+				t.Fatalf("expected the entry closed at the last heartbeat (%d), got %+v",
+					lastSignalAt, entry.StoppedAt)
+			}
+		})
 	}
 }
 
@@ -1078,7 +1088,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 		t.Fatalf("start fresh: %v", err)
 	}
 
-	closed, err := testStore.ReconcileAgentSessions(ctx, now, testGraceMs, testPolicy)
+	closed, err := testStore.ReconcileAgentSessions(ctx, now, testGraceMs)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}

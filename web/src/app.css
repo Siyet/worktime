@@ -51,6 +51,11 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  /* Reserve the scrollbar's width whether or not the page needs one. Without it
+     a short page (Settings) is centred a scrollbar-width further right than a
+     long one (Timer), and the header shifts under the cursor on every click.
+     Ignored where scrollbars overlay the content, which is every phone. */
+  scrollbar-gutter: stable;
 }
 
 body {

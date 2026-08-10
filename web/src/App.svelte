@@ -64,9 +64,11 @@
     <p class="muted">{t("Loading…")}</p>
   {/if}
 {:else}
-<!-- Timer and Reports use the wide shell: entry rows and report tables both
-     benefit from the extra width on desktop. -->
-<div class="shell" class:wide={route.path === "/reports" || route.path === "/"}>
+<!-- One width for every page. Timer and Reports need the room for entry rows and
+     report tables, and the rest could live in less - but a shell that changes
+     size between pages moves the header and the navigation under the cursor on
+     every click, which costs more than the extra whitespace on a short page. -->
+<div class="shell">
   <header>
     <span class="logo"><Logo /><span class="wordmark">W<span class="logo-accent">T</span></span></span>
     <nav>
@@ -151,15 +153,11 @@
 
 <style>
   .shell {
-    max-width: 46rem;
+    max-width: 68rem;
     margin: 0 auto;
     padding: 0 1rem 3rem;
     padding-left: max(1rem, env(safe-area-inset-left));
     padding-right: max(1rem, env(safe-area-inset-right));
-  }
-
-  .shell.wide {
-    max-width: 68rem;
   }
 
   header {

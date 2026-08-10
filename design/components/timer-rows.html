@@ -53,36 +53,42 @@
       <span class="muted mono">8h 05m</span>
     </div>
 
-    <!-- One task, worked twice: the whole row toggles, the amber counter says how
-         many rows are behind it, and the session tags say what they are. -->
-    <button type="button" class="row group-row open" aria-expanded="true" aria-controls="g-demo">
-      <svg class="caret open" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
-      <span class="dot" style="background: var(--accent)"></span>
-      <span class="main">
-        <span class="desc-line">
-          <span class="desc-static">MT-12345 Slow AMaaS quote creation</span>
-          <span class="count" title="3 entries">
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" /></svg>
-            <span class="count-value">3</span>
+    <!-- One task, worked twice: the summary toggles, the amber counter says how
+         many rows are behind it, and the session tags say what they are. The
+         repeat button starts the same task over - description, project and tags
+         are what made these entries a group, so the row already holds a timer. -->
+    <div class="row group-line open">
+      <button type="button" class="row group-row" aria-expanded="true" aria-controls="g-demo">
+        <svg class="caret open" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+        <span class="dot" style="background: var(--accent)"></span>
+        <span class="main">
+          <span class="desc-line">
+            <span class="desc-static">MT-12345 Slow AMaaS quote creation</span>
+            <span class="count" title="3 entries">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" /></svg>
+              <span class="count-value">3</span>
+            </span>
+          </span>
+          <span class="meta muted">
+            <span class="proj">MySky</span>
+            <span class="tags"><span class="tag">development</span></span>
+            <span class="sessions">#ab12cd34 #7f0e91c2</span>
+            <!-- The dial marks a wall-clock reading: three entries that overlapped
+                 are 4h 25m tracked but 3h 10m on the clock. -->
+            <span class="wall mono" title="3 entries overlapped; on the clock this is 3h 10m">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>3h 10m
+            </span>
           </span>
         </span>
-        <span class="meta muted">
-          <span class="proj">MySky</span>
-          <span class="tags"><span class="tag">development</span></span>
-          <span class="sessions">#ab12cd34 #7f0e91c2</span>
-          <!-- The dial marks a wall-clock reading: three entries that overlapped
-               are 4h 25m tracked but 3h 10m on the clock. -->
-          <span class="wall mono" title="3 entries overlapped; on the clock this is 3h 10m">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>3h 10m
-          </span>
+        <span class="when">
+          <span class="dur">4h 25m</span>
+          <span class="range muted"><span class="from">09:15</span><span class="to">-18:02</span></span>
         </span>
-      </span>
-      <span class="when">
-        <span class="dur">4h 25m</span>
-        <span class="range muted"><span class="from">09:15</span><span class="to">-18:02</span></span>
-      </span>
-      <span class="menu-space" aria-hidden="true"></span>
-    </button>
+      </button>
+      <button type="button" class="kebab icon repeat" aria-label="Repeat MT-12345 Slow AMaaS quote creation" title="Repeat MT-12345 Slow AMaaS quote creation">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01" /><path d="M20.5 4.5V10H15" /></svg>
+      </button>
+    </div>
     <div class="members" id="g-demo">
       <div class="row item member">
         <span class="dot" style="background: var(--accent)"></span>

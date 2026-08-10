@@ -202,12 +202,50 @@ test.describe("task grouping", () => {
     // A collapsed running group has no Stop of its own: stopping several timers
     // at once would need an undo that does not exist.
     await expect(card.getByRole("button", { name: "Stop" })).toHaveCount(0);
+    // Nor a repeat: this task is running right now, so repeating it would only
+    // add a third timer for the same work.
+    await expect(card.locator(".repeat")).toHaveCount(0);
 
     await group.click();
     await expect(card.locator(".item.member")).toHaveCount(2);
     await card.locator(".item.member").first().getByRole("button", { name: "Stop" }).click();
     await expect(card.locator(".item")).toHaveCount(1);
     await expect(card.locator(".group-row")).toHaveCount(0);
+  });
+
+  test("repeating a group starts the task again with its project and tags", async ({ page, server }) => {
+    const projectID = crypto.randomUUID();
+    const base = dayNine();
+    await seedServer(server.url, {
+      projects: [{ id: projectID, name: "Backend" }],
+      entries: [
+        { description: "Write e2e tests", startedAt: base, stoppedAt: base + HOUR, projectID, tags: ["review"] },
+        {
+          description: "Write e2e tests",
+          startedAt: base + 2 * HOUR,
+          stoppedAt: base + 3 * HOUR,
+          projectID,
+          tags: ["review"],
+        },
+      ],
+    });
+
+    await page.goto(server.url + "/#/");
+    const card = await dayCard(page);
+    const group = card.locator(".group-line").filter({ hasText: "Write e2e tests" });
+
+    const barrier = pushBarrier(page, "Write e2e tests");
+    await group.locator(".repeat").click();
+    await barrier;
+
+    // Everything that made the entries one group is what the repeat carries over.
+    const started = runningCard(page).locator(".item");
+    await expect(started).toHaveCount(1);
+    await expect(started.locator(".desc")).toHaveText("Write e2e tests");
+    await expect(started.locator(".proj")).toHaveText("Backend");
+    await expect(started.locator(".meta")).toContainText("review");
+    // The click belongs to the button, not to the row it sits in.
+    await expect(group.locator(".group-row")).toHaveAttribute("aria-expanded", "false");
   });
 
   test("the group row fits a 360px screen", async ({ page, server }) => {

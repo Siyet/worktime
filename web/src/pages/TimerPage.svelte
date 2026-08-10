@@ -115,6 +115,13 @@
     return groups.reduce((sum, group) => sum + group.totalMs, 0);
   }
 
+  // Start the group's task over. Everything that made the entries one group is
+  // exactly what a repeat needs - the description, the project and the tags -
+  // so the row already holds the whole timer.
+  function repeatGroup(group: TaskGroup) {
+    void startTimer(group.description, group.projectID, [...group.tags]);
+  }
+
   function entrySessionTag(entry: TimeEntry): string {
     return entry.agent_session_id ? `#${sessionTag(entry.agent_session_id)}` : "";
   }
@@ -189,85 +196,110 @@
   </div>
 {/snippet}
 
-<!-- A group of several entries. The whole row is the control: a group has
+<!-- A group of several entries. The summary itself is the control: a group has
      nothing else to click, and a lone caret at the far right reads as another
-     kebab menu rather than as "there is more inside". It deliberately does not
-     carry .item - the row is a summary, not an entry, and counting .item must
-     keep counting entries. -->
+     kebab menu rather than as "there is more inside". The repeat button is a
+     sibling rather than a child - a button inside a button is invalid markup,
+     and a click on it must not unfold the group. The summary deliberately does
+     not carry .item - the row is a summary, not an entry, and counting .item
+     must keep counting entries. -->
 {#snippet groupRow(dayISO: string, group: TaskGroup, index: number)}
   {@const project = projectByID(group.projectID)}
   {@const listID = `g-${dayISO}-${index}`}
   {@const shown = isExpanded(dayISO, group)}
   {@const sessions = groupSessionTags(group)}
   {@const countLabel = t("{n} entries", { n: group.entries.length })}
-  <button
-    type="button"
-    class="row group-row"
-    class:open={shown}
-    aria-expanded={shown}
-    {...shown ? { "aria-controls": listID } : {}}
-    onclick={() => toggleGroup(dayISO, group)}
-  >
-    <svg
-      class="caret"
-      class:open={shown}
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2.6"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
-    <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
-    <span class="main">
-      <span class="desc-line">
-        <span class="desc-static">{group.description || t("(no description)")}</span>
-        <!-- Stacked lines plus the number: "several rows live here" without a
-             noun, which no plural rule can then get wrong. -->
-        <span class="count" title={countLabel}>
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-            <path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" />
-          </svg>
-          <span class="count-value">{group.entries.length}</span>
-          <span class="sr-only">{countLabel}</span>
+  <!-- A running group is already this task, right now: repeating it would only
+       add a second timer for the same work. -->
+  {@const repeatable = group.lastStoppedAt !== null}
+  <div class="row group-line" class:open={shown}>
+    <button
+      type="button"
+      class="row group-row"
+      aria-expanded={shown}
+      {...shown ? { "aria-controls": listID } : {}}
+      onclick={() => toggleGroup(dayISO, group)}
+    >
+      <svg
+        class="caret"
+        class:open={shown}
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+      <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
+      <span class="main">
+        <span class="desc-line">
+          <span class="desc-static">{group.description || t("(no description)")}</span>
+          <!-- Stacked lines plus the number: "several rows live here" without a
+               noun, which no plural rule can then get wrong. -->
+          <span class="count" title={countLabel}>
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+              <path d="M3 4.5h10" /><path d="M3 8h10" /><path d="M3 11.5h10" />
+            </svg>
+            <span class="count-value">{group.entries.length}</span>
+            <span class="sr-only">{countLabel}</span>
+          </span>
+        </span>
+        <span class="meta muted">
+          {#if project}<span class="proj">{project.name}</span>{/if}
+          <TagChips tags={group.tags} />
+          <!-- Which agent sessions are inside, so "one task worked twice in
+               parallel" is visible without unfolding. -->
+          {#if sessions.length > 0}<span class="sessions">{sessions.join(" ")}</span>{/if}
+          {#if group.wallMs !== group.totalMs}
+            <!-- Two hours of tracked time inside one hour of wall clock reads as a
+                 mistake without the second number; the dial says which of the two
+                 it is without a word of text. It sits here rather than in the
+                 right column, where it would knock the duration out of the line
+                 every other row keeps. -->
+            {@const overlapLabel = t("{n} entries overlapped; on the clock this is {wall}", {
+              n: group.entries.length,
+              wall: formatDurationShort(group.wallMs),
+            })}
+            <span class="wall mono" title={overlapLabel}>
+              {@render dialIcon()}{formatDurationShort(group.wallMs)}
+              <span class="sr-only">{overlapLabel}</span>
+            </span>
+          {/if}
         </span>
       </span>
-      <span class="meta muted">
-        {#if project}<span class="proj">{project.name}</span>{/if}
-        <TagChips tags={group.tags} />
-        <!-- Which agent sessions are inside, so "one task worked twice in
-             parallel" is visible without unfolding. -->
-        {#if sessions.length > 0}<span class="sessions">{sessions.join(" ")}</span>{/if}
-        {#if group.wallMs !== group.totalMs}
-          <!-- Two hours of tracked time inside one hour of wall clock reads as a
-               mistake without the second number; the dial says which of the two
-               it is without a word of text. It sits here rather than in the
-               right column, where it would knock the duration out of the line
-               every other row keeps. -->
-          {@const overlapLabel = t("{n} entries overlapped; on the clock this is {wall}", {
-            n: group.entries.length,
-            wall: formatDurationShort(group.wallMs),
-          })}
-          <span class="wall mono" title={overlapLabel}>
-            {@render dialIcon()}{formatDurationShort(group.wallMs)}
-            <span class="sr-only">{overlapLabel}</span>
-          </span>
+      <span class="when">
+        <span class="dur">{formatDurationShort(group.totalMs)}</span>
+        {#if group.lastStoppedAt !== null}
+          <span class="range muted"><span class="from">{formatTime(group.firstStartedAt)}</span><span class="to"
+            >-{formatTime(group.lastStoppedAt)}</span
+          ></span>
         {/if}
       </span>
-    </span>
-    <span class="when">
-      <span class="dur">{formatDurationShort(group.totalMs)}</span>
-      {#if group.lastStoppedAt !== null}
-        <span class="range muted"><span class="from">{formatTime(group.firstStartedAt)}</span><span class="to"
-          >-{formatTime(group.lastStoppedAt)}</span
-        ></span>
-      {/if}
-    </span>
-    <span class="sr-only">{shown ? t("Collapse") : t("Expand")}</span>
-    <span class="menu-space" aria-hidden="true"></span>
-  </button>
+      <span class="sr-only">{shown ? t("Collapse") : t("Expand")}</span>
+    </button>
+    {#if repeatable}
+      <!-- "Repeat", not "Start again": Playwright matches an accessible name by
+           substring, and every spec that clicks the form's Start button would
+           then hit this one too. -->
+      {@const repeatLabel = t("Repeat {task}", { task: group.description })}
+      <button type="button" class="kebab icon repeat" aria-label={repeatLabel} title={repeatLabel} onclick={() => repeatGroup(group)}>
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01" /><path d="M20.5 4.5V10H15" /></svg>
+      </button>
+    {:else}
+      <span class="menu-space" aria-hidden="true"></span>
+    {/if}
+  </div>
   {#if shown}
     <div class="members" id={listID}>
       {#each group.entries as entry (entry.id)}
@@ -360,14 +392,23 @@
     border-top: 1px solid var(--border);
   }
 
-  /* The summary row is a real button spanning the whole width: the group has no
-     other action, so every part of it toggles. Button defaults are reset rather
-     than avoided, because the row has to keep looking like a row. */
-  .group-row {
-    width: 100%;
+  /* The line carries what a row carries - the rule above it, the padding and the
+     tint - so the summary and the repeat button sit inside one band instead of
+     looking like two controls stacked side by side. */
+  .group-line {
     padding: 0.35rem 0;
-    border: none;
     border-top: 1px solid var(--border);
+  }
+
+  /* The summary itself is a real button spanning everything but the repeat slot:
+     the group has no other action, so every part of it toggles. Button defaults
+     are reset rather than avoided, because the row has to keep looking like a
+     row. */
+  .group-row {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
     border-radius: 0;
     background: transparent;
     color: inherit;
@@ -377,16 +418,21 @@
   }
 
   @media (hover: hover) {
-    .group-row:hover {
+    .group-line:hover {
       background: var(--hover);
-      border-color: var(--border);
     }
   }
 
   /* An open group keeps the tint: the summary is the header of the block below
      it, and the rail alone is a thin thing to carry that on its own. */
-  .group-row.open {
+  .group-line.open {
     background: var(--hover);
+  }
+
+  /* Same footprint as the kebab it stands in for, so the right edge of every
+     row in the card stays put whether or not the row is a group. */
+  .repeat {
+    flex: none;
   }
 
   /* The rail ties the unfolded entries to the row they came from; without it
@@ -512,7 +558,7 @@
     transform: rotate(90deg);
   }
 
-  .group-row:hover .caret {
+  .group-line:hover .caret {
     color: var(--text);
   }
 

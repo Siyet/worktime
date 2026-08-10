@@ -695,15 +695,24 @@ tr.sumrow td {
 }
 
 /* --- grouped task row ------------------------------------------------------
-   The summary of several entries of one task, and the whole row is the control:
-   a group has nothing else to click, and a lone caret at the far right read as
-   another kebab menu instead of "there is more inside". Deliberately not .item:
-   it is a summary, not an entry, and counting entries must keep counting them. */
-.group-row {
-  width: 100%;
+   The summary of several entries of one task, and the summary itself is the
+   control: a group has nothing else to click, and a lone caret at the far right
+   read as another kebab menu instead of "there is more inside". Deliberately not
+   .item: it is a summary, not an entry, and counting entries must keep counting
+   them. The line carries the rule, the padding and the tint, so the summary and
+   the repeat button read as one band rather than two stacked controls - and the
+   repeat button has to be a sibling anyway, since a button inside a button is
+   invalid markup. */
+.group-line {
   padding: 0.35rem 0;
-  border: none;
   border-top: 1px solid var(--border);
+}
+
+.group-row {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
   border-radius: 0;
   background: transparent;
   color: inherit;
@@ -713,15 +722,21 @@ tr.sumrow td {
 }
 
 @media (hover: hover) {
-  .group-row:hover {
+  .group-line:hover {
     background: var(--hover);
-    border-color: var(--border);
   }
 }
 
 /* An open group keeps the tint: the summary is the header of the block below. */
-.group-row.open {
+.group-line.open {
   background: var(--hover);
+}
+
+/* Same footprint as the kebab it stands in for, so the right edge of every row
+   in the card stays put whether or not the row is a group. Only finished groups
+   have it: a running group is this task already. */
+.repeat {
+  flex: none;
 }
 
 .group-row .desc-line {
@@ -778,7 +793,7 @@ tr.sumrow td {
   transform: rotate(90deg);
 }
 
-.group-row:hover .caret {
+.group-line:hover .caret {
   color: var(--text);
 }
 

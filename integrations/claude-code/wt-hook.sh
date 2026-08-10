@@ -26,11 +26,19 @@ set -u
 EVENT="${1:-heartbeat}"
 BASE_URL="${WORKTIME_URL:-}"
 TOKEN="${WORKTIME_TOKEN:-}"
-QUEUE_DIR="${WORKTIME_QUEUE_DIR:-$HOME/.worktime/queue}"
-LOCK_DIR="$QUEUE_DIR/.lock"
+QUEUE_ROOT="${WORKTIME_QUEUE_DIR:-$HOME/.worktime/queue}"
 FLUSH_LIMIT=20
 
 [ -n "$BASE_URL" ] && [ -n "$TOKEN" ] || exit 0
+
+# One queue per instance. A spooled request may only ever be replayed against the
+# server it was addressed to - the token in this process belongs to one instance,
+# and handing it to another would both leak it and get the event dropped, since a
+# 401 counts as a permanent rejection. Keeping them in separate directories also
+# means a dead instance's backlog cannot fill up the shared cap, and a working
+# instance never has to read anyone else's files to find out it has none of its own.
+QUEUE_DIR="$QUEUE_ROOT/$(printf '%s' "$BASE_URL" | tr -c 'A-Za-z0-9' '_')"
+LOCK_DIR="$QUEUE_DIR/.lock"
 
 INPUT=$(cat 2>/dev/null || true)
 
@@ -142,9 +150,24 @@ unlock_queue() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
+# Requests spooled by a version that kept one flat queue for the machine. They are
+# claimed by whichever instance they were addressed to; anything else is left where
+# it is, for the hook that owns it. The prefix is stripped rather than matched with
+# `case`, whose pattern side would read a `?` in the URL as a wildcard.
+adopt_legacy_queue() {
+    for spooled in "$QUEUE_ROOT"/*.req; do
+        [ -f "$spooled" ] || continue
+        url=$(head -n 1 "$spooled" 2>/dev/null)
+        [ "${url#"$BASE_URL"/}" != "$url" ] || continue
+        mv "$spooled" "$QUEUE_DIR/" 2>/dev/null || true
+    done
+}
+
 flush_queue() {
-    [ -d "$QUEUE_DIR" ] || return 0
+    [ -d "$QUEUE_ROOT" ] || return 0
+    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
     lock_queue || return 0
+    adopt_legacy_queue
     flushed=0
     for spooled in "$QUEUE_DIR"/*.req; do
         [ -f "$spooled" ] || continue
@@ -168,7 +191,11 @@ spool_request() {
     count=$(find "$QUEUE_DIR" -maxdepth 1 -name '*.req' 2>/dev/null | wc -l)
     [ "$count" -lt 1000 ] || return 0
     spool="$QUEUE_DIR/$(now_ms)-$$.req"
-    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool" 2>/dev/null || true
+    # Written aside and moved into place: a reader that catches the file between
+    # creation and its first line would see an empty queue and let the live event
+    # overtake the backlog, which is the one thing the queue exists to prevent.
+    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool.tmp" 2>/dev/null &&
+        mv "$spool.tmp" "$spool" 2>/dev/null || rm -f "$spool.tmp" 2>/dev/null || true
 }
 
 queue_pending() {
@@ -224,8 +251,13 @@ OFFSET=$(tz_offset_min)
 case "$EVENT" in
     start)
         collect_context
+        # The source names the client, and the server puts it in the entry name until
+        # a task is set. The same script runs under Codex, whose hook events carry the
+        # same field names - without this every Codex session would be filed as
+        # "Claude Code #ab12cd34".
+        AGENT_SOURCE=$(json_escape "${WORKTIME_AGENT_SOURCE:-claude-code}")
         deliver "$SESSION_URL/start" \
-            "{\"started_at\":$(now_ms),\"source\":\"claude-code\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
+            "{\"started_at\":$(now_ms),\"source\":\"$AGENT_SOURCE\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
         ;;
     heartbeat)
         deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)$TZ_FIELD}"

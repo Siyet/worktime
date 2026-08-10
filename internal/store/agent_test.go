@@ -1416,3 +1416,37 @@ func countUserEntries(t *testing.T, testStore *Store, userID string) int {
 	}
 	return count
 }
+
+// A session reported by another client is filed under that client's name. The hook
+// is shared - Codex delivers the same payload on the same events - so without this
+// every Codex session would read "Claude Code #ab12cd34".
+func TestAgentEntryNamedAfterItsClient(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-source@test.local")
+	ctx := context.Background()
+
+	for source, want := range map[string]string{
+		"codex":       "Codex",
+		"claude-code": "Claude Code",
+		"":            "Claude Code",
+		"acme-agent":  "acme-agent", // unknown clients are named after themselves, not after Claude
+	} {
+		sessionID := uuid.NewString()
+		if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+			SessionID: sessionID, StartedAt: agentBaseMs, Source: source,
+		}, testPolicy); err != nil {
+			t.Fatalf("start %q: %v", source, err)
+		}
+		session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+		if err != nil {
+			t.Fatalf("get session %q: %v", source, err)
+		}
+		entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+		if err != nil {
+			t.Fatalf("get entry %q: %v", source, err)
+		}
+		if expected := want + " #" + AgentSessionTag(sessionID); entry.Description != expected {
+			t.Fatalf("source %q named the entry %q, want %q", source, entry.Description, expected)
+		}
+	}
+}

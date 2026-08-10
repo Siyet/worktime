@@ -1126,11 +1126,21 @@ func agentEntryDescription(session AgentSession) string {
 		}
 		return session.TaskKey
 	}
-	base := session.Source
-	if base == "" || base == defaultAgentSource {
-		base = "Claude Code"
+	return agentSourceLabel(session.Source) + " #" + AgentSessionTag(session.ID)
+}
+
+// agentSourceLabel turns the client id the hook reports into the name a person
+// reads in the list. Anything unknown is shown as it arrived: a client this
+// build has never heard of is still better named after itself than after Claude.
+func agentSourceLabel(source string) string {
+	switch source {
+	case "", defaultAgentSource:
+		return "Claude Code"
+	case "codex":
+		return "Codex"
+	default:
+		return source
 	}
-	return base + " #" + AgentSessionTag(session.ID)
 }
 
 // AgentSessionTag is the short form of a session id used in entry names and in

@@ -1,0 +1,3 @@
+# The hook is served to agents straight out of the binary, so a checkout that
+# turned its line endings into CRLF would ship a script that /bin/sh refuses.
+*.sh text eol=lf

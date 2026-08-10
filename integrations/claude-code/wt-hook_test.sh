@@ -204,6 +204,63 @@ run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 check "a deferred event is delivered by the next hook" \
     "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 0
 
+# --- the client name travels with the start -------------------------------------
+# The same script serves Codex, whose hook payloads are identical. The server names
+# an untitled entry after this field, so without it Codex work is filed as Claude's.
+reset_log source
+rm -rf "$WORK/queue"
+run_hook start "{\"session_id\":\"$SESSION\",\"cwd\":\"/tmp/project\"}"
+case "$(cut -f2 "$WT_STUB_LOG")" in
+    *'"source":"claude-code"'*) result=default ;;
+    *) result="unexpected: $(cut -f2 "$WT_STUB_LOG")" ;;
+esac
+check "start defaults to claude-code" "$result" default
+
+reset_log source_codex
+rm -rf "$WORK/queue"
+WORKTIME_AGENT_SOURCE=codex run_hook start "{\"session_id\":\"$SESSION\",\"cwd\":\"/tmp/project\"}"
+case "$(cut -f2 "$WT_STUB_LOG")" in
+    *'"source":"codex"'*) result=codex ;;
+    *) result="unexpected: $(cut -f2 "$WT_STUB_LOG")" ;;
+esac
+check "WORKTIME_AGENT_SOURCE names the client" "$result" codex
+
+# --- one queue per instance -----------------------------------------------------
+# The token in this process belongs to one instance. Replaying someone else's request
+# would hand their server this token, and the 401 it answers with counts as a
+# permanent rejection - so their event would be dropped as well. Their backlog must
+# also not hold this instance's events hostage, nor eat the shared cap: a dead
+# instance's queue would otherwise grow until this one could no longer spool at all.
+reset_log foreign
+rm -rf "$WORK/queue"
+mkdir -p "$WORK/queue"
+# Spooled by an older version, which kept one flat directory for the machine.
+printf '%s\n%s' "http://other-instance.test/api/agent/sessions/$SESSION/heartbeat" '{"at":1}' \
+    > "$WORK/queue/000-foreign.req"
+printf '%s\n%s' "http://worktime.test/api/agent/sessions/$SESSION/heartbeat" '{"at":2}' \
+    > "$WORK/queue/001-legacy.req"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "a foreign request is never replayed with this token" \
+    "$(grep -c 'other-instance.test' "$WT_STUB_LOG" || true)" 0
+check "a request left by an older flat queue is adopted and delivered" \
+    "$(grep -c '"at":2' "$WT_STUB_LOG" || true)" 1
+check "the adopted request goes out before the live event" \
+    "$(head -n 1 "$WT_STUB_LOG" | cut -f2)" '{"at":2}'
+check "the foreign request is left where its own hook will find it" \
+    "$(find "$WORK/queue" -maxdepth 1 -name '000-foreign.req' | wc -l | tr -d ' ')" 1
+
+# A foreign backlog at the cap must not stop this instance from spooling: the two
+# queues are separate directories, so the cap is per instance.
+reset_log foreigncap
+WT_STUB_CODE=000
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+WT_STUB_CODE=200
+check "this instance spools into its own directory" \
+    "$(find "$WORK/queue" -mindepth 2 -name '*.req' | wc -l | tr -d ' ')" 1
+check "no half-written spool file is left behind" \
+    "$(find "$WORK/queue" -name '*.tmp' | wc -l | tr -d ' ')" 0
+rm -rf "$WORK/queue"
+
 # --- the tool_start signal and the timezone -------------------------------------
 reset_log toolstart
 rm -rf "$WORK/queue"

@@ -1,5 +1,28 @@
 # Upgrading the Claude Code integration
 
+## The short way
+
+**Settings -> Connect an agent** downloads a prompt that does all of this, for
+Claude Code or for Codex, and then proves the result by sending a signal through
+the hook and reading it back. The rest of this file is what that prompt does.
+
+## One queue per instance, and a name for the client
+
+The hook now spools into `~/.worktime/queue/<instance>` instead of one flat
+directory. A request spooled for one instance could otherwise be replayed with
+another instance's token - and the 401 that answers it counts as a permanent
+rejection, so the event was dropped as well. Requests left by the old flat layout
+are adopted by whichever instance they were addressed to on the next flush;
+nothing is lost and there is nothing to do by hand.
+
+`WORKTIME_AGENT_SOURCE` names the client in the `start` signal (default
+`claude-code`). Codex fires the same events with the same payload, so the same
+script serves it - set the variable to `codex` there and its entries read
+`Codex #ab12cd34` instead of being filed under Claude Code's name.
+
+Copy the script again to pick both up: `integrations/claude-code/wt-hook.sh` ->
+`~/.worktime/wt-hook.sh`.
+
 The hook script and the hook wiring live outside this repository - in
 `~/.worktime/wt-hook.sh` and `~/.claude/settings.json` - so a server upgrade
 never updates them. After pulling a WorkTime release that changes agent

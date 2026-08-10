@@ -159,13 +159,19 @@ test.describe("agent tracking", () => {
     await page.goto(agentServerStale.url + "/#/");
     // The session goes silent; the grace period is three seconds on this server
     // and the job runs every second, so the row must close on its own.
+    // Every assertion belongs inside the poll, because the poll is the only thing
+    // that makes this page pull. The start arrives already older than the three
+    // second grace, so on a loaded machine the job closes the session before the
+    // heartbeat lands, the heartbeat reopens the same row, and the next turn of
+    // the job closes it again: a check made once, after a single sync, can land
+    // on any of those states.
     await pollUI(page, async () => {
       await expect(page.getByRole("heading", { name: "Running" })).toHaveCount(0);
-      await expect(page.locator(".item").filter({ hasText: /Claude Code #/ })).toHaveCount(1);
+      const row = page.locator(".item").filter({ hasText: /Claude Code #/ });
+      await expect(row).toHaveCount(1);
+      // Closed at the last heartbeat, not at the moment the job noticed: five
+      // minutes of work, not six.
+      await expect(row.locator(".dur")).toHaveText("5m");
     });
-    const row = page.locator(".item").filter({ hasText: /Claude Code #/ });
-    // Closed at the last heartbeat, not at the moment the job noticed: five
-    // minutes of work, not six.
-    await expect(row.locator(".dur")).toHaveText("5m");
   });
 });

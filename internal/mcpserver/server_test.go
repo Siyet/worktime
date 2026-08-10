@@ -3,6 +3,7 @@ package mcpserver_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -177,6 +178,52 @@ func TestMCPRejectsWithoutToken(t *testing.T) {
 	transport := &mcp.StreamableClientTransport{Endpoint: testServer.URL + "/mcp"}
 	if _, err := client.Connect(t.Context(), transport, nil); err == nil {
 		t.Fatal("expected connection without token to fail")
+	}
+}
+
+// The server listens on loopback because a reverse proxy fronts it, and the SDK reads
+// that as "a local MCP server" and refuses any Host that is not loopback. Left on, it
+// answers every request through the real domain with 403 before authentication is even
+// considered - which is how /mcp stayed broken on the deployed instance without a
+// single failing test.
+func TestMCPAcceptsAProxiedHost(t *testing.T) {
+	dataStore, err := store.Open(filepath.Join(t.TempDir(), "mcp-host.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { dataStore.Close() })
+	testServer := httptest.NewServer(api.NewRouter(dataStore, config.Config{}))
+	t.Cleanup(testServer.Close)
+
+	user, err := dataStore.FindOrCreateGoogleUser(t.Context(), "sub-host", "host@test.local", "Host User", "", false)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	_, plaintext, err := dataStore.CreateAPIToken(t.Context(), user.ID, "host token")
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	// A token is required, or requireAuth would answer 401 before the MCP handler runs
+	// and the Host would never be judged at all.
+	request, _ := http.NewRequest(http.MethodPost, testServer.URL+"/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	request.Host = "wt.example.com"
+	request.Header.Set("Authorization", "Bearer "+plaintext)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("a proxied Host must be served, got %d: %s", response.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "set_agent_task") {
+		t.Fatalf("expected the tool list, got: %s", body)
 	}
 }
 

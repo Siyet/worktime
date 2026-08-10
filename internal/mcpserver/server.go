@@ -29,7 +29,22 @@ func NewHandler(dataStore *store.Store) http.Handler {
 			return nil
 		}
 		return newServerForUser(dataStore, user)
-	}, &mcp.StreamableHTTPOptions{Stateless: true})
+	}, &mcp.StreamableHTTPOptions{
+		Stateless: true,
+		// The SDK turns on DNS-rebinding protection by itself whenever the listener is
+		// on loopback, and then refuses any Host that is not loopback too. That is the
+		// right default for an MCP server a user runs on their own laptop; here the
+		// listener is on 127.0.0.1 precisely because a reverse proxy sits in front of
+		// it, so the check rejects every real request - /mcp answered
+		// "Forbidden: invalid Host header" for the entire life of the deployment.
+		//
+		// Turning it off is safe because the attack it prevents is already blocked
+		// twice over: /mcp is behind requireAuth (a browser has no bearer token, and a
+		// rebound host does not carry our cookie either), and behind requireSameOrigin,
+		// which rejects a cross-site Origin - which is exactly what a rebinding page
+		// would send.
+		DisableLocalhostProtection: true,
+	})
 }
 
 type toolDeps struct {

@@ -3,9 +3,12 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,4 +122,53 @@ func TestAgentHeartbeatAcceptsOptionalMetadata(t *testing.T) {
 	if session.Cwd != "/home/dev/worktime" {
 		t.Fatalf("a bare heartbeat must not clear metadata: %+v", session)
 	}
+}
+
+// The setup prompt tells an agent to install the hook straight from the instance
+// it will report to. If that ever stops matching the file in the repository, a
+// fork ships one protocol and speaks another.
+func TestAgentHookAssetsAreServedFromTheBinary(t *testing.T) {
+	testServer := newTestServer(t)
+
+	script := getBody(t, testServer.URL+"/api/agent/hook.sh")
+	onDisk, err := os.ReadFile(filepath.Join("..", "..", "integrations", "claude-code", "wt-hook.sh"))
+	if err != nil {
+		t.Fatalf("read hook: %v", err)
+	}
+	if script != string(onDisk) {
+		t.Fatal("served hook script differs from integrations/claude-code/wt-hook.sh")
+	}
+	if !strings.Contains(script, "tool_start") {
+		t.Fatal("served hook script has no tool_start signal")
+	}
+
+	settings := getBody(t, testServer.URL+"/api/agent/hook-settings.json")
+	var parsed struct {
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		t.Fatalf("hook settings are not JSON: %v", err)
+	}
+	for _, event := range []string{"SessionStart", "PreToolUse", "SessionEnd"} {
+		if _, ok := parsed.Hooks[event]; !ok {
+			t.Fatalf("hook settings are missing %s", event)
+		}
+	}
+}
+
+func getBody(t *testing.T, url string) string {
+	t.Helper()
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d", url, response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", url, err)
+	}
+	return string(body)
 }

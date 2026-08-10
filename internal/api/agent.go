@@ -7,11 +7,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	claudecode "github.com/Siyet/worktime/integrations/claude-code"
 	"github.com/Siyet/worktime/internal/config"
 	"github.com/Siyet/worktime/internal/store"
 )
@@ -146,4 +148,28 @@ func (s *server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 			TZOffsetMin: request.TZOffsetMin,
 		}, s.agentPolicy())
 	writeAgentResult(w, session, err)
+}
+
+// handleAgentHookScript hands out the hook script this very binary was built
+// with. The setup prompt tells an agent to fetch it from the instance it will
+// report to, so a fork or an un-upgraded server never installs a hook that
+// speaks a different protocol than its server.
+func (s *server) handleAgentHookScript(w http.ResponseWriter, _ *http.Request) {
+	serveAgentAsset(w, "text/x-shellscript; charset=utf-8", claudecode.HookScript)
+}
+
+// handleAgentHookSettings hands out the hook wiring for ~/.claude/settings.json.
+// It is a fragment to merge, not a file to copy over: the user's settings hold
+// everything else they have configured.
+func (s *server) handleAgentHookSettings(w http.ResponseWriter, _ *http.Request) {
+	serveAgentAsset(w, "application/json; charset=utf-8", claudecode.HookSettings)
+}
+
+func serveAgentAsset(w http.ResponseWriter, contentType, body string) {
+	w.Header().Set("Content-Type", contentType)
+	// Deliberately uncached: the whole point of serving these is that they match
+	// the binary answering the endpoints they talk to, and an upgraded server must
+	// not hand out the previous version's script.
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, body)
 }

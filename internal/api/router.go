@@ -69,6 +69,11 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 			agent.Post("/heartbeat", s.handleAgentHeartbeat)
 			agent.Post("/stop", s.handleAgentStop)
 		})
+		// The integration files, served by the instance the hook will report to.
+		// They carry no secrets and the same Bearer the agent already holds gets
+		// them, so setup is one curl rather than "find the right branch on GitHub".
+		api.Get("/agent/hook.sh", s.handleAgentHookScript)
+		api.Get("/agent/hook-settings.json", s.handleAgentHookSettings)
 	})
 
 	// MCP accepts the session cookie as well as a Bearer token, so it needs the same

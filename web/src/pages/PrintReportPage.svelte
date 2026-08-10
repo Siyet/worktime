@@ -8,6 +8,7 @@
     dateRangeEntries,
     expandTimeOff,
     listDays,
+    maxChartDays,
     NO_PROJECT_KEY,
     splitOverlapMinutes,
     summariseReport,
@@ -102,7 +103,12 @@
   const byProjectDisplay = $derived(displayRows(byProject));
   const byTagDisplay = $derived(displayRows(byTag));
 
+  // Same cap as the Reports page: a printed sheet with 40 000 SVG nodes is neither
+  // readable nor printable.
+  const chartTooWide = $derived(days.length > maxChartDays);
+
   const chartDays = $derived.by((): ChartDay[] => {
+    if (chartTooWide) return [];
     const keys = byProject.map(([key]) => key);
     const perDay = new Map<string, Map<string, number>>();
     for (const entry of entries) {
@@ -263,14 +269,18 @@
 
       <div class="figure">
         <h2>Часы по дням</h2>
-        <DailyChart
-          days={chartDays}
-          {off}
-          {avgMinutes}
-          avgCaption="среднее {(avgMinutes / 60).toFixed(1)}ч / раб. день"
-          hourUnit="ч"
-          interactive={false}
-        />
+        {#if chartTooWide}
+          <p class="toowide">Период слишком велик для графика по дням; цифры ниже охватывают его целиком.</p>
+        {:else}
+          <DailyChart
+            days={chartDays}
+            {off}
+            {avgMinutes}
+            avgCaption="среднее {(avgMinutes / 60).toFixed(1)}ч / раб. день"
+            hourUnit="ч"
+            interactive={false}
+          />
+        {/if}
         <div class="legend">
           <span><span class="sw" style="background: #e8a33d"></span>часы за день</span>
           <span><span class="sw" style="background: rgba(96,125,190,0.35)"></span>выходной</span>
@@ -518,6 +528,13 @@
 
   .figure {
     break-inside: avoid;
+  }
+
+  .toowide {
+    margin: 1.2rem 0;
+    text-align: center;
+    font-size: 8.5pt;
+    color: #6b6558;
   }
 
   .legend {

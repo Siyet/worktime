@@ -93,6 +93,13 @@ export function apportion(values: number[], targetTotal: number): number[] {
 // strings; it is far past any range the UI offers.
 export const maxReportDays = 20_000;
 
+// A daily bar chart stops being readable long before it stops being drawable, and a
+// date input types through intermediate years ("0002", "0020", "0202") on the way to a
+// real one - each of which asks for tens of thousands of SVG nodes. The aggregates
+// still cover the whole range; only the drawing is dropped. Both report surfaces share
+// the threshold so the screen and the printed sheet make the same call.
+export const maxChartDays = 400;
+
 // Inclusive list of local days between two YYYY-MM-DD dates. Noon anchors dodge DST edges.
 //
 // The list has to cover the whole range: callers divide totals by its length and scan

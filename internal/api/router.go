@@ -43,14 +43,16 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 
 	router.Route("/api", func(api chi.Router) {
 		api.Use(s.requireAuth)
+		api.Use(s.requireSameOrigin)
 		api.Post("/sync", s.handleSync)
 		api.Get("/me", s.handleMe)
 		api.Get("/report", s.handleReport)
 		api.Get("/projects", s.handleListProjects)
 		api.Get("/entries", s.handleListEntries)
-		api.Get("/tokens", s.handleListTokens)
-		api.Post("/tokens", s.handleCreateToken)
-		api.Delete("/tokens/{id}", s.handleDeleteToken)
+		// Managing credentials takes the browser session: see requireSession.
+		api.With(requireSession).Get("/tokens", s.handleListTokens)
+		api.With(requireSession).Post("/tokens", s.handleCreateToken)
+		api.With(requireSession).Delete("/tokens/{id}", s.handleDeleteToken)
 		api.Get("/export.sqlite", s.handleExport)
 		api.Route("/agent/sessions/{id}", func(agent chi.Router) {
 			agent.Post("/start", s.handleAgentStart)

@@ -267,13 +267,21 @@ func TestSyncUserIsolation(t *testing.T) {
 		t.Fatalf("owner push: %v", err)
 	}
 
-	// The attacker reuses the same row ID with a newer timestamp.
+	// The attacker reuses the same row ID with a newer timestamp. The push is refused
+	// rather than ignored: a silent 200 would have the pusher clear its dirty marker
+	// and drop the row, which is how the solidtime importer - it replays foreign ids
+	// verbatim - could report "done" having written nothing.
 	hijack := entry
 	hijack.Description = "hijacked"
 	hijack.UpdatedAt = 9000
-	attackerView, err := testStore.Sync(ctx, attacker.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{hijack}}})
+	_, err := testStore.Sync(ctx, attacker.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{hijack}}})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected the push refused, got %v", err)
+	}
+
+	attackerView, err := testStore.Sync(ctx, attacker.ID, SyncRequest{Since: 0})
 	if err != nil {
-		t.Fatalf("attacker push: %v", err)
+		t.Fatalf("attacker pull: %v", err)
 	}
 	if len(attackerView.Changes.TimeEntries) != 0 {
 		t.Fatalf("attacker must not see foreign rows, got %+v", attackerView.Changes.TimeEntries)

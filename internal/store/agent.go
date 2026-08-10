@@ -18,6 +18,14 @@ package store
 // pause, cuts the entry in two - both are about which day the work belongs to,
 // not about idling.
 //
+// Every write here stamps updated_at as MAX(updated_at + 1, now). That column is the
+// version key last-write-wins compares, and it carries the *browser's* clock on rows
+// the PWA has touched while this process carries the server's. A browser running even a
+// minute ahead would otherwise make the agent's stop look older than the row it closes:
+// the client would discard it on merge, show the timer running forever, and its next
+// edit would push stopped_at back to null and un-stop it on the server too. Stepping
+// past the stored value keeps the agent's writes newest without trusting either clock.
+//
 // The entry is named after the tracker task the session belongs to, set
 // explicitly through the set_agent_task MCP tool. Until the task is known the
 // entry carries a short session tag, which keeps two concurrent sessions
@@ -662,7 +670,7 @@ func addAgentPause(ctx context.Context, transaction *sql.Tx, userID string, entr
 		return err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET paused_ms = paused_ms + ?, updated_at = ?, server_seq = ?
+		UPDATE time_entries SET paused_ms = paused_ms + ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
 		pauseMs, now, seq, entry.id, userID, entry.serverSeq)
 	if err != nil {
@@ -780,7 +788,7 @@ func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, en
 		return 0, false, err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET stopped_at = MAX(started_at, ?), updated_at = ?, server_seq = ?
+		UPDATE time_entries SET stopped_at = MAX(started_at, ?), updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL`,
 		stoppedAt, now, seq, *entryID, userID)
 	if err != nil {
@@ -804,7 +812,7 @@ func reopenAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, e
 		return err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET stopped_at = NULL, updated_at = ?, server_seq = ?
+		UPDATE time_entries SET stopped_at = NULL, updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
 		now, seq, entry.id, userID, entry.serverSeq)
 	if err != nil {
@@ -838,7 +846,7 @@ func renameAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, s
 		return err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET description = ?, updated_at = ?, server_seq = ?
+		UPDATE time_entries SET description = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
 		label, now, seq, entry.id, userID, entry.serverSeq)
 	if err != nil {
@@ -898,7 +906,7 @@ func renameSessionEntries(ctx context.Context, transaction *sql.Tx, userID strin
 	var currentSeq *int64
 	for _, entryID := range targets {
 		if _, err := transaction.ExecContext(ctx, `
-			UPDATE time_entries SET description = ?, updated_at = ?, server_seq = ?
+			UPDATE time_entries SET description = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
 			WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
 			newName, now, seq, entryID, userID); err != nil {
 			return 0, nil, err

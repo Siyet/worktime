@@ -102,9 +102,14 @@ tz_offset_min() {
 }
 
 # send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry)
+#
+# The token goes to curl through a config on stdin rather than as an argument: argv is
+# world-readable through ps and /proc/<pid>/cmdline, and this runs on every tool call.
+# stdin is free by now - the hook payload was read in full at startup.
 send() {
-    code=$(curl -sS -o /dev/null -w '%{http_code}' -m 3 -X POST "$1" \
-        -H "Authorization: Bearer $TOKEN" \
+    code=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" |
+        curl -sS -o /dev/null -w '%{http_code}' -m 3 -X POST "$1" \
+        --config - \
         -H "Content-Type: application/json" \
         -d "$2" 2>/dev/null) || code=000
     case "$code" in
@@ -153,9 +158,7 @@ flush_queue() {
     unlock_queue
 }
 
-deliver() {
-    send "$1" "$2"
-    [ $? -eq 2 ] || return 0    # delivered, or rejected for good - nothing to retry
+spool_request() {
     mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
     # Cap the queue so a long outage cannot fill the disk. Only spooled requests
     # count; the lock directory must not push the queue over the cap.
@@ -163,6 +166,27 @@ deliver() {
     [ "$count" -lt 1000 ] || return 0
     spool="$QUEUE_DIR/$(now_ms)-$$.req"
     { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool" 2>/dev/null || true
+}
+
+queue_pending() {
+    [ -d "$QUEUE_DIR" ] || return 1
+    [ -n "$(find "$QUEUE_DIR" -maxdepth 1 -name '*.req' 2>/dev/null | head -n 1)" ]
+}
+
+deliver() {
+    # A backlog the flush could not finish - it drains at most FLUSH_LIMIT per hook -
+    # means this event must not overtake it. The server ignores anything at or before
+    # its watermark, so sending the live event now would move the watermark past
+    # everything still queued and the next flush would deliver it into a no-op, with
+    # the outage recorded as idle time. Spooling keeps the order; the next hook
+    # continues the drain.
+    if queue_pending; then
+        spool_request "$1" "$2"
+        return 0
+    fi
+    send "$1" "$2"
+    [ $? -eq 2 ] || return 0    # delivered, or rejected for good - nothing to retry
+    spool_request "$1" "$2"
 }
 
 SESSION_URL="$BASE_URL/api/agent/sessions/$SESSION_ID"

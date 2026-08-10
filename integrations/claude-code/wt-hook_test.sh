@@ -19,8 +19,13 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/curl" <<'STUB'
 #!/bin/sh
 # Records "URL<TAB>BODY" and answers with $WT_STUB_CODE (default 200).
+# --config - means the real curl reads options from stdin, which is where the
+# Authorization header is passed so the token never appears in argv; the stub reads it
+# the same way and records it separately, so the test can prove that is still true.
+argv="$*"
 url=""
 body=""
+config=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -X) shift 2; continue ;;
@@ -28,12 +33,15 @@ while [ $# -gt 0 ]; do
         -H) shift 2; continue ;;
         -m) shift 2; continue ;;
         -w|-o) shift 2; continue ;;
+        --config) [ "$2" = "-" ] && config=$(cat); shift 2; continue ;;
         -sS|-s|-S) shift; continue ;;
         http*) url="$1"; shift; continue ;;
         *) shift ;;
     esac
 done
 [ -z "${WT_STUB_DELAY:-}" ] || sleep "$WT_STUB_DELAY"
+[ -z "${WT_STUB_ARGV_LOG:-}" ] || printf '%s\n' "$argv" >> "$WT_STUB_ARGV_LOG"
+[ -z "${WT_STUB_CONFIG_LOG:-}" ] || printf '%s\n' "$config" >> "$WT_STUB_CONFIG_LOG"
 printf '%s\t%s\n' "$url" "$body" >> "$WT_STUB_LOG"
 printf '%s' "${WT_STUB_CODE:-200}"
 STUB
@@ -115,6 +123,21 @@ case "$(cut -f2 "$WT_STUB_LOG")" in
 esac
 check "the stop carries the reason" "$result" clear
 
+# --- the token never reaches the process arguments ------------------------------
+# argv is world-readable through ps and /proc/<pid>/cmdline, and this runs on every
+# tool call, so the credential goes to curl through a config on stdin instead.
+reset_log token
+rm -rf "$WORK/queue"
+WT_STUB_ARGV_LOG="$WORK/argv.log"
+WT_STUB_CONFIG_LOG="$WORK/config.log"
+export WT_STUB_ARGV_LOG WT_STUB_CONFIG_LOG
+: > "$WT_STUB_ARGV_LOG"
+: > "$WT_STUB_CONFIG_LOG"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "the token is absent from the command line" "$(grep -c "$WORKTIME_TOKEN" "$WT_STUB_ARGV_LOG" || true)" 0
+check "the token is delivered through the config on stdin"     "$(grep -c "Authorization: Bearer $WORKTIME_TOKEN" "$WT_STUB_CONFIG_LOG" || true)" 1
+unset WT_STUB_ARGV_LOG WT_STUB_CONFIG_LOG
+
 # --- an unreachable server spools, the next event flushes in order --------------
 reset_log queue
 rm -rf "$WORK/queue"
@@ -169,8 +192,17 @@ wait
 WT_STUB_DELAY=""
 spooled=$(grep -c 'heartbeat.*"at":[0-4]}' "$WT_STUB_LOG" || true)
 check "each spooled request is delivered exactly once" "$spooled" 5
-check "the queue is drained" "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 0
+check "the spooled backlog is drained" "$(find "$WORK/queue" -name '00[0-4]-spooled.req' | wc -l | tr -d ' ')" 0
 check "the lock directory is released" "$(find "$WORK/queue" -name '.lock' | wc -l | tr -d ' ')" 0
+
+# An event raised while a backlog is still queued joins the queue instead of jumping
+# it: overtaking would push the server's watermark past everything still waiting, and
+# the rest of the backlog would then be discarded as stale. One more hook, with nothing
+# left ahead of it, drains what remains and goes out live.
+reset_log drain
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "a deferred event is delivered by the next hook" \
+    "$(find "$WORK/queue" -name '*.req' | wc -l | tr -d ' ')" 0
 
 # --- the tool_start signal and the timezone -------------------------------------
 reset_log toolstart

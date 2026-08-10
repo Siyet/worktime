@@ -22,7 +22,15 @@ export async function initSession(): Promise<void> {
       const storedUserID = await getMeta<string>("user_id");
       if (storedUserID && storedUserID !== user.id) {
         // Another account signed in on this browser: drop the previous user's data.
-        await wipeLocalData();
+        // If the wipe cannot go through - another tab still holds the database - the
+        // session is deliberately left unset rather than opened on top of someone
+        // else's rows, which would sync them into this account.
+        try {
+          await wipeLocalData();
+        } catch (error) {
+          console.error("could not clear the previous account's data", error);
+          return;
+        }
         window.location.reload();
         return;
       }
@@ -38,6 +46,12 @@ export async function initSession(): Promise<void> {
 
 export async function logout(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
-  await wipeLocalData();
+  // The cookie is already gone, so leaving is not optional even if the local data
+  // could not be dropped; the next sign-in wipes it before opening a session.
+  try {
+    await wipeLocalData();
+  } catch (error) {
+    console.error("could not clear local data on logout", error);
+  }
   window.location.href = "/";
 }

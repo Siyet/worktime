@@ -654,6 +654,47 @@ func TestAgentStopCapsTrailingToolRun(t *testing.T) {
 	}
 }
 
+// The PWA stamps updated_at with the browser's clock, this process with the server's.
+// A browser running ahead therefore writes a version the agent's own stop would look
+// older than - and a stop the client discards leaves a timer that runs forever, because
+// the session is closed and reconciliation only walks active ones.
+func TestAgentWritesStayNewerThanAClientEdit(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-clock@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+
+	// The browser edits the row with a clock two minutes ahead of the server.
+	ahead := time.Now().UnixMilli() + 2*60*1000
+	edited := entry
+	edited.Description = "renamed in the app"
+	edited.UpdatedAt = ahead
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{edited}},
+	}); err != nil {
+		t.Fatalf("client edit: %v", err)
+	}
+
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+60_000, "other")
+
+	stored, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if stored.StoppedAt == nil {
+		t.Fatal("the agent stop must have closed the entry")
+	}
+	if stored.UpdatedAt <= ahead {
+		t.Fatalf("the agent write must outrank the client edit: stored %d, client %d", stored.UpdatedAt, ahead)
+	}
+}
+
 // A session killed mid-tool is closed by reconciliation rather than by a stop, and must
 // be worth the same as one that managed to send SessionEnd - otherwise the value of
 // twenty minutes of work depends on whether the process died cleanly.

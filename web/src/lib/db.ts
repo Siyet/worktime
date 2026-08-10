@@ -23,6 +23,17 @@ function db(): Promise<IDBPDatabase> {
       // Dirty markers queue local changes for push; key is `${table}:${id}`.
       database.createObjectStore("dirty");
     },
+    // Another tab is deleting the database, which only happens on logout or when a
+    // different account signs in. Holding the connection would block that delete; and
+    // carrying on afterwards would be worse than blocking it, because this tab's sync
+    // engine keeps running on its 30-second timer and would push the previous account's
+    // rows under the new account's cookie. Let go and reload into whoever is signed in
+    // now - the tab that started the wipe has already stored the new user id, so this
+    // does not bounce back and forth.
+    blocking() {
+      dbPromise = null;
+      window.location.reload();
+    },
   });
   return dbPromise;
 }
@@ -167,14 +178,27 @@ export async function setMeta(key: string, value: unknown): Promise<void> {
 
 // wipeLocalData drops the whole local database. Used on logout and when a
 // different account signs in on the same browser.
+//
+// A blocked delete is a failure, not a success: another tab is still holding the
+// database, so the previous account's rows are all still there. Reporting success would
+// have the caller carry on and sign the new account in on top of them. The blocking
+// handler above asks the other tab to let go, so this normally resolves a moment later;
+// the timeout is for a tab too old to have that handler.
 export async function wipeLocalData(): Promise<void> {
   const database = await db();
   database.close();
   dbPromise = null;
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase("worktime");
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-    request.onblocked = () => resolve();
+    let blockedTimer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (finish: () => void) => {
+      clearTimeout(blockedTimer);
+      finish();
+    };
+    request.onsuccess = () => settle(resolve);
+    request.onerror = () => settle(() => reject(request.error));
+    request.onblocked = () => {
+      blockedTimer = setTimeout(() => reject(new Error("local data is still open in another tab")), 5_000);
+    };
   });
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,6 +60,24 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	// those ids and echo them explicitly. In the normal case nothing lands here.
 	refused := refusedIDs{}
 
+	// A refusal has two causes and they need opposite answers. Losing last-write-wins
+	// is ordinary: echo the winner and the client converges. An id that belongs to
+	// another user can never converge - the echo below is scoped to this user, so the
+	// row would be dropped from the push queue and exist nowhere but that one browser.
+	// The client can only surface what the server calls an error, so it is one.
+	claimed := func(table, id string) error {
+		var owned int
+		err := transaction.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT 1 FROM %s WHERE id = ? AND user_id <> ?", table), id, userID).Scan(&owned)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: %s %s belongs to another account", ErrInvalidInput, table, id)
+	}
+
 	// Projects go first so that pulled entries never reference a project the client
 	// has not seen yet within the same batch.
 	for _, project := range request.Changes.Projects {
@@ -77,6 +96,9 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if written, err := result.RowsAffected(); err != nil {
 			return SyncResponse{}, err
 		} else if written == 0 {
+			if err := claimed("projects", project.ID); err != nil {
+				return SyncResponse{}, err
+			}
 			refused.projects = append(refused.projects, project.ID)
 		}
 		nextSeq++
@@ -103,6 +125,9 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if written, err := result.RowsAffected(); err != nil {
 			return SyncResponse{}, err
 		} else if written == 0 {
+			if err := claimed("time_entries", entry.ID); err != nil {
+				return SyncResponse{}, err
+			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
 		}
 		nextSeq++
@@ -125,6 +150,9 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		if written, err := result.RowsAffected(); err != nil {
 			return SyncResponse{}, err
 		} else if written == 0 {
+			if err := claimed("time_off", timeOff.ID); err != nil {
+				return SyncResponse{}, err
+			}
 			refused.timeOff = append(refused.timeOff, timeOff.ID)
 		}
 		nextSeq++

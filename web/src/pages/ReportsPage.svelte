@@ -9,6 +9,7 @@
     formatDayISO,
     groupKeysOf,
     listDays,
+    maxChartDays,
     NO_PROJECT_KEY,
     roundMinutes,
     splitOverlapMinutes,
@@ -182,11 +183,6 @@
     return chips.find((chip) => chip.key === key)?.color ?? "var(--border)";
   }
 
-  // A daily bar chart stops being readable long before it stops being drawable, and a
-  // mistyped year in the date field ("0202") asks for thousands of columns on every
-  // keystroke. The stat tiles and the tables still cover the whole range; only the
-  // drawing is dropped, and the caption below says so.
-  const maxChartDays = 400;
   const chartTooWide = $derived(days.length > maxChartDays);
 
   const chartDays = $derived.by((): ChartDay[] => {

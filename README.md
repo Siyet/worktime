@@ -85,7 +85,9 @@ Create an API token in Settings, then connect any MCP client to `https://your-ho
 claude mcp add --transport http worktime https://your-host/mcp --header "Authorization: Bearer <token>"
 ```
 
-Tools: `start_timer`, `stop_timer`, `stop_all_timers`, `list_running_timers`, `add_time_entry`, `list_projects`, `create_project`, `add_time_off`, `list_time_off`, `time_report`, `set_agent_task`.
+Tools: `start_timer`, `stop_timer`, `stop_all_timers`, `list_running_timers`, `update_time_entry`, `add_time_entry`, `list_projects`, `create_project`, `add_time_off`, `list_time_off`, `time_report`, `set_agent_task`.
+
+`update_time_entry` moves an entry to another project or renames it; with no `entry_id` it edits the timer running right now, which is how an agent files its own session under a project.
 
 ## Development
 

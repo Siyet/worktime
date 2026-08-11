@@ -1209,6 +1209,49 @@ func TestAgentStartValidatesProject(t *testing.T) {
 	}
 }
 
+// A project chosen mid-session has to reach the session row, not only the entry that
+// is running: the next entry - after a pause past the maximum, or a cut at the local
+// midnight - is opened from the session and would otherwise land under no project.
+func TestSetAgentSessionProjectCarriesToTheNextEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-session-project@test.local")
+	ctx := context.Background()
+
+	projectID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{
+		Projects: []Project{{ID: projectID, Name: "WorkTime", Color: "#123456", CreatedAt: 1, UpdatedAt: 1}},
+	}}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	started := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	if err := testStore.SetAgentSessionProject(ctx, user.ID, sessionID, &projectID); err != nil {
+		t.Fatalf("set session project: %v", err)
+	}
+
+	afterIdle := agentBaseMs + 5*60*60*1000
+	second := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
+	if *second.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("expected the long pause to open a second entry")
+	}
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *second.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.ProjectID == nil || *entry.ProjectID != projectID {
+		t.Fatalf("the next entry of the session must carry the project, got %+v", entry)
+	}
+
+	unknown := uuid.NewString()
+	if err := testStore.SetAgentSessionProject(ctx, user.ID, sessionID, &unknown); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for an unknown project, got %v", err)
+	}
+	if err := testStore.SetAgentSessionProject(ctx, user.ID, uuid.NewString(), &projectID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for an unknown session, got %v", err)
+	}
+}
+
 func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-task@test.local")

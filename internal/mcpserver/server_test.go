@@ -129,6 +129,124 @@ func TestMCPTimerFlow(t *testing.T) {
 	}
 }
 
+func TestMCPUpdateTimeEntryMovesTheRunningTimer(t *testing.T) {
+	session := newMCPSession(t)
+
+	callTool(t, session, "create_project", map[string]any{"name": "Backend"})
+	callTool(t, session, "create_project", map[string]any{"name": "Frontend"})
+	started := callTool(t, session, "start_timer", map[string]any{"description": "API work", "project": "Backend"})
+
+	// The common case: one timer runs, so the entry does not have to be named.
+	moved := callTool(t, session, "update_time_entry", map[string]any{"project": "Frontend"})
+	if moved["project"] != "Frontend" || moved["entry_id"] != started["entry_id"] {
+		t.Fatalf("expected the running entry on Frontend, got %+v", moved)
+	}
+	running := callTool(t, session, "list_running_timers", nil)
+	timer := running["timers"].([]any)[0].(map[string]any)
+	if timer["project"] != "Frontend" || timer["description"] != "API work" {
+		t.Fatalf("expected the stored row on Frontend with its description intact, got %+v", timer)
+	}
+
+	// An empty project detaches the entry; a description can be edited in the same call.
+	detached := callTool(t, session, "update_time_entry", map[string]any{
+		"entry_id": started["entry_id"], "project": "", "description": "code review",
+	})
+	if detached["project"] != nil || detached["description"] != "code review" {
+		t.Fatalf("expected a detached entry with the new description, got %+v", detached)
+	}
+	running = callTool(t, session, "list_running_timers", nil)
+	timer = running["timers"].([]any)[0].(map[string]any)
+	if timer["project"] != nil || timer["description"] != "code review" {
+		t.Fatalf("expected the stored row without a project, got %+v", timer)
+	}
+}
+
+func TestMCPUpdateTimeEntryRefusesAnAmbiguousTarget(t *testing.T) {
+	session := newMCPSession(t)
+
+	callTool(t, session, "create_project", map[string]any{"name": "Backend"})
+	callTool(t, session, "start_timer", map[string]any{"description": "first"})
+	callTool(t, session, "start_timer", map[string]any{"description": "second"})
+
+	// Concurrent timers are a feature, so "the running one" has no answer here and
+	// picking either would move time off the entry the caller meant.
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "update_time_entry", Arguments: map[string]any{"project": "Backend"},
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error while two timers run, got %+v", result)
+	}
+
+	// An unknown project must not be created behind the caller's back either.
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "update_time_entry", Arguments: map[string]any{"project": "Nope"},
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error for an unknown project, got %+v", result)
+	}
+}
+
+// The agent's own row is the one an agent will want to move to a project, and it
+// carries server-owned columns a push must never rewrite - a project change that
+// dropped paused_ms would inflate the tracked duration by the idle time.
+func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
+	fixture := newMCPFixture(t)
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000, MaxPauseMs: 4 * 60 * 60 * 1000}
+	now := time.Now().UnixMilli()
+
+	sessionID := uuid.NewString()
+	agentSession, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+		SessionID: sessionID, StartedAt: now - 60*60_000,
+	}, policy)
+	if err != nil {
+		t.Fatalf("start agent session: %v", err)
+	}
+	if _, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+		store.AgentSignal{At: now - 30*60_000}, policy); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	before, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, *agentSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if before.PausedMs == 0 {
+		t.Fatalf("expected the idle gap to be recorded, got %+v", before)
+	}
+
+	callTool(t, fixture.session, "create_project", map[string]any{"name": "WorkTime"})
+	moved := callTool(t, fixture.session, "update_time_entry", map[string]any{"project": "WorkTime"})
+	if moved["session_tag"] != store.AgentSessionTag(sessionID) {
+		t.Fatalf("expected the answer to name the agent session, got %+v", moved)
+	}
+
+	// The session itself has to learn the project, or the entry it opens after the
+	// next midnight cut would land under no project again.
+	agentSession, err = fixture.store.GetAgentSession(t.Context(), fixture.userID, sessionID)
+	if err != nil {
+		t.Fatalf("get agent session: %v", err)
+	}
+	if agentSession.ProjectID == nil {
+		t.Fatalf("expected the session to carry the project, got %+v", agentSession)
+	}
+
+	after, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, before.ID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if after.ProjectID == nil {
+		t.Fatalf("expected the agent row to be on a project, got %+v", after)
+	}
+	if after.PausedMs != before.PausedMs || after.AgentSessionID == nil || *after.AgentSessionID != sessionID {
+		t.Fatalf("expected paused_ms and the session link to survive the edit, got %+v", after)
+	}
+}
+
 func TestMCPTimeOffAndReport(t *testing.T) {
 	session := newMCPSession(t)
 

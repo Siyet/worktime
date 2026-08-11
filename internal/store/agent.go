@@ -524,6 +524,35 @@ func (s *Store) SetAgentTask(ctx context.Context, userID string, selector AgentT
 	return AgentTaskResult{Session: stored, RenamedEntries: renamed}, nil
 }
 
+// SetAgentSessionProject records which project the session's entries belong to. The
+// entry that is running gets moved by the ordinary sync path, but a session cut at the
+// local midnight or by a long pause opens its next entry from the session row, so
+// without this the project an agent picked would be forgotten by tomorrow morning.
+// A nil project detaches future entries, which is the state a session starts in.
+func (s *Store) SetAgentSessionProject(ctx context.Context, userID, sessionID string, projectID *string) error {
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+
+	if err := validateAgentProject(ctx, transaction, userID, projectID); err != nil {
+		return err
+	}
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE agent_sessions SET project_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		projectID, time.Now().UnixMilli(), sessionID, userID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected == 0 {
+		return ErrNotFound
+	}
+	return transaction.Commit()
+}
+
 // --- internals ---
 
 // agentEntry is the session's current entry as a signal handler sees it.

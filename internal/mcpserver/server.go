@@ -82,6 +82,12 @@ func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
 		Description: "List currently running timers with elapsed time.",
 	}, deps.listRunningTimers)
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "update_time_entry",
+		Description: "Change the project or the description of an existing time entry, running or already finished. " +
+			"Omit entry_id to edit the timer that is running right now (including the agent's own session row). " +
+			"Use a project name, not an ID; an empty project detaches the entry from any project.",
+	}, deps.updateTimeEntry)
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "add_time_entry",
 		Description: "Add a finished time entry retroactively (e.g. for work that was not tracked live).",
 	}, deps.addTimeEntry)
@@ -142,6 +148,38 @@ func (d toolDeps) resolveProject(ctx context.Context, name string) (*store.Proje
 		}
 	}
 	return nil, fmt.Errorf("project %q not found; use list_projects or create_project first", name)
+}
+
+// resolveEntry picks the row a tool has been asked to edit. An omitted id means "the
+// timer running right now", which is the normal case for an agent editing its own
+// session row - but it only has one honest answer while exactly one timer is running,
+// and multiple concurrent timers are a feature here, so anything else is an error that
+// names the candidates instead of guessing.
+func (d toolDeps) resolveEntry(ctx context.Context, entryID string) (store.TimeEntry, error) {
+	if entryID != "" {
+		entry, err := d.store.GetTimeEntry(ctx, d.userID, entryID)
+		if err != nil {
+			return store.TimeEntry{}, fmt.Errorf("entry not found: %s", entryID)
+		}
+		return entry, nil
+	}
+	running, err := d.store.ListRunningEntries(ctx, d.userID)
+	if err != nil {
+		return store.TimeEntry{}, err
+	}
+	switch len(running) {
+	case 0:
+		return store.TimeEntry{}, fmt.Errorf("no timer is running; pass entry_id of the entry to edit")
+	case 1:
+		return running[0], nil
+	default:
+		ids := make([]string, 0, len(running))
+		for _, entry := range running {
+			ids = append(ids, entry.ID)
+		}
+		return store.TimeEntry{}, fmt.Errorf("%d timers are running; pass entry_id (one of: %s)",
+			len(running), strings.Join(ids, ", "))
+	}
 }
 
 func (d toolDeps) projectNames(ctx context.Context) (map[string]string, error) {
@@ -368,6 +406,97 @@ func (d toolDeps) listRunningTimers(ctx context.Context, req *mcp.CallToolReques
 		out.Timers = append(out.Timers, timer)
 	}
 	return nil, out, nil
+}
+
+type updateTimeEntryIn struct {
+	EntryID string `json:"entry_id,omitempty" jsonschema:"entry to change; omit to edit the timer that is running now"`
+	// Both fields are pointers so that "not mentioned" and "set to empty" stay
+	// distinguishable: an absent project keeps the current one, an empty one detaches
+	// the entry, and the same holds for clearing a description.
+	Project     *string `json:"project,omitempty" jsonschema:"project name to move the entry to; empty string removes the project; omit to keep it"`
+	Description *string `json:"description,omitempty" jsonschema:"new description; omit to keep the current one"`
+}
+
+func (d toolDeps) updateTimeEntry(ctx context.Context, req *mcp.CallToolRequest, input updateTimeEntryIn) (*mcp.CallToolResult, timerOut, error) {
+	if input.Project == nil && input.Description == nil {
+		return nil, timerOut{}, fmt.Errorf("nothing to change: pass project and/or description")
+	}
+	entry, err := d.resolveEntry(ctx, input.EntryID)
+	if err != nil {
+		return nil, timerOut{}, err
+	}
+	names, err := d.projectNames(ctx)
+	if err != nil {
+		return nil, timerOut{}, err
+	}
+	projectName := ""
+	if entry.ProjectID != nil {
+		projectName = names[*entry.ProjectID]
+	}
+	if input.Project != nil {
+		if wanted := strings.TrimSpace(*input.Project); wanted == "" {
+			entry.ProjectID = nil
+			projectName = ""
+		} else {
+			project, err := d.resolveProject(ctx, wanted)
+			if err != nil {
+				return nil, timerOut{}, err
+			}
+			entry.ProjectID = &project.ID
+			projectName = project.Name
+		}
+	}
+	if input.Description != nil {
+		entry.Description = *input.Description
+	}
+	now := time.Now().UnixMilli()
+	stampUpdate(&entry, now)
+	if err := d.pushEntries(ctx, entry); err != nil {
+		return nil, timerOut{}, err
+	}
+	// Same reason as in stopTimer: Sync reports no per-row outcome, so the row is read
+	// back before this answers "moved". A silently refused edit would leave the agent
+	// certain its time is booked to the right project while it is not.
+	stored, err := d.store.GetTimeEntry(ctx, d.userID, entry.ID)
+	if err != nil {
+		return nil, timerOut{}, err
+	}
+	if !sameProjectID(stored.ProjectID, entry.ProjectID) || stored.Description != entry.Description {
+		return nil, timerOut{}, fmt.Errorf("entry %s is unchanged: the edit was refused by a newer version of the row",
+			entry.ID)
+	}
+	end := now
+	if stored.StoppedAt != nil {
+		end = *stored.StoppedAt
+	}
+	out := timerOut{
+		EntryID: stored.ID, Description: stored.Description, Project: projectName,
+		StartedAt: time.UnixMilli(stored.StartedAt).Format(time.RFC3339),
+		Elapsed:   formatDuration(billableMs(stored, end)),
+	}
+	if stored.AgentSessionID != nil {
+		out.SessionTag = store.AgentSessionTag(*stored.AgentSessionID)
+		if session, err := d.store.GetAgentSession(ctx, d.userID, *stored.AgentSessionID); err == nil {
+			out.TaskKey = session.TaskKey
+			// The session opens its next entry from its own row - after a cut at the
+			// local midnight, say - so a project set only on the current entry would be
+			// forgotten by the next one. Recording it on the session keeps the rest of
+			// the agent's work on the project it was just told about.
+			if input.Project != nil && session.TimeEntryID != nil && *session.TimeEntryID == stored.ID {
+				if err := d.store.SetAgentSessionProject(ctx, d.userID, session.ID, stored.ProjectID); err != nil {
+					return nil, timerOut{}, err
+				}
+			}
+		}
+	}
+	return nil, out, nil
+}
+
+func sameProjectID(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 type setAgentTaskIn struct {

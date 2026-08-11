@@ -174,9 +174,12 @@ Append this block to \`${file}\`, creating the file if it is missing. If a block
       task number is known, looking the title up in whatever tracker connection is
       available. WorkTime never reads a tracker itself. Until it is called, the work is
       filed under a technical tag like "${tag}".
+    - If asked to book this work to a project, call update_time_entry(project: "<name>")
+      with no entry_id - it edits the running session and takes a project name from
+      list_projects, never an id.
     <!-- worktime:end -->
 
-Nothing else about tracking belongs there: the hooks do the tracking, this call only names it.
+Nothing else about tracking belongs there: the hooks do the tracking, these two calls only name the work and file it.
 `;
 
 function claudeCodePrompt(origin: string, token: string, probeSession: string): string {

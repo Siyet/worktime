@@ -92,6 +92,34 @@ Two sessions attached to the same task stay two rows - different sessions are
 different data - but the Timer page groups them into one line with a `×2` badge
 that unfolds back into the individual sessions.
 
+## Filing the session under a project
+
+The hook sends no project, so an agent session starts under none, and the report
+files it as `(no project)`. Either side can fix that: the user edits the entry in
+the app, or the agent calls the MCP tool
+
+```
+update_time_entry(project: "WorkTime", entry_id?: "...", description?: "...")
+  -> { entry_id, description, project, started_at, elapsed, session_tag, task_key }
+```
+
+- With no `entry_id` it edits the timer that is running - the agent's own row in
+  a normal session. Concurrent timers are a feature here, so two running rows
+  make the call an error naming the candidates rather than a guess.
+- The project is named, not identified: use `list_projects` or `create_project`
+  first. An unknown name is an error, never a new project. An empty string
+  detaches the entry.
+- When the row is the one an agent session currently owns, the project is
+  written to the session too, so the entry it opens after the next midnight cut
+  starts on the same project instead of falling back to none.
+- It edits a finished entry too, by `entry_id` - `list_running_timers` only
+  reports the running ones, so that id has to come from the app or from the
+  earlier answer of this tool.
+- A `description` set this way counts as chosen by the user, exactly like a
+  rename in the app: the session stops fixing that row's name, and
+  `set_agent_task` leaves it alone. Changing only the project keeps the
+  automatic name and later renames still apply.
+
 ## Ownership of the entry
 
 The server remembers the `server_seq` it last wrote to the entry. When the row

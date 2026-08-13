@@ -28,6 +28,16 @@ The hook script and the hook wiring live outside this repository - in
 never updates them. After pulling a WorkTime release that changes agent
 tracking, redo both steps or the old behaviour silently stays.
 
+## Running timer in the Claude Code status line
+
+Copy `integrations/claude-code/wt-statusline.sh` to
+`~/.worktime/wt-statusline.sh`, make it executable, and merge the `statusLine`
+object from `settings.json.example`. The script shares `WORKTIME_URL` and
+`WORKTIME_TOKEN` with the hook, but only reads the current session's timer; its
+five-second refresh never advances a heartbeat. If `settings.json` already has
+another status-line command, leave it in place: Claude Code supports one, and a
+WorkTime upgrade must not replace the user's terminal UI.
+
 ## One entry per session, named after the task
 
 1. **Copy the script again**: `integrations/claude-code/wt-hook.sh` ->

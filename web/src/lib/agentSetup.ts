@@ -68,7 +68,7 @@ Rules for the whole run:
 
 \`curl\` must answer (on Windows, from Git Bash) and the last line must print exactly \`200\`. A missing \`git\` is not fatal - entries then carry no branch - so note it and go on. Anything else: stop, find the code in the table at the end, and report its "What to do" line verbatim as the reason.
 
-## 2. Install the hook script
+## 2. Install the integration scripts
 
 Download beside the real file, check it, and only then put it in place:
 
@@ -84,7 +84,26 @@ Only when all three pass:
     rm ~/.worktime/wt-hook.new
     chmod +x ~/.worktime/wt-hook.sh
 
-**Never download straight onto \`wt-hook.sh\`.** A server older than this endpoint answers \`200\` with the app's \`index.html\`, so \`curl -f\` does not stop it and a working hook would be replaced by HTML. If the checks fail, delete the \`.new\` file, leave any existing hook alone, and fall back to \`https://raw.githubusercontent.com/Siyet/worktime/main/integrations/claude-code/wt-hook.sh\` - then say in your report that the script came from GitHub and may be newer than this server.
+**Never download straight onto \`wt-hook.sh\`.** A server older than this endpoint answers \`200\` with the app's \`index.html\`, so \`curl -f\` does not stop it and a working hook would be replaced by HTML. If the checks fail, delete the \`.new\` file, leave any existing hook alone, and fall back to \`https://raw.githubusercontent.com/Siyet/worktime/main/integrations/claude-code/wt-hook.sh\` - then say in your report that the script came from GitHub and may be newer than this server.${
+  client === "claude-code"
+    ? `
+
+Claude Code can also show the same running timer in its status line. Install that read-only client with the same checked replacement:
+
+    curl -fsSL -H "Authorization: Bearer ${token}" ${origin}/api/agent/statusline.sh -o ~/.worktime/wt-statusline.new
+    head -n 1 ~/.worktime/wt-statusline.new                  # exactly: #!/bin/sh
+    grep -c 'status-line' ~/.worktime/wt-statusline.new      # at least 1
+    sh -n ~/.worktime/wt-statusline.new                      # prints nothing
+
+Only when all three pass:
+
+    tr -d '\\r' < ~/.worktime/wt-statusline.new > ~/.worktime/wt-statusline.sh
+    rm ~/.worktime/wt-statusline.new
+    chmod +x ~/.worktime/wt-statusline.sh
+
+Apply the same no-overwrite rule and GitHub fallback as for the hook, using \`integrations/claude-code/wt-statusline.sh\`. The status line only reads the timer; it never sends a heartbeat, so its refreshes cannot turn idle time into tracked work.`
+    : ""
+}
 `;
 
 const failureLadder = (origin: string, client: AgentClient) => `## If something fails
@@ -108,7 +127,7 @@ const failureLadder = (origin: string, client: AgentClient) => `## If something 
 
 ## Report back
 
-For each step say PASS, FAIL or ALREADY IN PLACE. Then: where the hook came from, the \`time_entry_id\` the probe returned, the exact name of the probe entry so the user can delete it, and everything still left for the user to do. Do not print the token.
+For each step say PASS, FAIL or ALREADY IN PLACE. Then: where each installed integration script came from, the \`time_entry_id\` the probe returned, the exact name of the probe entry so the user can delete it, and everything still left for the user to do. Do not print the token.
 
 Last, if these instructions were saved to a file, delete it: it carries a live token, and a stray \`worktime-setup-*.md\` is exactly the kind of file that ends up committed.
 `;
@@ -190,7 +209,7 @@ Configure this machine so every Claude Code session is tracked in WorkTime autom
 ${preamble(origin, token, "claude-code")}
 ## 3. Wire everything into ~/.claude/settings.json
 
-The hooks and the MCP client both read their credentials from the \`env\` block of this file - no shell profile is involved, and one mechanism covers all three operating systems.
+The hooks, status line and MCP client all read their credentials from the \`env\` block of this file - no shell profile is involved, and one mechanism covers all three operating systems.
 
 Fetch the canonical wiring rather than typing it out, and back the file up before touching it:
 
@@ -203,6 +222,7 @@ Then edit \`~/.claude/settings.json\` - a missing file starts as \`{}\` - so tha
 
 - \`env\` contains \`"WORKTIME_URL": "${origin}"\`, \`"WORKTIME_TOKEN": "${token}"\` and \`"WORKTIME_HOOK_LOG"\` set to the \`.worktime/hook.log\` path under the home directory you just printed, **written out in full**. Values in that block are not shell-expanded, so a literal \`$HOME\` silently disables the one log that says whether a hook fired at all. Leave every other variable there untouched;
 - every event from the fetched wiring is present. If an event already has an entry whose command mentions \`wt-hook.sh\`, replace that entry in place - do not append a second one, or every signal is sent twice;
+- merge the fetched \`statusLine\` when the file has none. If its current command already mentions \`wt-statusline.sh\`, replace it with the fetched object. If another status line is configured, preserve it exactly and report that WorkTime's line was not installed - Claude Code supports only one, and this setup never takes somebody else's terminal UI away;
 - the rest of the file is edited, not re-serialised: do not reformat or reorder what you are not changing.
 
 Then read it back and confirm it parses as JSON. If it does not, restore \`~/.claude/settings.json.wtbak\`, stop, and report it: a broken settings file disables every hook the user has, not only these. On macOS and Linux finish with \`chmod 600 ~/.claude/settings.json\` - it now holds a token.
@@ -216,6 +236,7 @@ Clean up while you are in there: delete any handler for an event that is **not**
     grep -o wt-hook ~/.claude/settings.json | wc -l        # one per event in the fetched wiring
     grep -c '"WORKTIME_TOKEN"' ~/.claude/settings.json     # exactly 1
     grep -c '"WORKTIME_HOOK_LOG"' ~/.claude/settings.json  # exactly 1
+    grep -c wt-statusline ~/.claude/settings.json          # 1, or 0 only when preserving another status line
 
 Any other number is a duplicate or a missed event. Nothing later in this prompt reads that file - the probe carries its own credentials - so this is the only place a typo in it is caught.
 
@@ -236,9 +257,9 @@ ${standingInstruction("~/.claude/CLAUDE.md", "Claude Code #ab12cd34")}
 ${probe(origin, token, "claude-code", probeSession, `WORKTIME_URL="${origin}" WORKTIME_TOKEN="${token}" WORKTIME_HOOK_LOG="$HOME/.worktime/hook.log" sh ~/.worktime/wt-hook.sh`)}
 ## 8. Hand over to the user
 
-Hook wiring is picked up by the file watcher, but the \`env\` block and the MCP server list are read when the process starts. If this session began before step 3, nothing is tracked until Claude Code is restarted - say so plainly.
+Hook wiring is picked up by the file watcher, but the \`env\` block, status line and MCP server list are read when the process starts. If this session began before step 3, nothing is tracked until Claude Code is restarted - say so plainly.
 
-Then give them one check for the next session: ask you to call \`list_running_timers\`, which must return a row named \`Claude Code #<8 hex>\` with a growing elapsed. That row is that session's own entry.
+Then give them two checks for the next session: the terminal status line must contain \`WorkTime H:MM:SS\`, and \`list_running_timers\` must return a row named \`Claude Code #<8 hex>\` with a growing elapsed. Both read the same entry. Skip the first check only when an existing non-WorkTime status line was deliberately preserved.
 
 If it never appears, \`tail ~/.worktime/hook.log\`: a line per prompt and per tool call means the hooks fire and the problem is elsewhere; an empty log means they do not.
 

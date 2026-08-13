@@ -1,4 +1,10 @@
 {
+  "statusLine": {
+    "type": "command",
+    "command": "\"$HOME/.worktime/wt-statusline.sh\"",
+    "padding": 1,
+    "refreshInterval": 5
+  },
   "hooks": {
     "SessionStart": [
       {

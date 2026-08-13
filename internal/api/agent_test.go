@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,11 @@ import (
 )
 
 func newAgentTestServer(t *testing.T) *httptest.Server {
+	testServer, _ := newAgentTestServerAndStore(t)
+	return testServer
+}
+
+func newAgentTestServerAndStore(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
 	dataStore, err := store.Open(filepath.Join(t.TempDir(), "agent-test.db"))
 	if err != nil {
@@ -30,7 +36,7 @@ func newAgentTestServer(t *testing.T) *httptest.Server {
 		DevAuth: true, AgentIdle: 10 * time.Minute, AgentGrace: 10 * time.Minute,
 	}))
 	t.Cleanup(testServer.Close)
-	return testServer
+	return testServer, dataStore
 }
 
 func postAgentJSON(t *testing.T, url string, payload map[string]any) (*http.Response, store.AgentSession) {
@@ -124,6 +130,90 @@ func TestAgentHeartbeatAcceptsOptionalMetadata(t *testing.T) {
 	}
 }
 
+func TestAgentStatusLineReadsRunningTimerWithoutMutatingIt(t *testing.T) {
+	testServer, dataStore := newAgentTestServerAndStore(t)
+	sessionID := uuid.NewString()
+	base := testServer.URL + "/api/agent/sessions/" + sessionID
+	startedAt := time.Now().Add(-90 * time.Second).UnixMilli()
+
+	response, started := postAgentJSON(t, base+"/start", map[string]any{
+		"started_at": startedAt, "source": "claude-code", "cwd": "/home/dev/worktime",
+	})
+	if response.StatusCode != http.StatusOK || started.TimeEntryID == nil {
+		t.Fatalf("start: status %d, session %+v", response.StatusCode, started)
+	}
+	devUser, err := dataStore.EnsureDevUser(t.Context())
+	if err != nil {
+		t.Fatalf("get dev user: %v", err)
+	}
+	beforeSession, err := dataStore.GetAgentSession(t.Context(), devUser.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session before status: %v", err)
+	}
+	beforeEntry, err := dataStore.GetTimeEntry(t.Context(), devUser.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry before status: %v", err)
+	}
+
+	statusResponse, err := http.Get(base + "/status-line")
+	if err != nil {
+		t.Fatalf("GET status line: %v", err)
+	}
+	defer statusResponse.Body.Close()
+	statusBody, err := io.ReadAll(statusResponse.Body)
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	if statusResponse.StatusCode != http.StatusOK {
+		t.Fatalf("status line: expected 200, got %d: %s", statusResponse.StatusCode, statusBody)
+	}
+	if !strings.HasPrefix(string(statusBody), "WorkTime 0:") || !strings.Contains(string(statusBody), "Claude Code #") {
+		t.Fatalf("unexpected status line %q", statusBody)
+	}
+
+	afterSession, err := dataStore.GetAgentSession(t.Context(), devUser.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after status: %v", err)
+	}
+	afterEntry, err := dataStore.GetTimeEntry(t.Context(), devUser.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry after status: %v", err)
+	}
+	if !reflect.DeepEqual(beforeSession, afterSession) || !reflect.DeepEqual(beforeEntry, afterEntry) {
+		t.Fatalf("reading status mutated tracking state\nsession: %#v -> %#v\nentry: %#v -> %#v",
+			beforeSession, afterSession, beforeEntry, afterEntry)
+	}
+
+	response, _ = postAgentJSON(t, base+"/stop", map[string]any{
+		"ended_at": time.Now().UnixMilli(), "reason": "prompt_input_exit",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("stop: expected 200, got %d", response.StatusCode)
+	}
+	statusResponse, err = http.Get(base + "/status-line")
+	if err != nil {
+		t.Fatalf("GET closed status line: %v", err)
+	}
+	defer statusResponse.Body.Close()
+	if statusResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("closed status line: expected 204, got %d", statusResponse.StatusCode)
+	}
+}
+
+func TestFormatAgentStatusDescriptionStaysOnOneTerminalLine(t *testing.T) {
+	if got := formatAgentStatusDescription(" task\n\x1b[31m  title\t"); got != "task [31m title" {
+		t.Fatalf("control characters were not removed: %q", got)
+	}
+	if got := formatAgentStatusDescription(""); got != "untitled" {
+		t.Fatalf("empty description: got %q", got)
+	}
+	long := strings.Repeat("я", 100)
+	got := []rune(formatAgentStatusDescription(long))
+	if len(got) != 80 || got[79] != '…' {
+		t.Fatalf("long description was not rune-safely truncated: %q", string(got))
+	}
+}
+
 // The setup prompt tells an agent to install the hook straight from the instance
 // it will report to. If that ever stops matching the file in the repository, a
 // fork ships one protocol and speaks another.
@@ -142,9 +232,25 @@ func TestAgentHookAssetsAreServedFromTheBinary(t *testing.T) {
 		t.Fatal("served hook script has no tool_start signal")
 	}
 
+	statusLine := getBody(t, testServer.URL+"/api/agent/statusline.sh")
+	statusLineOnDisk, err := os.ReadFile(filepath.Join("..", "..", "integrations", "claude-code", "wt-statusline.sh"))
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	if statusLine != string(statusLineOnDisk) {
+		t.Fatal("served status line differs from integrations/claude-code/wt-statusline.sh")
+	}
+	if !strings.Contains(statusLine, "/status-line") {
+		t.Fatal("served status line script does not read the status endpoint")
+	}
+
 	settings := getBody(t, testServer.URL+"/api/agent/hook-settings.json")
 	var parsed struct {
-		Hooks map[string]json.RawMessage `json:"hooks"`
+		Hooks      map[string]json.RawMessage `json:"hooks"`
+		StatusLine struct {
+			Command         string `json:"command"`
+			RefreshInterval int    `json:"refreshInterval"`
+		} `json:"statusLine"`
 	}
 	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
 		t.Fatalf("hook settings are not JSON: %v", err)
@@ -153,6 +259,9 @@ func TestAgentHookAssetsAreServedFromTheBinary(t *testing.T) {
 		if _, ok := parsed.Hooks[event]; !ok {
 			t.Fatalf("hook settings are missing %s", event)
 		}
+	}
+	if !strings.Contains(parsed.StatusLine.Command, "wt-statusline.sh") || parsed.StatusLine.RefreshInterval <= 0 {
+		t.Fatalf("hook settings have no refreshing WorkTime status line: %+v", parsed.StatusLine)
 	}
 }
 

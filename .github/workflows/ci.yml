@@ -52,11 +52,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The hook is plain sh, reached by neither go test nor Playwright. It runs under
-      # whatever /bin/sh the user has, so it is exercised under dash as well as bash -
-      # a bashism passes unnoticed on a machine where sh is bash, which is most of them.
+      # The integration is plain sh, reached by neither go test nor Playwright. Both
+      # scripts run under dash and bash so a bashism cannot pass unnoticed.
       - run: dash integrations/claude-code/wt-hook_test.sh
       - run: bash integrations/claude-code/wt-hook_test.sh
+      - run: dash integrations/claude-code/wt-statusline_test.sh
+      - run: bash integrations/claude-code/wt-statusline_test.sh
 
   e2e:
     runs-on: ubuntu-latest

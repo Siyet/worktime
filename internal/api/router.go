@@ -65,6 +65,7 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		api.With(requireSession).Delete("/tokens/{id}", s.handleDeleteToken)
 		api.Get("/export.sqlite", s.handleExport)
 		api.Route("/agent/sessions/{id}", func(agent chi.Router) {
+			agent.Get("/status-line", s.handleAgentStatusLine)
 			agent.Post("/start", s.handleAgentStart)
 			agent.Post("/heartbeat", s.handleAgentHeartbeat)
 			agent.Post("/stop", s.handleAgentStop)
@@ -73,6 +74,7 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		// They carry no secrets and the same Bearer the agent already holds gets
 		// them, so setup is one curl rather than "find the right branch on GitHub".
 		api.Get("/agent/hook.sh", s.handleAgentHookScript)
+		api.Get("/agent/statusline.sh", s.handleAgentStatusLineScript)
 		api.Get("/agent/hook-settings.json", s.handleAgentHookSettings)
 	})
 

@@ -31,7 +31,8 @@ test-go:
 test-web:
 	cd web && npm run test:unit
 
-# The Claude Code hook is plain sh and is covered by neither go test nor Playwright.
+# The Claude Code integration scripts are plain sh and are covered by neither
+# go test nor Playwright.
 test-hook:
 	sh integrations/claude-code/wt-hook_test.sh
 	sh integrations/claude-code/wt-statusline_test.sh

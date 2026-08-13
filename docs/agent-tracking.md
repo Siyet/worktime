@@ -264,8 +264,8 @@ A signal older than the last billed moment (a spooled heartbeat delivered after
 the stop) only refreshes metadata: it can neither revive the session nor open a
 second entry.
 
-The response is always the session state, including `time_entry_id`, `task_key`
-and `tz_offset_min`.
+Every start, heartbeat and stop response is the session state, including
+`time_entry_id`, `task_key` and `tz_offset_min`.
 
 ## Server configuration
 

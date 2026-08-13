@@ -127,7 +127,7 @@ const failureLadder = (origin: string, client: AgentClient) => `## If something 
 
 ## Report back
 
-For each step say PASS, FAIL or ALREADY IN PLACE. Then: where the hook came from, the \`time_entry_id\` the probe returned, the exact name of the probe entry so the user can delete it, and everything still left for the user to do. Do not print the token.
+For each step say PASS, FAIL or ALREADY IN PLACE. Then: where each installed integration script came from, the \`time_entry_id\` the probe returned, the exact name of the probe entry so the user can delete it, and everything still left for the user to do. Do not print the token.
 
 Last, if these instructions were saved to a file, delete it: it carries a live token, and a stray \`worktime-setup-*.md\` is exactly the kind of file that ends up committed.
 `;

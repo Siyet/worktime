@@ -14,6 +14,11 @@ import _ "embed"
 //go:embed wt-hook.sh
 var HookScript string
 
+// StatusLineScript is integrations/claude-code/wt-statusline.sh verbatim.
+//
+//go:embed wt-statusline.sh
+var StatusLineScript string
+
 // HookSettings is the Claude Code hook wiring, as JSON meant to be merged into
 // the user's settings file rather than to replace it.
 //

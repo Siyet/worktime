@@ -195,17 +195,6 @@ func (d toolDeps) projectNames(ctx context.Context) (map[string]string, error) {
 	return names, nil
 }
 
-// billableMs is what an entry is worth: the interval minus the idle time an
-// agent session recorded inside it. Every place that shows a duration goes
-// through it, or the numbers here and in the UI would drift apart.
-func billableMs(entry store.TimeEntry, now int64) int64 {
-	end := now
-	if entry.StoppedAt != nil {
-		end = *entry.StoppedAt
-	}
-	return max(0, end-entry.StartedAt-entry.PausedMs)
-}
-
 func formatDuration(ms int64) string {
 	duration := time.Duration(ms) * time.Millisecond
 	return fmt.Sprintf("%d:%02d:%02d", int(duration.Hours()), int(duration.Minutes())%60, int(duration.Seconds())%60)
@@ -333,7 +322,7 @@ func (d toolDeps) stopTimer(ctx context.Context, req *mcp.CallToolRequest, input
 	return nil, timerOut{
 		EntryID: entry.ID, Description: entry.Description,
 		StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
-		Elapsed:   formatDuration(billableMs(stored, *stored.StoppedAt)),
+		Elapsed:   formatDuration(store.BillableDurationMs(stored, *stored.StoppedAt)),
 	}, nil
 }
 
@@ -396,7 +385,7 @@ func (d toolDeps) listRunningTimers(ctx context.Context, req *mcp.CallToolReques
 		timer := timerOut{
 			EntryID: entry.ID, Description: entry.Description, Project: projectName,
 			StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
-			Elapsed:   formatDuration(billableMs(entry, now)),
+			Elapsed:   formatDuration(store.BillableDurationMs(entry, now)),
 		}
 		if entry.AgentSessionID != nil {
 			timer.SessionTag = store.AgentSessionTag(*entry.AgentSessionID)
@@ -473,7 +462,7 @@ func (d toolDeps) updateTimeEntry(ctx context.Context, req *mcp.CallToolRequest,
 	out := timerOut{
 		EntryID: stored.ID, Description: stored.Description, Project: projectName,
 		StartedAt: time.UnixMilli(stored.StartedAt).Format(time.RFC3339),
-		Elapsed:   formatDuration(billableMs(stored, end)),
+		Elapsed:   formatDuration(store.BillableDurationMs(stored, end)),
 	}
 	if stored.AgentSessionID != nil {
 		out.SessionTag = store.AgentSessionTag(*stored.AgentSessionID)

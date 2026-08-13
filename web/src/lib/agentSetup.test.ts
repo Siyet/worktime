@@ -12,6 +12,8 @@ describe("agent setup prompts", () => {
       expect(prompt).toContain("https://wt.example.com/mcp");
       expect(prompt).toContain("wt_secret");
     }
+    expect(setupPrompt("claude-code", options)).toContain("https://wt.example.com/api/agent/statusline.sh");
+    expect(setupPrompt("codex", options)).not.toContain("/api/agent/statusline.sh");
   });
 
   // window.location.origin never has one, but an instance behind a path prefix
@@ -89,6 +91,7 @@ describe("agent setup prompts", () => {
     const claude = setupPrompt("claude-code", options);
     const codex = setupPrompt("codex", options);
     expect(claude).toContain("~/.claude/settings.json");
+    expect(claude).toContain("wt-statusline.sh");
     expect(claude).not.toContain("WORKTIME_AGENT_SOURCE");
     expect(codex).toContain("WORKTIME_AGENT_SOURCE=codex");
     expect(codex).toContain("~/.codex/");

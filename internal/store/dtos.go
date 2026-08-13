@@ -100,6 +100,17 @@ type TimeEntry struct {
 	PausedMs int64 `json:"paused_ms"`
 }
 
+// BillableDurationMs is the interval worth showing and reporting after the
+// server-owned idle time has been removed. Keeping this arithmetic beside the
+// DTO prevents the MCP tools and agent status line from drifting apart.
+func BillableDurationMs(entry TimeEntry, now int64) int64 {
+	end := now
+	if entry.StoppedAt != nil {
+		end = *entry.StoppedAt
+	}
+	return max(int64(0), end-entry.StartedAt-entry.PausedMs)
+}
+
 type TimeOff struct {
 	ID        string `json:"id"`
 	Kind      string `json:"kind"`

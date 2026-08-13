@@ -57,6 +57,8 @@ jobs:
       # a bashism passes unnoticed on a machine where sh is bash, which is most of them.
       - run: dash integrations/claude-code/wt-hook_test.sh
       - run: bash integrations/claude-code/wt-hook_test.sh
+      - run: dash integrations/claude-code/wt-statusline_test.sh
+      - run: bash integrations/claude-code/wt-statusline_test.sh
 
   e2e:
     runs-on: ubuntu-latest

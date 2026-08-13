@@ -150,9 +150,10 @@ writes it into the file, so treat the file as a secret.
 By hand:
 
 1. Create an API token in WorkTime (Settings -> API tokens).
-2. Copy `integrations/claude-code/wt-hook.sh` to `~/.worktime/wt-hook.sh` and
-   make it executable (`chmod +x`). On Windows the script runs under Git Bash,
-   which Claude Code uses for hooks.
+2. Copy `integrations/claude-code/wt-hook.sh` and
+   `integrations/claude-code/wt-statusline.sh` to `~/.worktime/` and make both
+   executable (`chmod +x`). On Windows the scripts run under Git Bash, which
+   Claude Code uses for hooks and status-line commands.
 3. Export the environment variables where Claude Code runs (shell profile):
 
    ```sh
@@ -163,9 +164,10 @@ By hand:
 4. Merge `integrations/claude-code/settings.json.example` into
    `~/.claude/settings.json` (user-wide) or a project's
    `.claude/settings.local.json` (gitignored). **Merging it again after an
-   upgrade is not optional**: the `SessionStart` matcher and the `PreToolUse`
-   hook live in your settings file, and an old copy silently keeps the old
-   behaviour.
+   upgrade is not optional**: the `SessionStart` matcher, `PreToolUse` hook and
+   `statusLine` command live in your settings file, and an old copy silently
+   keeps the old behaviour. Claude Code supports one status line; preserve an
+   existing non-WorkTime command rather than overwriting it.
 5. Connect the MCP server, or the agent has no `set_agent_task` to call and
    every entry stays under its session tag:
 
@@ -217,20 +219,46 @@ POST /api/agent/sessions/{id}/stop
   { "ended_at": 1730003600000, "reason": "clear|logout|prompt_input_exit|other" }
   -> closes the session and its running entry; no-op if already closed (404 if
      the session never existed)
+
+GET /api/agent/sessions/{id}/status-line
+  -> one plain-text line with the running entry's billable duration and name;
+     204 after the entry stops. Polling is read-only: it never advances a
+     heartbeat or changes tracked time.
 ```
 
 ```
 GET /api/agent/hook.sh
+GET /api/agent/statusline.sh
 GET /api/agent/hook-settings.json
-  -> the hook script and the hook wiring this binary was built with; same Bearer
-     auth as everything else under /api
+  -> the hook script, status-line script and settings fragment this binary was
+     built with; same Bearer auth as everything else under /api
 ```
 
-The two assets are served by the instance rather than linked from GitHub on
+The three assets are served by the instance rather than linked from GitHub on
 purpose: the hook and the endpoints it posts to are one protocol, and a fork or
 a server that has not been upgraded yet would otherwise install a hook that
 speaks a different version than its own server. `hook-settings.json` is a
 fragment to merge into the user's settings, never a file to copy over.
+
+## Status line and accuracy validation
+
+Claude Code passes the current `session_id` to `wt-statusline.sh` on stdin. The
+script reads `/status-line` with a one-second timeout, while
+`refreshInterval: 5` keeps the displayed `WorkTime H:MM:SS · task` moving
+between model turns. A missing token, unknown session or unreachable server
+prints nothing and never blocks Claude Code. The read is deliberately not a
+heartbeat: otherwise leaving a terminal open would manufacture working time.
+
+OpenTelemetry is an optional independent check, not another source of truth for
+WorkTime. Enable Claude Code telemetry and export metrics as described in the
+[Claude Code monitoring guide](https://code.claude.com/docs/en/monitoring-usage),
+then compare the weekly sum of WorkTime agent-entry billable durations with
+`claude_code.active_time.total` for the same user and period. That duration
+metric is the useful accuracy check; `claude_code.session.count` only checks
+that session starts are present. Investigate a difference above roughly 5% by
+session id and the hook log before changing idle thresholds. WorkTime does not
+ingest or require an OTel collector, so tracking continues unchanged when
+telemetry is disabled.
 
 A signal older than the last billed moment (a spooled heartbeat delivered after
 the stop) only refreshes metadata: it can neither revive the session nor open a
@@ -295,7 +323,5 @@ make the two differ.
 
 ## Not implemented yet
 
-- statusLine integration showing the running timer inside Claude Code.
-- Cross-checking session counts against Claude Code OpenTelemetry metrics.
 - `SubagentStart`/`SubagentStop` hooks (not confirmed to exist in the current
   release; `PreToolUse` covers the same gap).

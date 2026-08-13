@@ -7,9 +7,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -150,12 +154,82 @@ func (s *server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	writeAgentResult(w, session, err)
 }
 
+// handleAgentStatusLine is the read-only half of the Claude Code statusLine
+// integration. Refreshing a terminal decoration must never count as activity:
+// only lifecycle hooks may move a heartbeat or change a time entry.
+func (s *server) handleAgentStatusLine(w http.ResponseWriter, r *http.Request) {
+	session, err := s.store.GetAgentSession(r.Context(), currentUser(r).ID, chi.URLParam(r, "id"))
+	if errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		log.Printf("agent status line: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if session.Status != "active" || session.TimeEntryID == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	entry, err := s.store.GetTimeEntry(r.Context(), currentUser(r).ID, *session.TimeEntryID)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		log.Printf("agent status line entry: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if entry.StoppedAt != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	elapsedMs := store.BillableDurationMs(entry, time.Now().UnixMilli())
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = fmt.Fprintf(w, "WorkTime %s · %s\n", formatAgentStatusDuration(elapsedMs), formatAgentStatusDescription(entry.Description))
+}
+
+func formatAgentStatusDuration(ms int64) string {
+	duration := time.Duration(ms) * time.Millisecond
+	return fmt.Sprintf("%d:%02d:%02d", int(duration.Hours()), int(duration.Minutes())%60, int(duration.Seconds())%60)
+}
+
+func formatAgentStatusDescription(description string) string {
+	clean := strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, description)
+	clean = strings.Join(strings.Fields(clean), " ")
+	if clean == "" {
+		return "untitled"
+	}
+	runes := []rune(clean)
+	if len(runes) > 80 {
+		return string(runes[:79]) + "…"
+	}
+	return clean
+}
+
 // handleAgentHookScript hands out the hook script this very binary was built
 // with. The setup prompt tells an agent to fetch it from the instance it will
 // report to, so a fork or an un-upgraded server never installs a hook that
 // speaks a different protocol than its server.
 func (s *server) handleAgentHookScript(w http.ResponseWriter, _ *http.Request) {
 	serveAgentAsset(w, "text/x-shellscript; charset=utf-8", claudecode.HookScript)
+}
+
+// handleAgentStatusLineScript serves the matching terminal integration. Like
+// the hook, it is fetched from the instance it reads so the client and server
+// cannot drift onto different endpoint contracts.
+func (s *server) handleAgentStatusLineScript(w http.ResponseWriter, _ *http.Request) {
+	serveAgentAsset(w, "text/x-shellscript; charset=utf-8", claudecode.StatusLineScript)
 }
 
 // handleAgentHookSettings hands out the hook wiring for ~/.claude/settings.json.

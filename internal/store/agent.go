@@ -39,6 +39,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -454,9 +455,10 @@ func (s *Store) LatestAgentTZOffset(ctx context.Context, userID string) (*int, e
 }
 
 // AgentTaskSelector picks the session a task is attached to. An explicit session
-// id wins; otherwise the only active session is used, or the only active session
-// with a matching working directory. Attaching the wrong session silently is
-// worse than asking, so anything else is an error listing the candidates.
+// id wins. Otherwise a supplied working directory constrains the choice to exactly
+// one normalized active-session match; only without either selector may the sole
+// active session be chosen automatically. Attaching the wrong session silently is
+// worse than asking, so anything else is an error listing the relevant candidates.
 type AgentTaskSelector struct {
 	SessionID string
 	Cwd       string
@@ -985,33 +987,122 @@ func selectAgentSession(ctx context.Context, transaction *sql.Tx, userID string,
 		return AgentSession{}, err
 	}
 
+	if selector.Cwd != "" {
+		matched := []AgentSession{}
+		for _, candidate := range candidates {
+			if agentCwdEqual(candidate.Cwd, selector.Cwd) {
+				matched = append(matched, candidate)
+			}
+		}
+		switch len(matched) {
+		case 1:
+			return matched[0], nil
+		case 0:
+			if len(candidates) == 0 {
+				return AgentSession{}, fmt.Errorf("%w: no active agent session matches cwd %q; pass session_id",
+					ErrInvalidInput, selector.Cwd)
+			}
+			return AgentSession{}, fmt.Errorf("%w: no active agent session matches cwd %q; pass session_id: %s",
+				ErrInvalidInput, selector.Cwd, formatAgentSessionCandidates(candidates))
+		default:
+			return AgentSession{}, fmt.Errorf("%w: %d active agent sessions match cwd %q; pass session_id: %s",
+				ErrInvalidInput, len(matched), selector.Cwd, formatAgentSessionCandidates(matched))
+		}
+	}
 	if len(candidates) == 0 {
 		return AgentSession{}, fmt.Errorf("%w: no active agent session; pass session_id", ErrInvalidInput)
 	}
 	if len(candidates) == 1 {
 		return candidates[0], nil
 	}
-	if selector.Cwd != "" {
-		matched := []AgentSession{}
-		for _, candidate := range candidates {
-			if strings.EqualFold(candidate.Cwd, selector.Cwd) {
-				matched = append(matched, candidate)
-			}
-		}
-		if len(matched) == 1 {
-			return matched[0], nil
-		}
-		if len(matched) > 1 {
-			candidates = matched
-		}
-	}
+	return AgentSession{}, fmt.Errorf("%w: %d active agent sessions; pass session_id: %s",
+		ErrInvalidInput, len(candidates), formatAgentSessionCandidates(candidates))
+}
+
+func formatAgentSessionCandidates(candidates []AgentSession) string {
 	listed := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		listed = append(listed, fmt.Sprintf("%s (cwd %q, started %s)",
 			candidate.ID, candidate.Cwd, time.UnixMilli(candidate.StartedAt).UTC().Format(time.RFC3339)))
 	}
-	return AgentSession{}, fmt.Errorf("%w: %d active agent sessions, pass session_id: %s",
-		ErrInvalidInput, len(candidates), strings.Join(listed, "; "))
+	return strings.Join(listed, "; ")
+}
+
+type agentCwdFlavor uint8
+
+const (
+	agentCwdPOSIX agentCwdFlavor = iota
+	agentCwdWindowsDrive
+	agentCwdWindowsUNC
+)
+
+// agentCwdEqual compares paths reported by the agent, not paths on this server.
+// The server is commonly Linux even when the hook runs on Windows, so filepath.Clean
+// and filesystem lookups would apply the wrong machine's rules. Keep POSIX backslashes
+// literal, preserve Windows volume boundaries, and never turn an unknown cwd into ".".
+func agentCwdEqual(left, right string) bool {
+	leftFlavor, leftPath, leftOK := normalizeAgentCwd(left)
+	rightFlavor, rightPath, rightOK := normalizeAgentCwd(right)
+	return leftOK && rightOK && leftFlavor == rightFlavor && strings.EqualFold(leftPath, rightPath)
+}
+
+func normalizeAgentCwd(value string) (agentCwdFlavor, string, bool) {
+	if value == "" {
+		return 0, "", false
+	}
+	if len(value) >= 3 && isASCIIAlpha(value[0]) && value[1] == ':' && isWindowsSeparator(value[2]) {
+		return agentCwdWindowsDrive, value[:2] + "/" + cleanWindowsPath(value[3:]), true
+	}
+	// A leading // is a valid POSIX spelling with implementation-defined meaning,
+	// so only two backslashes prove that the remote path uses UNC syntax. Once the
+	// flavor is known, both Windows separators are accepted inside the path.
+	if strings.HasPrefix(value, `\\`) {
+		parts := splitWindowsPath(strings.TrimLeft(value, `/\`))
+		if len(parts) >= 2 && parts[0] != ".." && parts[1] != ".." {
+			root := "//" + parts[0] + "/" + parts[1]
+			cleaned := cleanWindowsParts(parts[2:])
+			if cleaned != "" {
+				root += "/" + cleaned
+			}
+			return agentCwdWindowsUNC, root, true
+		}
+	}
+	return agentCwdPOSIX, path.Clean(value), true
+}
+
+func cleanWindowsPath(value string) string {
+	return cleanWindowsParts(splitWindowsPath(value))
+}
+
+func splitWindowsPath(value string) []string {
+	return strings.FieldsFunc(value, func(character rune) bool {
+		return character == '/' || character == '\\'
+	})
+}
+
+func cleanWindowsParts(parts []string) string {
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if len(cleaned) > 0 {
+				cleaned = cleaned[:len(cleaned)-1]
+			}
+		default:
+			cleaned = append(cleaned, part)
+		}
+	}
+	return strings.Join(cleaned, "/")
+}
+
+func isWindowsSeparator(character byte) bool {
+	return character == '/' || character == '\\'
+}
+
+func isASCIIAlpha(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
 }
 
 // applyAgentMetadata fills session fields a lost start never delivered. Heartbeat

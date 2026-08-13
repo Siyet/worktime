@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -24,15 +25,46 @@ var testPolicy = AgentPolicy{
 }
 
 func startTestAgentSession(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64) AgentSession {
+	return startTestAgentSessionAtCwd(t, testStore, userID, sessionID, startedAt, "C:\\Users\\dev\\Projects\\WorkTime")
+}
+
+func startTestAgentSessionAtCwd(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64, cwd string) AgentSession {
 	t.Helper()
 	session, err := testStore.StartAgentSession(context.Background(), userID, AgentStart{
 		SessionID: sessionID, StartedAt: startedAt, Source: "claude-code",
-		Cwd: "C:\\Users\\dev\\Projects\\WorkTime", GitBranch: "main",
+		Cwd: cwd, GitBranch: "main",
 	}, testPolicy)
 	if err != nil {
 		t.Fatalf("start agent session: %v", err)
 	}
 	return session
+}
+
+func TestAgentCwdEqual(t *testing.T) {
+	tests := []struct {
+		name        string
+		left, right string
+		want        bool
+	}{
+		{name: "posix lexical and case", left: "/Home/dev/project/./", right: "/home/dev/project", want: true},
+		{name: "posix parent", left: "/home/dev/other/../project", right: "/home/dev/project", want: true},
+		{name: "posix literal backslash", left: `/srv/a\b`, right: "/srv/a/b", want: false},
+		{name: "windows drive", left: `C:\Users\Dev\Project\.`, right: "c:/users/dev/project", want: true},
+		{name: "windows drive clamps parent at root", left: `C:\..\x`, right: "c:/x", want: true},
+		{name: "windows UNC", left: `\\server\share\foo\..\bar`, right: `\\SERVER\share/bar`, want: true},
+		{name: "windows UNC clamps parent at share", left: `\\server\share\..\x`, right: `\\server/share/x`, want: true},
+		{name: "UNC and POSIX flavors differ", left: `\\server\share`, right: "/server/share", want: false},
+		{name: "UNC and double-slash POSIX flavors differ", left: `\\server\share`, right: "//server/share", want: false},
+		{name: "UNC and mixed-prefix POSIX flavors differ", left: `\\server\share`, right: `/\server/share`, want: false},
+		{name: "unknown cwd is not dot", left: "", right: ".", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := agentCwdEqual(test.left, test.right); got != test.want {
+				t.Fatalf("agentCwdEqual(%q, %q) = %v, want %v", test.left, test.right, got, test.want)
+			}
+		})
+	}
 }
 
 func testHeartbeat(t *testing.T, testStore *Store, userID, sessionID string, at int64) AgentSession {
@@ -1341,6 +1373,140 @@ func TestSetAgentTaskSkipsUserNamedEntries(t *testing.T) {
 	}
 	if after.Description != "Chosen by the user" {
 		t.Fatalf("the user's name must survive: %q", after.Description)
+	}
+}
+
+func TestSetAgentTaskCwdRejectsSoleDifferentSessionWithoutMutation(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-cwd-mismatch@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	beforeSession := startTestAgentSessionAtCwd(t, testStore, user.ID, sessionID, agentBaseMs, "/projects/alpha")
+	beforeEntry, err := testStore.GetTimeEntry(ctx, user.ID, *beforeSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+
+	_, err = testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "/projects/beta"}, "B-123", "Other project")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "/projects/beta") || !strings.Contains(err.Error(), sessionID) {
+		t.Fatalf("error must identify the requested cwd and active candidate: %v", err)
+	}
+
+	afterSession, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	afterEntry, err := testStore.GetTimeEntry(ctx, user.ID, *beforeSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry after rejection: %v", err)
+	}
+	if !reflect.DeepEqual(afterSession, beforeSession) || !reflect.DeepEqual(afterEntry, beforeEntry) {
+		t.Fatalf("a rejected selector must not mutate session or entry:\nsession before=%+v\nsession after=%+v\nentry before=%+v\nentry after=%+v",
+			beforeSession, afterSession, beforeEntry, afterEntry)
+	}
+}
+
+func TestSetAgentTaskCwdMatchesNormalizedSoleSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-cwd-normalized@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	startTestAgentSessionAtCwd(t, testStore, user.ID, sessionID, agentBaseMs, `C:\Users\Dev\WorkTime\.`)
+	result, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "c:/users/dev/worktime"}, "MT-1", "Title")
+	if err != nil {
+		t.Fatalf("set task by normalized cwd: %v", err)
+	}
+	if result.Session.ID != sessionID || result.Session.TaskKey != "MT-1" {
+		t.Fatalf("unexpected selected session: %+v", result.Session)
+	}
+}
+
+func TestSetAgentTaskCwdFiltersAllActiveSessions(t *testing.T) {
+	t.Run("unique match", func(t *testing.T) {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-task-cwd-unique@test.local")
+		ctx := context.Background()
+		first := uuid.NewString()
+		second := uuid.NewString()
+		startTestAgentSessionAtCwd(t, testStore, user.ID, first, agentBaseMs, "/projects/alpha/./")
+		startTestAgentSessionAtCwd(t, testStore, user.ID, second, agentBaseMs+1000, "/projects/beta")
+
+		result, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "/PROJECTS/alpha"}, "MT-1", "")
+		if err != nil {
+			t.Fatalf("set task by unique cwd: %v", err)
+		}
+		if result.Session.ID != first {
+			t.Fatalf("cwd selected %s, want %s", result.Session.ID, first)
+		}
+	})
+
+	t.Run("no match lists all candidates", func(t *testing.T) {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-task-cwd-zero@test.local")
+		ctx := context.Background()
+		first := uuid.NewString()
+		second := uuid.NewString()
+		startTestAgentSessionAtCwd(t, testStore, user.ID, first, agentBaseMs, "/projects/alpha")
+		startTestAgentSessionAtCwd(t, testStore, user.ID, second, agentBaseMs+1000, "/projects/beta")
+
+		_, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "/projects/gamma"}, "MT-1", "")
+		if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
+			t.Fatalf("zero-match error must list all candidates, got %v", err)
+		}
+		for _, sessionID := range []string{first, second} {
+			session, getErr := testStore.GetAgentSession(ctx, user.ID, sessionID)
+			if getErr != nil || session.TaskKey != "" {
+				t.Fatalf("zero-match call mutated %s: session=%+v err=%v", sessionID, session, getErr)
+			}
+		}
+	})
+
+	t.Run("multiple matches list only matches", func(t *testing.T) {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-task-cwd-multiple@test.local")
+		ctx := context.Background()
+		first := uuid.NewString()
+		second := uuid.NewString()
+		unrelated := uuid.NewString()
+		startTestAgentSessionAtCwd(t, testStore, user.ID, first, agentBaseMs, "/projects/alpha")
+		startTestAgentSessionAtCwd(t, testStore, user.ID, second, agentBaseMs+1000, "/PROJECTS/alpha/.")
+		startTestAgentSessionAtCwd(t, testStore, user.ID, unrelated, agentBaseMs+2000, "/projects/beta")
+
+		_, err := testStore.SetAgentTask(ctx, user.ID, AgentTaskSelector{Cwd: "/projects/alpha"}, "MT-1", "")
+		if !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
+			t.Fatalf("multiple-match error must list matching candidates, got %v", err)
+		}
+		if strings.Contains(err.Error(), unrelated) {
+			t.Fatalf("multiple-match error must omit unrelated candidates: %v", err)
+		}
+		for _, sessionID := range []string{first, second, unrelated} {
+			session, getErr := testStore.GetAgentSession(ctx, user.ID, sessionID)
+			if getErr != nil || session.TaskKey != "" {
+				t.Fatalf("ambiguous call mutated %s: session=%+v err=%v", sessionID, session, getErr)
+			}
+		}
+	})
+}
+
+func TestSetAgentTaskExplicitSessionWinsOverCwd(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-explicit@test.local")
+	ctx := context.Background()
+	sessionID := uuid.NewString()
+	startTestAgentSessionAtCwd(t, testStore, user.ID, sessionID, agentBaseMs, "/projects/alpha")
+
+	result, err := testStore.SetAgentTask(ctx, user.ID,
+		AgentTaskSelector{SessionID: sessionID, Cwd: "/projects/beta"}, "MT-1", "")
+	if err != nil {
+		t.Fatalf("set task by explicit session: %v", err)
+	}
+	if result.Session.ID != sessionID {
+		t.Fatalf("selected %s, want explicit %s", result.Session.ID, sessionID)
 	}
 }
 

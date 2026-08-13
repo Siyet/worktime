@@ -78,10 +78,14 @@ set_agent_task(task_key: "MT-12345", task_title: "Slow AMaaS quote creation",
   session cut by the local midnight would otherwise leave half its work under
   the technical name.
 - Entries the user renamed by hand are left alone.
-- The session is picked by explicit `session_id`, else the only active session,
-  else the only active session with a matching `cwd`. Anything ambiguous is an
-  error listing the candidates: attaching the wrong session silently is worse
-  than asking.
+- An explicit `session_id` is authoritative. Otherwise a supplied `cwd` is a
+  constraint, not a fallback hint: after lexical, case-insensitive path
+  normalization it must match exactly one active session. Zero matches and
+  multiple matches are errors that list the relevant active sessions and ask
+  for `session_id`; neither case changes a session or entry. Only when both
+  selectors are omitted may the sole active session be selected automatically.
+  Path matching understands POSIX paths and Windows drive/UNC paths without
+  consulting the server filesystem, which may belong to a different OS.
 - Calling it again with the same key changes nothing; with a different key it
   renames (a task can be corrected).
 

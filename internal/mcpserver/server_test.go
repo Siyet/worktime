@@ -395,6 +395,74 @@ func TestMCPSetAgentTask(t *testing.T) {
 	}
 }
 
+func TestMCPSetAgentTaskCwdConstrainsSoleSession(t *testing.T) {
+	fixture := newMCPFixture(t)
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000}
+	sessionID := uuid.NewString()
+	beforeSession, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+		SessionID: sessionID, StartedAt: time.Now().UnixMilli() - 60_000, Cwd: "/projects/alpha",
+	}, policy)
+	if err != nil {
+		t.Fatalf("start agent session: %v", err)
+	}
+	beforeEntry, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, *beforeSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+
+	result, err := fixture.session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "set_agent_task", Arguments: map[string]any{
+			"task_key": "B-123", "task_title": "Other project", "cwd": "/projects/beta",
+		},
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	encoded, _ := json.Marshal(result)
+	if !result.IsError || !strings.Contains(string(encoded), "/projects/beta") || !strings.Contains(string(encoded), sessionID) {
+		t.Fatalf("expected a diagnostic cwd constraint error, got %s", encoded)
+	}
+
+	afterSession, err := fixture.store.GetAgentSession(t.Context(), fixture.userID, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	afterEntry, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, *beforeSession.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry after rejection: %v", err)
+	}
+	if afterSession.TaskKey != beforeSession.TaskKey || afterSession.TaskTitle != beforeSession.TaskTitle ||
+		afterEntry.Description != beforeEntry.Description ||
+		afterEntry.ServerSeq != beforeEntry.ServerSeq || afterEntry.UpdatedAt != beforeEntry.UpdatedAt {
+		t.Fatalf("rejected MCP call mutated state: session before=%+v after=%+v entry before=%+v after=%+v",
+			beforeSession, afterSession, beforeEntry, afterEntry)
+	}
+}
+
+func TestMCPSetAgentTaskSchemaDescribesSelectors(t *testing.T) {
+	fixture := newMCPFixture(t)
+	tools, err := fixture.session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "set_agent_task" {
+			continue
+		}
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal schema: %v", err)
+		}
+		schema := string(encoded)
+		if !strings.Contains(schema, "authoritative agent session id") ||
+			!strings.Contains(schema, "must match exactly one active session") {
+			t.Fatalf("selector contract is missing from schema: %s", schema)
+		}
+		return
+	}
+	t.Fatal("set_agent_task not found")
+}
+
 func TestMCPSetAgentTaskWithoutSession(t *testing.T) {
 	fixture := newMCPFixture(t)
 	result, err := fixture.session.CallTool(context.Background(), &mcp.CallToolParams{

@@ -107,7 +107,8 @@ func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
 		Name: "set_agent_task",
 		Description: "Attach the running agent session to a tracker task and rename every time entry it produced. " +
 			"Call this as soon as the task number is known (look the title up in the tracker yourself): until then the " +
-			"work is tracked under a technical session tag like 'Claude Code #ab12cd34'.",
+			"work is tracked under a technical session tag like 'Claude Code #ab12cd34'. A supplied cwd must " +
+			"match exactly one active session; it is never ignored as a fallback hint.",
 	}, deps.setAgentTask)
 
 	return server
@@ -502,8 +503,8 @@ func sameProjectID(left, right *string) bool {
 type setAgentTaskIn struct {
 	TaskKey   string `json:"task_key" jsonschema:"tracker task key, e.g. MT-12345"`
 	TaskTitle string `json:"task_title,omitempty" jsonschema:"short task title, optional"`
-	SessionID string `json:"session_id,omitempty" jsonschema:"agent session id; omit when a single session is running"`
-	Cwd       string `json:"cwd,omitempty" jsonschema:"working directory, picks the session when several are running"`
+	SessionID string `json:"session_id,omitempty" jsonschema:"authoritative agent session id; when set, cwd is ignored"`
+	Cwd       string `json:"cwd,omitempty" jsonschema:"working-directory constraint; without session_id it must match exactly one active session after path normalization"`
 }
 
 type setAgentTaskOut struct {

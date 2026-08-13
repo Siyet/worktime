@@ -51,9 +51,11 @@ func TestAgentCwdEqual(t *testing.T) {
 		{name: "posix literal backslash", left: `/srv/a\b`, right: "/srv/a/b", want: false},
 		{name: "windows drive", left: `C:\Users\Dev\Project\.`, right: "c:/users/dev/project", want: true},
 		{name: "windows drive clamps parent at root", left: `C:\..\x`, right: "c:/x", want: true},
-		{name: "windows UNC", left: `\\server\share\foo\..\bar`, right: "//SERVER/share/bar", want: true},
-		{name: "windows UNC clamps parent at share", left: `\\server\share\..\x`, right: "//server/share/x", want: true},
+		{name: "windows UNC", left: `\\server\share\foo\..\bar`, right: `\\SERVER\share/bar`, want: true},
+		{name: "windows UNC clamps parent at share", left: `\\server\share\..\x`, right: `\\server/share/x`, want: true},
 		{name: "UNC and POSIX flavors differ", left: `\\server\share`, right: "/server/share", want: false},
+		{name: "UNC and double-slash POSIX flavors differ", left: `\\server\share`, right: "//server/share", want: false},
+		{name: "UNC and mixed-prefix POSIX flavors differ", left: `\\server\share`, right: `/\server/share`, want: false},
 		{name: "unknown cwd is not dot", left: "", right: ".", want: false},
 	}
 	for _, test := range tests {

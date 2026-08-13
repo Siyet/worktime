@@ -1053,7 +1053,10 @@ func normalizeAgentCwd(value string) (agentCwdFlavor, string, bool) {
 	if len(value) >= 3 && isASCIIAlpha(value[0]) && value[1] == ':' && isWindowsSeparator(value[2]) {
 		return agentCwdWindowsDrive, value[:2] + "/" + cleanWindowsPath(value[3:]), true
 	}
-	if strings.HasPrefix(value, `\\`) || strings.HasPrefix(value, "//") {
+	// A leading // is a valid POSIX spelling with implementation-defined meaning,
+	// so only two backslashes prove that the remote path uses UNC syntax. Once the
+	// flavor is known, both Windows separators are accepted inside the path.
+	if strings.HasPrefix(value, `\\`) {
 		parts := splitWindowsPath(strings.TrimLeft(value, `/\`))
 		if len(parts) >= 2 && parts[0] != ".." && parts[1] != ".." {
 			root := "//" + parts[0] + "/" + parts[1]

@@ -22,6 +22,17 @@ Three independent layers; each one is a fallback for the previous:
    flushes the queue on the next event. A tracking failure never blocks the
    agent: the script always exits 0 and curl has a hard 3s timeout.
 
+**The entry waits for activity.** A start says a process exists, which is not
+the same as work: the agent binary is launched far more often than it is worked
+in, and on the first machine to measure it 222 of 249 sessions in a week
+reported no activity at all. So the entry is opened by the first heartbeat, and
+opened back at the session's start, where every rule below then applies to it as
+if the start had opened it - the gap between the start and that first signal
+becomes a pause or a midnight cut, never billed time. Waiting decides whether
+the row exists and nothing else. A session that never reports activity keeps its
+row in `agent_sessions`, so the evidence of the launch survives, and produces no
+time entry.
+
 A session owns exactly one time entry, so the PWA shows agent work as a live
 timer. Signals closer together than the idle threshold (`WORKTIME_AGENT_IDLE`,
 default `10m`) count as continuous work; a larger gap is added to the entry's
@@ -204,8 +215,9 @@ POST /api/agent/sessions/{id}/start
   { "started_at": 1730000000000, "source": "claude-code",
     "cwd": "...", "git_branch": "...", "model": "...", "project_id": "...",
     "tz_offset_min": 180 }
-  -> upsert by id; a replay (--continue / --resume) refreshes metadata and
-     counts as activity, it never duplicates sessions or entries
+  -> upsert by id; opens no time entry on its own - the first heartbeat does,
+     back at this moment. A replay (--continue / --resume) refreshes metadata
+     and counts as activity, it never duplicates sessions or entries
 
 POST /api/agent/sessions/{id}/heartbeat
   { "at": 1730000600000, "activity": "tool_start|prompt|turn_end|compact",

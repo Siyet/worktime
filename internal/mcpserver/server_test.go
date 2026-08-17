@@ -207,7 +207,9 @@ func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start agent session: %v", err)
 	}
-	if _, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+	// The entry is opened by activity, so the session that owns it is the one the
+	// heartbeat answers with.
+	if agentSession, err = fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
 		store.AgentSignal{At: now - 30*60_000}, policy); err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
@@ -351,11 +353,16 @@ func TestMCPSetAgentTask(t *testing.T) {
 	startedAt := time.Now().UnixMilli() - 60_000
 
 	sessionID := uuid.NewString()
-	agentSession, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+	if _, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
 		SessionID: sessionID, StartedAt: startedAt, Cwd: "/home/dev/worktime",
-	}, policy)
-	if err != nil {
+	}, policy); err != nil {
 		t.Fatalf("start agent session: %v", err)
+	}
+	// Activity opens the entry, so the running row exists only after a signal.
+	agentSession, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+		store.AgentSignal{At: startedAt}, policy)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
 	}
 
 	// Until the task is known the row carries the session tag, and the agent can
@@ -399,11 +406,16 @@ func TestMCPSetAgentTaskCwdConstrainsSoleSession(t *testing.T) {
 	fixture := newMCPFixture(t)
 	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000}
 	sessionID := uuid.NewString()
-	beforeSession, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
-		SessionID: sessionID, StartedAt: time.Now().UnixMilli() - 60_000, Cwd: "/projects/alpha",
-	}, policy)
-	if err != nil {
+	startedAt := time.Now().UnixMilli() - 60_000
+	if _, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+		SessionID: sessionID, StartedAt: startedAt, Cwd: "/projects/alpha",
+	}, policy); err != nil {
 		t.Fatalf("start agent session: %v", err)
+	}
+	beforeSession, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+		store.AgentSignal{At: startedAt}, policy)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
 	}
 	beforeEntry, err := fixture.store.GetTimeEntry(t.Context(), fixture.userID, *beforeSession.TimeEntryID)
 	if err != nil {

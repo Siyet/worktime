@@ -356,7 +356,7 @@ func TestSyncCannotClaimAgentSession(t *testing.T) {
 	user := testUser(t, testStore, "claim@test.local")
 	ctx := context.Background()
 
-	agentSession := startTestAgentSession(t, testStore, user.ID, uuid.NewString(), agentBaseMs)
+	agentSession := startWorkingTestAgentSession(t, testStore, user.ID, uuid.NewString(), agentBaseMs)
 
 	// A client creating a row cannot hand it a session: ids are generated on the
 	// client, so a pushed value would let it attach the row to a session it does
@@ -427,7 +427,7 @@ func TestSyncPausedMsIsServerOwned(t *testing.T) {
 	// The agent's own row keeps its pause across an ordinary edit, and the value
 	// reaches clients through the normal pull.
 	sessionID := uuid.NewString()
-	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 	gap := testIdleMs + 60_000
 	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+gap)
 

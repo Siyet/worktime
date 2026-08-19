@@ -68,11 +68,16 @@ func TestAgentSessionEndpointsFlow(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("start: expected 200, got %d", response.StatusCode)
 	}
-	if session.Status != "active" || session.TimeEntryID == nil {
+	// The entry is opened by the first activity signal, not by the start: a
+	// launch that never works must not leave a row.
+	if session.Status != "active" || session.TimeEntryID != nil {
 		t.Fatalf("unexpected session after start: %+v", session)
 	}
 
 	response, session = postAgentJSON(t, base+"/heartbeat", map[string]any{"at": startedAt + 60_000})
+	if session.TimeEntryID == nil {
+		t.Fatalf("the first heartbeat must open the entry: %+v", session)
+	}
 	if response.StatusCode != http.StatusOK || session.LastHeartbeatAt != startedAt+60_000 {
 		t.Fatalf("heartbeat: status %d, session %+v", response.StatusCode, session)
 	}
@@ -139,8 +144,12 @@ func TestAgentStatusLineReadsRunningTimerWithoutMutatingIt(t *testing.T) {
 	response, started := postAgentJSON(t, base+"/start", map[string]any{
 		"started_at": startedAt, "source": "claude-code", "cwd": "/home/dev/worktime",
 	})
-	if response.StatusCode != http.StatusOK || started.TimeEntryID == nil {
+	if response.StatusCode != http.StatusOK || started.TimeEntryID != nil {
 		t.Fatalf("start: status %d, session %+v", response.StatusCode, started)
+	}
+	// The status line reads a running entry, which activity has to open first.
+	if _, started = postAgentJSON(t, base+"/heartbeat", map[string]any{"at": startedAt}); started.TimeEntryID == nil {
+		t.Fatalf("heartbeat did not open the entry: %+v", started)
 	}
 	devUser, err := dataStore.EnsureDevUser(t.Context())
 	if err != nil {

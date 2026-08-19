@@ -106,7 +106,7 @@ func TestExportKeepsAgentColumns(t *testing.T) {
 	// both its pause and the session it belongs to, or the durations inside it
 	// would not match the instance it came from.
 	sessionID := uuid.NewString()
-	session := startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
 	gap := testIdleMs + 60_000
 	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+gap)
 

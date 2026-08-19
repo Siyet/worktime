@@ -142,9 +142,11 @@ type AgentSignal struct {
 	TZOffsetMin *int
 }
 
-// StartAgentSession creates the session and its running time entry, or, when the
-// same session id is replayed (--continue / --resume), refreshes metadata and
-// treats the call as an activity signal. Replaying never duplicates entries.
+// StartAgentSession creates the session, or, when the same session id is
+// replayed (--continue / --resume), refreshes metadata and treats the call as an
+// activity signal. Replaying never duplicates entries. The time entry is not
+// opened here: it waits for the first activity signal and then covers the
+// session from this moment, so a launch that never works leaves no row.
 func (s *Store) StartAgentSession(ctx context.Context, userID string, params AgentStart, policy AgentPolicy) (AgentSession, error) {
 	if err := uuid.Validate(params.SessionID); err != nil {
 		return AgentSession{}, fmt.Errorf("%w: session id %q is not a UUID", ErrInvalidInput, params.SessionID)
@@ -184,18 +186,20 @@ func (s *Store) StartAgentSession(ctx context.Context, userID string, params Age
 			Cwd: params.Cwd, GitBranch: params.GitBranch, Model: params.Model,
 			TZOffsetMin: validTZOffset(params.TZOffsetMin),
 		}
-		entry, err := createAgentEntry(ctx, transaction, userID, session, params.StartedAt, now)
-		if err != nil {
-			return AgentSession{}, err
-		}
+		// The entry is not opened here. A start only says a process exists, and
+		// the agent binary is launched far more often than it is worked in: on
+		// the first machine to measure it, 222 of 249 sessions in a week reported
+		// no activity at all and still left a row. The first activity signal
+		// opens the entry, back-dated to this moment, so nothing is lost by
+		// waiting for it.
 		_, err = transaction.ExecContext(ctx, `
 			INSERT INTO agent_sessions (id, user_id, project_id, source, status, started_at, last_heartbeat_at,
 			                            cwd, git_branch, model, tz_offset_min, time_entry_id, entry_server_seq,
 			                            created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
 			session.ID, userID, session.ProjectID, session.Source, session.Status,
 			session.StartedAt, session.LastHeartbeatAt, session.Cwd, session.GitBranch, session.Model,
-			session.TZOffsetMin, entry.id, entry.serverSeq, now, now)
+			session.TZOffsetMin, now, now)
 		if err != nil {
 			return AgentSession{}, err
 		}
@@ -582,10 +586,22 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	if session.EndedAt != nil && *session.EndedAt > mark {
 		mark = *session.EndedAt
 	}
+	// A session whose entry is still unopened has nothing billed yet, so the
+	// staleness guard below must not apply to it: the hook's clock falls back to
+	// whole seconds where date(1) has no %N, which puts the start and the first
+	// signal of a quick session on the same millisecond and would leave that
+	// session with no entry at all. A session that has already ended is not in
+	// that position and keeps the guard: the hook sends heartbeats asynchronously
+	// and the stop synchronously, so the only signal of a quick session can land
+	// after its stop, and letting it through would flip a finished session back to
+	// active and leave a row running until reconciliation - a row worth 0 ms when
+	// that straggler sits on the start millisecond. Real activity after a stop
+	// carries a moment past the end and revives the session further down as usual.
+	unopened := session.TimeEntryID == nil && session.Status != agentStatusClosed
 	// A stale signal (offline queue replay, an async heartbeat overtaken by the
 	// synchronous stop) only refreshes metadata: reviving a session at a moment
 	// already billed would open a second running entry out of thin air.
-	if at <= mark {
+	if at <= mark && !unopened {
 		return nil
 	}
 
@@ -595,7 +611,32 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	}
 
 	opened := false
-	if current != nil && at-mark > policy.IdleMs {
+	if current == nil && unopened {
+		// Deferred materialization. The row appears with the first activity but
+		// covers the session from its start, and every rule below then applies to
+		// it exactly as if the start had opened it: the gap between the start and
+		// this signal becomes a pause, never billed time. So waiting for activity
+		// decides whether the row exists, and nothing else.
+		//
+		// Except where that gap is one the rules below would cut rather than
+		// pause. Nothing is billed before the first signal - an unopened session
+		// has no tool run behind it, so its watermark is still the start itself -
+		// which makes the piece before the cut the start moment closed at the start
+		// moment: a zero-length row, the exact artefact opening on activity exists
+		// to stop writing. The entry opens at the signal instead, and the cut has
+		// already happened by the time the gap logic runs.
+		from := session.StartedAt
+		if idle := at - mark; idle > policy.IdleMs &&
+			(crossesLocalMidnight(mark, at, session.TZOffsetMin) || idle > policy.MaxPauseMs) {
+			from = at
+			opened = true
+		}
+		current, err = createAgentEntry(ctx, transaction, userID, *session, from, now)
+		if err != nil {
+			return err
+		}
+	}
+	if !opened && current != nil && at-mark > policy.IdleMs {
 		// A gap that started with a tool call is work up to the cap: PostToolUse
 		// only fires once the tool is done, so a long Bash or Task looks exactly
 		// like an empty chair from here.
@@ -626,6 +667,9 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		}
 	}
 	if current == nil {
+		// The session lost its entry - deleted or stopped by the user - so the
+		// replacement opens at the signal: everything before it is already on the
+		// row that was let go.
 		current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
 		if err != nil {
 			return err

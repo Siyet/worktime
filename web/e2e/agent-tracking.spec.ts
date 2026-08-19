@@ -84,6 +84,10 @@ test.describe("agent tracking", () => {
     const base = Date.now() - 2 * MINUTE;
     await signal(request, agentServer.url, first, "start", { started_at: base, cwd: "/home/dev/alpha" });
     await signal(request, agentServer.url, second, "start", { started_at: base + MINUTE, cwd: "/home/dev/beta" });
+    // The row is opened by activity, so a session that only started has nothing
+    // to show yet.
+    await signal(request, agentServer.url, first, "heartbeat", { at: base });
+    await signal(request, agentServer.url, second, "heartbeat", { at: base + MINUTE });
 
     await page.goto(agentServer.url + "/#/");
     const card = runningCard(page);
@@ -129,6 +133,7 @@ test.describe("agent tracking", () => {
     const sessionID = crypto.randomUUID();
     const base = Date.now() - 2 * MINUTE;
     await signal(request, agentServer.url, sessionID, "start", { started_at: base });
+    await signal(request, agentServer.url, sessionID, "heartbeat", { at: base });
 
     await page.goto(agentServer.url + "/#/");
     const card = runningCard(page);

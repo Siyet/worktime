@@ -49,6 +49,7 @@ Always run before finishing: `go vet ./...`, `cd web && npm run check`, `make te
 - Migrations: append to the `migrations` slice in `internal/store/store.go`; never edit an existing entry (versioned by `PRAGMA user_version`).
 - Comments in English. TypeScript strict; no single-letter identifiers.
 - Commits: plain English, one sentence, no prefixes, no Co-Authored-By.
+- Merging deletes the source branch, on the remote and locally: `gh pr merge --squash --delete-branch`, then `git fetch --prune`. A merged branch left lying around is indistinguishable from work still in flight, and squash merges make it worse - the commits never enter main's history, so `git branch --merged` reports the branch as unmerged forever. Check content instead when in doubt: an empty `git diff main <branch>` means it landed.
 
 ## Testing gotchas (hard-won, do not rediscover)
 

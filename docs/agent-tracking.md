@@ -39,6 +39,16 @@ opens at the first signal instead. Nothing is billed before that signal, so the
 piece before such a cut would be the start moment closed at the start moment: a
 zero-length row, which is the artefact this whole rule exists to stop writing.
 
+The rows the old behaviour had already written are removed by migration 008, on
+the deploy that brings it. The delete is soft, like every other delete here, so
+the tombstones reach clients that had already pulled the rows. It takes an entry
+only where the session never reported activity, the agent flow still owns the row
+(`server_seq` is the one the session recorded) and the description is still that
+session's own tag - so anything renamed, named after a tracker task or edited in
+the PWA stays. The `agent_sessions` rows are kept either way: the launch did
+happen, and a deleted session could no longer tell "was empty" from "went
+missing".
+
 A session owns exactly one time entry, so the PWA shows agent work as a live
 timer. Signals closer together than the idle threshold (`WORKTIME_AGENT_IDLE`,
 default `10m`) count as continuous work; a larger gap is added to the entry's

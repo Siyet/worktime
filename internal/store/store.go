@@ -189,6 +189,11 @@ SET agent_session_id = (SELECT s.id FROM agent_sessions s WHERE s.time_entry_id 
 WHERE agent_session_id IS NULL
   AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.time_entry_id = time_entries.id);
 `,
+	// 008: remove the entries the old rule left behind - a start used to open the
+	// time entry, so every launch that never worked wrote a row. The predicate and
+	// the reasoning behind each of its three conditions live with the agent code,
+	// in purgeEmptyAgentEntries.
+	purgeEmptyAgentEntries,
 }
 
 type Store struct {

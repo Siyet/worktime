@@ -1324,3 +1324,56 @@ func truncateRunes(value string, limit int) string {
 	}
 	return string(runes[:limit])
 }
+
+// purgeEmptyAgentEntries is the body of migration 008 and is frozen: editing it
+// rewrites a migration that has already run on live databases. The test re-runs
+// it against rows inserted by hand, which is the only way to reach the shape the
+// old rule produced now that no code path can still create it.
+//
+// Until the entry started waiting for activity, a start opened it, so every
+// launch that never worked wrote a row nobody asked for - 222 of 249 sessions in
+// the week that was measured. The new rule only governs what happens from here;
+// this is the backlog it left.
+//
+// Three conditions have to hold together, and each one alone is too weak:
+//
+//   - the session never reported activity. Only advanceAgentSession's tail moves
+//     last_heartbeat_at past the start or writes last_kind, and it always writes
+//     both, so a session where neither moved has been silent since it began.
+//   - the agent flow still owns the entry. server_seq is the value the session
+//     recorded, which is the same test resolveAgentEntry uses to decide whether a
+//     row was edited outside the agent flow.
+//   - the description is still this session's own tag, so a row renamed by hand,
+//     or after a tracker task, survives even where the two tests above pass.
+//
+// The agent_sessions rows are deliberately left alone: the launch did happen, and
+// a deleted session could no longer tell "was empty" from "went missing" the next
+// time something breaks. A row still running is taken too - a session that never
+// worked has no entry under the new rule whether or not it was closed, and its
+// next signal opens a fresh one at that signal, because a tombstone is never
+// resurrected.
+const purgeEmptyAgentEntries = `
+CREATE TEMP TABLE agent_empty_entries AS
+SELECT e.id AS id, ROW_NUMBER() OVER (ORDER BY e.server_seq) AS position
+FROM time_entries e
+JOIN agent_sessions s ON s.id = e.agent_session_id
+WHERE e.deleted_at IS NULL
+  AND e.server_seq = s.entry_server_seq
+  AND s.last_heartbeat_at <= s.started_at
+  AND s.last_kind = ''
+  AND e.description GLOB ('* #' || lower(substr(replace(s.id, '-', ''), 1, 8)));
+
+-- Every tombstone needs a server_seq of its own: two rows sharing one cursor
+-- value would let a client acknowledge both and pull only the first.
+UPDATE sync_state SET seq = seq + (SELECT COUNT(*) FROM agent_empty_entries);
+
+UPDATE time_entries
+SET deleted_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    updated_at = MAX(updated_at + 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+    server_seq = (SELECT seq FROM sync_state)
+                 - (SELECT COUNT(*) FROM agent_empty_entries)
+                 + (SELECT position FROM agent_empty_entries WHERE agent_empty_entries.id = time_entries.id)
+WHERE id IN (SELECT id FROM agent_empty_entries);
+
+DROP TABLE agent_empty_entries;
+`

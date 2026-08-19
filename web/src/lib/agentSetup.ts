@@ -143,18 +143,19 @@ const probe = (origin: string, token: string, client: AgentClient, session: stri
 
 Probe id \`${session}\`, fixed so a re-run of this file reuses one row instead of leaving a new one behind.
 
-7.1 Deliver a start *through the script*, exactly as a hook would:
+7.1 Deliver a start and a heartbeat *through the script*, exactly as a hook would:
 
     ls ~/.worktime/queue/*.req 2>/dev/null | wc -l     # note this number
     printf '{"session_id":"${session}","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$PWD" \\
       | ${invocation} start
-    ls ~/.worktime/queue/*.req 2>/dev/null | wc -l     # must not have grown
-    tail -n 1 ~/.worktime/hook.log                     # one new line, ending in the probe id
-
-If the first count was not \`0\`, the script deliberately spools this event behind the backlog - order is what makes the replay correct - and the queue drains at most twenty per run. Flush it and repeat 7.1 until the count reads \`0\` or stops dropping - whatever stays belongs to another instance, and this hook will never touch it:
-
     printf '{"session_id":"${session}"}' \\
       | ${invocation} heartbeat
+    ls ~/.worktime/queue/*.req 2>/dev/null | wc -l     # must not have grown
+    tail -n 2 ~/.worktime/hook.log                     # two new lines, ending in the probe id
+
+The heartbeat is not decoration. A start only says a process exists, and the entry opens on the first heartbeat - without one there is no time entry for 7.2 and 7.3 to find, and a working install would read as a failure.
+
+If the first count was not \`0\`, the script deliberately spools these events behind the backlog - order is what makes the replay correct - and the queue drains at most twenty per run. The heartbeat above is itself a flush, so repeat 7.1 until the count reads \`0\` or stops dropping - whatever stays belongs to another instance, and this hook will never touch it.
 
 Only a count that grew from \`0\` means the server is unreachable. If \`$PWD\` holds a backslash or a quote, \`cd ~\` first - the payload above is assembled by hand and neither is escaped.
 

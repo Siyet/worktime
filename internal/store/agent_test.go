@@ -182,6 +182,112 @@ func TestAgentFirstSignalAtTheStartMomentStillOpensTheEntry(t *testing.T) {
 	}
 }
 
+// Back-dating the entry to the start is right up to the point where the gap to
+// the first signal is one the rules cut rather than pause. Nothing is billed
+// before that signal, so the piece before the cut would be the start moment
+// closed at the start moment - the zero-length row this whole rule exists to
+// stop writing. Both cutting gaps are covered: the local midnight and MaxPause.
+func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
+	ctx := context.Background()
+	// UTC+3: local midnight is 21:00 UTC, so 23:30 -> 00:30 local crosses it.
+	offset := 180
+	evening := time.Date(2026, 7, 1, 20, 30, 0, 0, time.UTC).UnixMilli()
+	morning := time.Date(2026, 7, 1, 21, 30, 0, 0, time.UTC).UnixMilli()
+
+	tests := []struct {
+		name      string
+		offset    *int
+		startedAt int64
+		signalAt  int64
+	}{
+		{name: "across the local midnight", offset: &offset, startedAt: evening, signalAt: morning},
+		{name: "past MaxPause", startedAt: agentBaseMs, signalAt: agentBaseMs + testPolicy.MaxPauseMs + 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-cutting-gap@test.local")
+
+			sessionID := uuid.NewString()
+			if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+				SessionID: sessionID, StartedAt: test.startedAt, TZOffsetMin: test.offset,
+			}, testPolicy); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			session := testHeartbeat(t, testStore, user.ID, sessionID, test.signalAt)
+
+			entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+			if err != nil {
+				t.Fatalf("get entry: %v", err)
+			}
+			if entry.StartedAt != test.signalAt || entry.StoppedAt != nil || entry.PausedMs != 0 {
+				t.Fatalf("the entry must open at the signal, got %+v", entry)
+			}
+			// One row and no stub before it: the cut left nothing to close.
+			pull, err := testStore.Sync(ctx, user.ID, SyncRequest{Since: 0})
+			if err != nil {
+				t.Fatalf("pull: %v", err)
+			}
+			if len(pull.Changes.TimeEntries) != 1 {
+				t.Fatalf("expected exactly one entry, got %+v", pull.Changes.TimeEntries)
+			}
+		})
+	}
+}
+
+// The hook sends heartbeats asynchronously and the stop synchronously, so the
+// only signal of a quick session can land after its own stop. A session that
+// ended without ever opening an entry stays ended: reviving it would leave a row
+// running until reconciliation - and one worth 0 ms when, as here, the straggler
+// sits on the start millisecond the whole-second clock produced.
+func TestAgentStragglerAfterStopLeavesAnUnworkedSessionClosed(t *testing.T) {
+	ctx := context.Background()
+	for _, at := range []int64{agentBaseMs, agentBaseMs + 30_000} {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-straggler@test.local")
+
+		sessionID := uuid.NewString()
+		startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+		testStop(t, testStore, user.ID, sessionID, agentBaseMs+60_000, "session_end")
+
+		session := testHeartbeat(t, testStore, user.ID, sessionID, at)
+		if session.Status != agentStatusClosed || session.TimeEntryID != nil {
+			t.Fatalf("a straggler at %d revived the session: %+v", at, session)
+		}
+		pull, err := testStore.Sync(ctx, user.ID, SyncRequest{Since: 0})
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		if len(pull.Changes.TimeEntries) != 0 {
+			t.Fatalf("a straggler at %d created an entry: %+v", at, pull.Changes.TimeEntries)
+		}
+	}
+}
+
+// The other half of the same rule: a signal that genuinely arrives after the
+// stop, at a moment past the end, is new work and revives the session as always.
+func TestAgentActivityAfterStopStillRevivesAnUnworkedSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-revive@test.local")
+
+	sessionID := uuid.NewString()
+	startTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+60_000, "session_end")
+
+	resumed := agentBaseMs + 120_000
+	session := testHeartbeat(t, testStore, user.ID, sessionID, resumed)
+	if session.Status != agentStatusActive || session.TimeEntryID == nil {
+		t.Fatalf("real activity after the stop must revive the session: %+v", session)
+	}
+	entry, err := testStore.GetTimeEntry(context.Background(), user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	if entry.StartedAt != resumed || entry.StoppedAt != nil {
+		t.Fatalf("the entry must open at the signal, not back at the start: %+v", entry)
+	}
+}
+
 func TestAgentEntryNamedBySessionTag(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-name@test.local")

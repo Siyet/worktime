@@ -590,8 +590,14 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	// staleness guard below must not apply to it: the hook's clock falls back to
 	// whole seconds where date(1) has no %N, which puts the start and the first
 	// signal of a quick session on the same millisecond and would leave that
-	// session with no entry at all.
-	unopened := session.TimeEntryID == nil
+	// session with no entry at all. A session that has already ended is not in
+	// that position and keeps the guard: the hook sends heartbeats asynchronously
+	// and the stop synchronously, so the only signal of a quick session can land
+	// after its stop, and letting it through would flip a finished session back to
+	// active and leave a row running until reconciliation - a row worth 0 ms when
+	// that straggler sits on the start millisecond. Real activity after a stop
+	// carries a moment past the end and revives the session further down as usual.
+	unopened := session.TimeEntryID == nil && session.Status != agentStatusClosed
 	// A stale signal (offline queue replay, an async heartbeat overtaken by the
 	// synchronous stop) only refreshes metadata: reviving a session at a moment
 	// already billed would open a second running entry out of thin air.
@@ -609,14 +615,28 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		// Deferred materialization. The row appears with the first activity but
 		// covers the session from its start, and every rule below then applies to
 		// it exactly as if the start had opened it: the gap between the start and
-		// this signal becomes a pause or a midnight cut, never billed time. So
-		// waiting for activity decides whether the row exists, and nothing else.
-		current, err = createAgentEntry(ctx, transaction, userID, *session, session.StartedAt, now)
+		// this signal becomes a pause, never billed time. So waiting for activity
+		// decides whether the row exists, and nothing else.
+		//
+		// Except where that gap is one the rules below would cut rather than
+		// pause. Nothing is billed before the first signal - an unopened session
+		// has no tool run behind it, so its watermark is still the start itself -
+		// which makes the piece before the cut the start moment closed at the start
+		// moment: a zero-length row, the exact artefact opening on activity exists
+		// to stop writing. The entry opens at the signal instead, and the cut has
+		// already happened by the time the gap logic runs.
+		from := session.StartedAt
+		if idle := at - mark; idle > policy.IdleMs &&
+			(crossesLocalMidnight(mark, at, session.TZOffsetMin) || idle > policy.MaxPauseMs) {
+			from = at
+			opened = true
+		}
+		current, err = createAgentEntry(ctx, transaction, userID, *session, from, now)
 		if err != nil {
 			return err
 		}
 	}
-	if current != nil && at-mark > policy.IdleMs {
+	if !opened && current != nil && at-mark > policy.IdleMs {
 		// A gap that started with a tool call is work up to the cap: PostToolUse
 		// only fires once the tool is done, so a long Bash or Task looks exactly
 		// like an empty chair from here.

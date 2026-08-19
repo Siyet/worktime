@@ -28,10 +28,16 @@ in, and on the first machine to measure it 222 of 249 sessions in a week
 reported no activity at all. So the entry is opened by the first heartbeat, and
 opened back at the session's start, where every rule below then applies to it as
 if the start had opened it - the gap between the start and that first signal
-becomes a pause or a midnight cut, never billed time. Waiting decides whether
-the row exists and nothing else. A session that never reports activity keeps its
-row in `agent_sessions`, so the evidence of the launch survives, and produces no
-time entry.
+becomes a pause, never billed time. Waiting decides whether the row exists and
+nothing else. A session that never reports activity keeps its row in
+`agent_sessions`, so the evidence of the launch survives, and produces no time
+entry.
+
+Where that first gap is one the rules below would cut rather than pause - it
+crosses the local midnight, or outlasts `WORKTIME_AGENT_MAX_PAUSE` - the entry
+opens at the first signal instead. Nothing is billed before that signal, so the
+piece before such a cut would be the start moment closed at the start moment: a
+zero-length row, which is the artefact this whole rule exists to stop writing.
 
 A session owns exactly one time entry, so the PWA shows agent work as a live
 timer. Signals closer together than the idle threshold (`WORKTIME_AGENT_IDLE`,

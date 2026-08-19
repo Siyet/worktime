@@ -58,6 +58,19 @@ describe("agent setup prompts", () => {
     }
   });
 
+  // A start says a process exists; the entry opens on the first heartbeat. A
+  // probe that sends only the start finds no time_entry_id on the stop, gets
+  // renamed_entries: 0 from set_agent_task and leaves no row on the Timer page -
+  // so a correct install reads as three failures.
+  it("sends the probe a heartbeat, not only a start", () => {
+    for (const client of CLIENTS) {
+      const prompt = setupPrompt(client, options);
+      const probe = prompt.slice(prompt.indexOf("7.1"), prompt.indexOf("7.2"));
+      expect(probe, `${client}: the probe never delivers a heartbeat`).toMatch(/\|\s*.*heartbeat/);
+      expect(probe).toContain(options.probeSession);
+    }
+  });
+
   // The name the user is told to look for is the server's: the first eight hex
   // characters of the session id, which is minted per download. A constant here
   // would send them hunting for a row that does not exist.

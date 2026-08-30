@@ -143,7 +143,7 @@ func TestGHCRBlobRedirectAllowsOnlyDigestMatchedGitHubContainerDelivery(t *testi
 						if got := request.Header.Get("Authorization"); got != "Bearer registry-token" {
 							t.Fatalf("registry request authorization = %q", got)
 						}
-						return redirectResponse(request, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/"+digest+"?sig=secret&hmac=capability"), nil
+						return redirectResponse(request, "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/"+digest+"?sig=secret&hmac=capability"), nil
 					case "pkg-containers.githubusercontent.com":
 						if got := request.Header.Get("Authorization"); got != "" {
 							t.Fatalf("cross-host blob request leaked authorization %q", got)
@@ -182,11 +182,16 @@ func TestGHCRBlobRedirectRejectsUnsafeTargetsAndExtraHops(t *testing.T) {
 		target string
 		via    []*http.Request
 	}{
-		{name: "HTTP downgrade", target: "http://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
-		{name: "arbitrary host", target: "https://example.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
+		{name: "HTTP downgrade", target: "http://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/" + digest, via: []*http.Request{source}},
+		{name: "arbitrary host", target: "https://example.com/ghcrblobs11/blobs/" + digest, via: []*http.Request{source}},
 		{name: "wrong path", target: "https://pkg-containers.githubusercontent.com/files/" + digest, via: []*http.Request{source}},
-		{name: "wrong digest", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:" + strings.Repeat("b", 64), via: []*http.Request{source}},
-		{name: "multiple hops", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source, source}},
+		{name: "old mock family", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
+		{name: "zero shard", target: "https://pkg-containers.githubusercontent.com/ghcrblobs0/blobs/" + digest, via: []*http.Request{source}},
+		{name: "misleading prefix", target: "https://pkg-containers.githubusercontent.com/prefix/ghcrblobs11/blobs/" + digest, via: []*http.Request{source}},
+		{name: "misleading family suffix", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11evil/blobs/" + digest, via: []*http.Request{source}},
+		{name: "misleading path suffix", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/" + digest + "/extra", via: []*http.Request{source}},
+		{name: "wrong digest", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/sha256:" + strings.Repeat("b", 64), via: []*http.Request{source}},
+		{name: "multiple hops", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/" + digest, via: []*http.Request{source, source}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -208,7 +213,7 @@ func TestGHCRBlobRedirectStripsCrossHostCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := http.NewRequest(http.MethodGet, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/"+digest+"?sig=secret", nil)
+	target, err := http.NewRequest(http.MethodGet, "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/"+digest+"?sig=secret", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +228,7 @@ func TestGHCRBlobRedirectStripsCrossHostCredentials(t *testing.T) {
 }
 
 func TestTransportErrorsNeverExposeCapabilityURLs(t *testing.T) {
-	secretURL := "https://user:password@pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:" + strings.Repeat("a", 64) + "?sig=secret&hmac=capability#private"
+	secretURL := "https://user:password@pkg-containers.githubusercontent.com/ghcrblobs11/blobs/sha256:" + strings.Repeat("a", 64) + "?sig=secret&hmac=capability#private"
 	err := sanitizeTransportError(&url.Error{Op: "Get", URL: secretURL, Err: errors.New("redirect failed for " + secretURL)})
 	message := err.Error()
 	for _, forbidden := range []string{"user:password@", "password", "sig=", "secret", "hmac=", "capability", "?", "#private"} {
@@ -231,7 +236,7 @@ func TestTransportErrorsNeverExposeCapabilityURLs(t *testing.T) {
 			t.Fatalf("sanitized transport error leaked %q: %s", forbidden, message)
 		}
 	}
-	if !strings.Contains(message, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:") {
+	if !strings.Contains(message, "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/sha256:") {
 		t.Fatalf("sanitized transport error lost its safe endpoint context: %s", message)
 	}
 }

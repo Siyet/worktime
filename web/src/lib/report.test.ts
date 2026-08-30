@@ -5,15 +5,17 @@ import {
   groupKeysOf,
   listDays,
   NO_PROJECT_KEY,
+  reconcileDisabledProjectKeys,
   roundMinutes,
   splitOverlapMinutes,
   summariseReport,
   toReportEntries,
   UNTAGGED_KEY,
+  visibleReportProjects,
   type GroupBy,
   type ReportEntry,
 } from "./report";
-import type { TimeEntry, TimeOffKind } from "./types";
+import type { Project, TimeEntry, TimeOffKind } from "./types";
 
 function makeEntry(overrides: Partial<ReportEntry> = {}): ReportEntry {
   return {
@@ -25,6 +27,18 @@ function makeEntry(overrides: Partial<ReportEntry> = {}): ReportEntry {
     startedAt: Date.parse("2026-07-01T09:00"),
     minutes: 60,
     ...overrides,
+  };
+}
+
+function makeProject(id: string, archived = false): Project {
+  return {
+    id,
+    name: id,
+    color: "#2563eb",
+    archived,
+    created_at: 1,
+    updated_at: 1,
+    deleted_at: null,
   };
 }
 
@@ -58,6 +72,36 @@ describe("toReportEntries", () => {
     expect(report.map((entry) => entry.id)).toEqual(["a", "b"]);
     expect(report[0]!.tags).toEqual([]);
     expect(report[1]!.tags).toEqual(["review"]);
+  });
+});
+
+describe("visibleReportProjects", () => {
+  it("always includes active projects and only includes archived projects present in the range", () => {
+    const active = makeProject("active");
+    const archivedInRange = makeProject("archived-in-range", true);
+    const archivedOutsideRange = makeProject("archived-outside-range", true);
+
+    expect(
+      visibleReportProjects(
+        [active, archivedInRange, archivedOutsideRange],
+        [makeEntry({ projectID: archivedInRange.id })],
+      ),
+    ).toEqual([active, archivedInRange]);
+  });
+});
+
+describe("reconcileDisabledProjectKeys", () => {
+  it("drops disabled keys whose chips disappeared while preserving visible choices", () => {
+    const disabled = new Set(["active", "archived-a", NO_PROJECT_KEY]);
+    const reconciled = reconcileDisabledProjectKeys(disabled, new Set(["active", "archived-b", NO_PROJECT_KEY]));
+
+    expect(reconciled).toEqual(new Set(["active", NO_PROJECT_KEY]));
+    expect(disabled).toEqual(new Set(["active", "archived-a", NO_PROJECT_KEY]));
+  });
+
+  it("returns the same set when every disabled key still has a chip", () => {
+    const disabled = new Set(["active", NO_PROJECT_KEY]);
+    expect(reconcileDisabledProjectKeys(disabled, new Set(["active", "archived", NO_PROJECT_KEY]))).toBe(disabled);
   });
 });
 

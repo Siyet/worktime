@@ -1727,6 +1727,9 @@ func TestSyncAcceptedCurrentEntryProjectCarriesToAgentSession(t *testing.T) {
 	if session.ProjectID == nil || *session.ProjectID != firstProjectID {
 		t.Fatalf("accepted project did not reach session: %+v", session)
 	}
+	if !session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("accepted project edit did not persist the outside-edit marker: %+v", session)
+	}
 
 	stale := entry
 	stale.ProjectID = &secondProjectID
@@ -1824,6 +1827,141 @@ func TestSyncAcceptedCurrentEntryProjectCarriesToAgentSession(t *testing.T) {
 	}
 }
 
+func TestAcceptedAgentEntryEditsSurviveImmediateCloseResumeAndSecondShortStop(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*TimeEntry, string)
+		wantNamed bool
+		verify    func(*testing.T, TimeEntry, string)
+	}{
+		{
+			name: "project",
+			mutate: func(entry *TimeEntry, projectID string) {
+				entry.ProjectID = &projectID
+			},
+			verify: func(t *testing.T, entry TimeEntry, projectID string) {
+				if entry.ProjectID == nil || *entry.ProjectID != projectID {
+					t.Fatalf("project edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "tags",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.Tags = TagList{"review"}
+			},
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if !reflect.DeepEqual(entry.Tags, TagList{"review"}) {
+					t.Fatalf("tags edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "bounds",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.StartedAt = agentBaseMs - 1_000
+			},
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if entry.StartedAt != agentBaseMs-1_000 {
+					t.Fatalf("bounds edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "manual description",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.Description = "Reviewed short work"
+			},
+			wantNamed: true,
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if entry.Description != "Reviewed short work" {
+					t.Fatalf("manual description was lost: %+v", entry)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-durable-edit-"+strings.ReplaceAll(test.name, " ", "-")+"@test.local")
+			ctx := t.Context()
+			projectID := uuid.NewString()
+			if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{
+				Projects: []Project{{
+					ID: projectID, Name: "Durable", Color: "#123456", CreatedAt: 1, UpdatedAt: 1,
+				}},
+			}}); err != nil {
+				t.Fatalf("create project: %v", err)
+			}
+
+			sessionID := uuid.NewString()
+			started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+			if err != nil {
+				t.Fatalf("get running entry: %v", err)
+			}
+			test.mutate(&entry, projectID)
+			pushEntry(t, testStore, user.ID, entry)
+
+			editedSession, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+			if err != nil {
+				t.Fatalf("get session after edit: %v", err)
+			}
+			if !editedSession.EntryUserEdited || editedSession.EntryUserNamed != test.wantNamed {
+				t.Fatalf("outside-edit flags are not durable before heartbeat: %+v", editedSession)
+			}
+
+			firstStop := testStop(t, testStore, user.ID, sessionID, agentBaseMs+1_000, "session_end")
+			if !firstStop.EntryUserEdited || firstStop.EntryUserNamed != test.wantNamed {
+				t.Fatalf("close lost outside-edit flags: %+v", firstStop)
+			}
+			resumed := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+2_000)
+			if resumed.TimeEntryID == nil || *resumed.TimeEntryID != entry.ID || !resumed.EntryUserEdited {
+				t.Fatalf("resume did not adopt the edited row: %+v", resumed)
+			}
+			testStop(t, testStore, user.ID, sessionID, agentBaseMs+3_000, "session_end")
+
+			stored, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+			if err != nil {
+				t.Fatalf("second short stop discarded meaningful entry: %v", err)
+			}
+			test.verify(t, stored, projectID)
+		})
+	}
+}
+
+func TestRejectedStaleAgentEntryEditDoesNotMarkSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-stale-edit-marker@test.local")
+	ctx := t.Context()
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get running entry: %v", err)
+	}
+	entry.Tags = TagList{"stale"}
+	entry.UpdatedAt--
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{entry}},
+	}); err != nil {
+		t.Fatalf("push stale edit: %v", err)
+	}
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after stale edit: %v", err)
+	}
+	if session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("rejected stale edit marked the session: %+v", session)
+	}
+
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+1_000, "session_end")
+	if _, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale edit unexpectedly protected technical row: %v", err)
+	}
+}
+
 func TestSyncAgentProjectPropagationIsAtomicWithEntryUpsert(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-sync-project-atomic@test.local")
@@ -1878,6 +2016,9 @@ func TestSyncAgentProjectPropagationIsAtomicWithEntryUpsert(t *testing.T) {
 	}
 	if session.ProjectID != nil {
 		t.Fatalf("session project changed despite rollback: %+v", session)
+	}
+	if session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("outside-edit markers changed despite rollback: %+v", session)
 	}
 	var afterSeq int64
 	if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&afterSeq); err != nil {

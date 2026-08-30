@@ -127,9 +127,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 				return SyncResponse{}, err
 			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
-		} else if err := propagateAcceptedEntryProject(
-			ctx, transaction, userID, entry.ID, entry.ProjectID, entry.UpdatedAt,
-		); err != nil {
+		} else if err := recordAcceptedAgentEntryMutation(ctx, transaction, userID, entry); err != nil {
 			return SyncResponse{}, err
 		}
 		nextSeq++
@@ -232,29 +230,47 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	return response, nil
 }
 
-// propagateAcceptedEntryProject makes a project-only PWA edit durable for the
-// current agent session. It runs only after the LWW upsert reports a write and in
-// the same transaction, so a refused stale row cannot change future segments and
-// a failed sync cannot leave the entry and session disagreeing. The ownership
-// join is server-owned on both sides; a pushed agent_session_id is ignored, and a
-// row from another user can never select or update the session.
-func propagateAcceptedEntryProject(
+// recordAcceptedAgentEntryMutation makes an accepted outside write durable for
+// the current agent session. Stop/reconcile can close the row before another
+// heartbeat observes its changed server_seq, so the edit marker must be written
+// here rather than relying only on later adoption. The same update carries the
+// accepted project into future idle segments and records a manual description.
+// Internal lifecycle writes do not use Sync and therefore never set these flags.
+func recordAcceptedAgentEntryMutation(
 	ctx context.Context,
 	transaction *sql.Tx,
-	userID, entryID string,
-	projectID *string,
-	updatedAt int64,
+	userID string,
+	entry TimeEntry,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
+	var sessionID, source, taskKey, taskTitle string
+	err := transaction.QueryRowContext(ctx, `
+		SELECT agent_sessions.id, agent_sessions.source,
+		       agent_sessions.task_key, agent_sessions.task_title
+		FROM agent_sessions
+		JOIN time_entries
+		  ON time_entries.id = agent_sessions.time_entry_id
+		 AND time_entries.user_id = agent_sessions.user_id
+		 AND time_entries.agent_session_id = agent_sessions.id
+		WHERE agent_sessions.user_id = ? AND agent_sessions.time_entry_id = ?`,
+		userID, entry.ID).Scan(&sessionID, &source, &taskKey, &taskTitle)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	automaticDescription := agentEntryDescription(AgentSession{
+		ID: sessionID, Source: source, TaskKey: taskKey, TaskTitle: taskTitle,
+	})
+	userNamed := entry.Description != automaticDescription
+	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions
-		SET project_id = ?, updated_at = MAX(updated_at, ?)
-		WHERE user_id = ? AND time_entry_id = ?
-		  AND EXISTS (
-			SELECT 1 FROM time_entries
-			WHERE id = ? AND user_id = agent_sessions.user_id
-			  AND agent_session_id = agent_sessions.id
-		  )`,
-		projectID, updatedAt, userID, entryID, entryID)
+		SET project_id = ?, entry_user_edited = 1,
+		    entry_user_named = CASE WHEN ? THEN 1 ELSE entry_user_named END,
+		    updated_at = MAX(updated_at, ?)
+		WHERE id = ? AND user_id = ? AND time_entry_id = ?`,
+		entry.ProjectID, userNamed, entry.UpdatedAt, sessionID, userID, entry.ID)
 	return err
 }
 

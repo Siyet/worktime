@@ -472,7 +472,9 @@ test.describe("entry editing", () => {
     const retryOption = row.getByRole("option", { name: "Retry project" });
     await retryOption.click();
     await expect(retryOption).toBeVisible();
+    await expect(row.getByRole("listbox", { name: "Project" })).toHaveAttribute("aria-busy", "false");
     await expect(row.getByRole("option", { name: "No project" })).toHaveClass(/active/);
+    await expect(trigger).toBeFocused();
     expect(pageErrors).toEqual([]);
 
     const pushed = pushBarrier(page, activeID);
@@ -489,6 +491,92 @@ test.describe("entry editing", () => {
     expect(synced.project_id).toBe(activeID);
     expect(pageErrors).toEqual([]);
   });
+
+  test("a rejected keyboard project write restores the open combobox for retry", async ({ page, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Keyboard retry" }],
+      entries: [{ description: "keyboard retry row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextKeyboardProjectPut: boolean };
+      faultWindow.failNextKeyboardProjectPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextKeyboardProjectPut && this.name === "time_entries") {
+          faultWindow.failNextKeyboardProjectPut = false;
+          throw new Error("injected keyboard project write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "keyboard retry row");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.evaluate(() => {
+      (window as typeof window & { failNextKeyboardProjectPut: boolean }).failNextKeyboardProjectPut = true;
+    });
+    await page.keyboard.press("Enter");
+
+    const menu = row.getByRole("listbox", { name: "Project" });
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute("aria-busy", "false");
+    await expect(trigger).toBeFocused();
+    const activeDescendant = await trigger.getAttribute("aria-activedescendant");
+    expect(activeDescendant).not.toBeNull();
+    await expect(page.locator(`[id="${activeDescendant}"]`)).toHaveText("No project");
+    expect(pageErrors).toEqual([]);
+
+    await page.keyboard.press("ArrowDown");
+    const pushed = pushBarrier(page, activeID);
+    await page.keyboard.press("Enter");
+    await pushed;
+    const replacement = entryRow(page, "keyboard retry row").getByRole("combobox", { name: "Edit project" });
+    await expect(replacement).toHaveText("Keyboard retry");
+    await expect(replacement).toBeFocused();
+    expect(pageErrors).toEqual([]);
+  });
+
+  for (const interaction of ["pointer", "keyboard"] as const) {
+    test(`project ${interaction} merge uses the locale-independent focus fallback`, async ({ page, server }) => {
+      const projectID = crypto.randomUUID();
+      await seedServer(server.url, {
+        projects: [{ id: projectID, name: "Общий проект" }],
+        entries: [
+          { description: "одинаковая задача", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0), projectID },
+          { description: "одинаковая задача", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0) },
+        ],
+      });
+      await page.goto(server.url + "/#/settings");
+      await page.getByLabel("Language").selectOption("ru");
+      await page.goto(server.url + "/#/");
+
+      const unassigned = page.locator(".item").filter({ hasText: "Без проекта" });
+      const trigger = unassigned.getByRole("combobox", { name: "Изменить проект" });
+      const pushed = pushBarrier(page, projectID);
+      if (interaction === "pointer") {
+        await trigger.click();
+        await unassigned.getByRole("option", { name: "Общий проект" }).click();
+      } else {
+        await trigger.focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+      }
+      await pushed;
+
+      await expect(page.locator(".item").filter({ hasText: "одинаковая задача" })).toHaveCount(0);
+      const startCombobox = page.locator('form.card.row input[role="combobox"]');
+      await expect(startCombobox).toHaveAttribute("placeholder", "Над чем работаешь?");
+      await expect(startCombobox).toBeFocused();
+    });
+  }
 
   test("project active descendant remains valid when sync removes its option", async ({ page, request, server }) => {
     const currentID = crypto.randomUUID();

@@ -63,12 +63,16 @@
     if (restoreFocus) queueMicrotask(() => triggerElement?.focus());
   }
 
-  async function focusFreshTrigger(): Promise<void> {
-    await tick();
-    const replacement = [...document.querySelectorAll<HTMLButtonElement>("[data-entry-project-id]")].find(
+  function findEntryTrigger(): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll<HTMLButtonElement>("[data-entry-project-id]")].find(
       (candidate) => candidate.dataset.entryProjectId === entryID,
     );
-    const fallback = document.querySelector<HTMLInputElement>('input[placeholder="What are you working on?"]');
+  }
+
+  async function focusFreshTrigger(): Promise<void> {
+    await tick();
+    const replacement = findEntryTrigger();
+    const fallback = document.querySelector<HTMLInputElement>('form.card.row input[role="combobox"]');
     (replacement ?? fallback)?.focus();
   }
 
@@ -81,6 +85,7 @@
     }
 
     saving = true;
+    let failed = false;
     try {
       await updateEntry(entryID, { project_id: nextProjectID });
       open = false;
@@ -89,8 +94,15 @@
       // A local write failure leaves the existing row authoritative. Keep the
       // menu open and usable so the same choice can be retried safely.
       activeProjectKey = optionKey(projectID);
+      failed = true;
     } finally {
       saving = false;
+      if (failed) {
+        // Disabling the combobox during the write makes browsers blur it. Wait
+        // until it is enabled again, then restore the exact entry trigger.
+        await tick();
+        findEntryTrigger()?.focus();
+      }
     }
   }
 

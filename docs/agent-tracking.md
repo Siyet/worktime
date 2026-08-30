@@ -80,7 +80,12 @@ A project edit accepted through normal sync also updates the session's current
 project in the same transaction. That includes clearing the project. A stale LWW
 loser, an older segment, and a row owned by another user cannot change it, so the
 next segment after an idle gap inherits exactly the last accepted project of the
-current entry.
+current entry. The same accepted-write path durably marks any project, tags,
+bounds, or description edit as user-owned before the next heartbeat. This matters
+when stop or reconciliation closes the row immediately: a later resume must not
+forget the edit and discard the same sub-minute row on its second stop. A manual
+description also sets the dedicated user-named guard, while lifecycle-internal
+writes never pass through this path.
 
 Migration 009 removes the old `paused_ms` column. Historical rows store only the
 total paused duration, not individual pause boundaries, so the migration

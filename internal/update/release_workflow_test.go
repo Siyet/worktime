@@ -100,7 +100,7 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 		}
 	}
 
-	nativeEnd := strings.Index(workflow[nativeStart:], "      - name: Refuse an existing container image tag")
+	nativeEnd := strings.Index(workflow[nativeStart:], "      - name: Resolve existing container image tag")
 	if nativeEnd < 0 {
 		t.Fatal("release workflow does not have the expected post-native step")
 	}
@@ -140,16 +140,22 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 
 func TestReleaseImageBuildIsBoundedObservableAndRetrySafe(t *testing.T) {
 	workflow := releaseWorkflow(t)
-	guardStart := strings.Index(workflow, "      - name: Refuse an existing container image tag")
+	guardStart := strings.Index(workflow, "      - name: Resolve existing container image tag")
 	imageStart := strings.Index(workflow, "      - name: Build and push multi-platform image")
 	signStart := strings.Index(workflow, "      - name: Sign multi-platform image")
+	reuseStart := strings.Index(workflow, "      - name: Verify and reuse signed multi-platform image")
 	manifestStart := strings.Index(workflow, "      - name: Enforce manifest generation and create signed manifest")
-	if guardStart < 0 || imageStart <= guardStart || signStart <= imageStart || manifestStart <= signStart {
-		t.Fatalf("container guard/build/sign order is unsafe: guard=%d image=%d sign=%d manifest=%d", guardStart, imageStart, signStart, manifestStart)
+	if guardStart < 0 || imageStart <= guardStart || signStart <= imageStart || reuseStart <= signStart || manifestStart <= reuseStart {
+		t.Fatalf("container resolve/build/sign/reuse order is unsafe: resolve=%d image=%d sign=%d reuse=%d manifest=%d", guardStart, imageStart, signStart, reuseStart, manifestStart)
 	}
 	guard := workflow[guardStart:imageStart]
-	if !strings.Contains(guard, "          go run ./cmd/ghcr-tag-check\n") {
-		t.Fatal("container retry guard must use the status-aware authenticated GHCR checker")
+	for _, required := range []string{
+		"        id: container-image\n",
+		"          go run ./cmd/ghcr-tag-check\n",
+	} {
+		if !strings.Contains(guard, required) {
+			t.Fatalf("container resolver is missing %q", required)
+		}
 	}
 	for _, forbidden := range []string{"imagetools inspect", "grep -Eq", "manifest unknown", "credential"} {
 		if strings.Contains(guard, forbidden) {
@@ -158,6 +164,7 @@ func TestReleaseImageBuildIsBoundedObservableAndRetrySafe(t *testing.T) {
 	}
 	image := workflow[imageStart:signStart]
 	for _, required := range []string{
+		"        if: steps.container-image.outputs.exists == 'false'\n",
 		"        timeout-minutes: 30\n",
 		"docker buildx build --progress=plain",
 		`--platform linux/amd64,linux/arm64`,
@@ -168,9 +175,51 @@ func TestReleaseImageBuildIsBoundedObservableAndRetrySafe(t *testing.T) {
 			t.Fatalf("bounded observable image build is missing %q", required)
 		}
 	}
-	sign := workflow[signStart:manifestStart]
-	if !strings.Contains(sign, `cosign sign --yes "$IMAGE@$IMAGE_DIGEST"`) {
-		t.Fatal("image digest must be signed only after the bounded image build succeeds")
+	sign := workflow[signStart:reuseStart]
+	for _, required := range []string{
+		"        if: steps.container-image.outputs.exists == 'false'\n",
+		`cosign sign --yes "$IMAGE@$IMAGE_DIGEST"`,
+		`--certificate-github-workflow-sha "$SOURCE_SHA"`,
+	} {
+		if !strings.Contains(sign, required) {
+			t.Fatalf("new image signing contract is missing %q", required)
+		}
+	}
+	reuse := workflow[reuseStart:manifestStart]
+	for _, required := range []string{
+		"        if: steps.container-image.outputs.exists == 'true'\n",
+		"          EXPECTED_IMAGE_DIGEST: ${{ steps.container-image.outputs.digest }}\n",
+		`--certificate-identity "https://github.com/Siyet/worktime/.github/workflows/release.yml@refs/heads/main"`,
+		`--certificate-oidc-issuer "https://token.actions.githubusercontent.com"`,
+		`--certificate-github-workflow-sha "$SOURCE_SHA"`,
+		`"$IMAGE@$EXPECTED_IMAGE_DIGEST"`,
+		"          go run ./cmd/ghcr-tag-check\n",
+		`echo "IMAGE_DIGEST=$EXPECTED_IMAGE_DIGEST" >> "$GITHUB_ENV"`,
+	} {
+		if !strings.Contains(reuse, required) {
+			t.Fatalf("reusable signed image contract is missing %q", required)
+		}
+	}
+	cosignVerify := strings.Index(reuse, "          cosign verify \\\n")
+	metadataVerify := strings.Index(reuse, "          go run ./cmd/ghcr-tag-check\n")
+	digestExport := strings.Index(reuse, `echo "IMAGE_DIGEST=$EXPECTED_IMAGE_DIGEST" >> "$GITHUB_ENV"`)
+	if cosignVerify < 0 || metadataVerify <= cosignVerify || digestExport <= metadataVerify {
+		t.Fatalf("reusable digest must pass signature and registry metadata verification before export: cosign=%d metadata=%d export=%d", cosignVerify, metadataVerify, digestExport)
+	}
+}
+
+func TestReleaseDownloadsRestoreNativeExecutableModes(t *testing.T) {
+	workflow := releaseWorkflow(t)
+	downloadedMode := strings.Index(workflow, `chmod 0755 \
+            "$RUNNER_TEMP/downloaded/worktime-linux-amd64" \
+            "$RUNNER_TEMP/downloaded/worktime-linux-arm64"`)
+	downloadedRun := strings.Index(workflow, `"$RUNNER_TEMP/downloaded/worktime-linux-amd64" --version`)
+	publishedMode := strings.Index(workflow, `chmod 0755 \
+            "$RUNNER_TEMP/published-download/worktime-linux-amd64" \
+            "$RUNNER_TEMP/published-download/worktime-linux-arm64"`)
+	publishedVerify := strings.LastIndex(workflow, `gh release verify-asset`)
+	if downloadedMode < 0 || downloadedRun <= downloadedMode || publishedMode <= downloadedRun || publishedVerify <= publishedMode {
+		t.Fatalf("downloaded executable modes are not restored before use/verification: downloaded=%d run=%d published=%d verify=%d", downloadedMode, downloadedRun, publishedMode, publishedVerify)
 	}
 }
 

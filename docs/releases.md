@@ -159,10 +159,20 @@ immutability is never touched.
 
 Before pushing the multi-platform image, the workflow makes authenticated GHCR
 token and manifest requests and proceeds only for an HTTP 404 whose body contains
-the exact registry code `MANIFEST_UNKNOWN`. Existing tags, authentication errors,
-transport failures, and every other response stop the run. The image build has
-plain progress logs and a 30-minute limit, and signing is a separate step. If a
-timed-out push created the tag, a retry therefore stops for operator review.
+the exact registry code `MANIFEST_UNKNOWN`. Authentication errors, transport
+failures, malformed manifests, and every indeterminate response stop the run. The
+image build has plain progress logs and a 30-minute limit, and signing is a separate
+step.
+
+An existing version tag is resumable only after its exact manifest digest is
+authenticated and recomputed from the returned bytes. The workflow verifies the
+digest's keyless signature against this release workflow, the GitHub OIDC issuer,
+and the exact current source revision. It also authenticates the amd64 and arm64
+image manifests and configs, requires matching version and revision labels, and
+re-reads the tag after verification. A changed digest or any failed check stops the
+run. Only then does the workflow reuse that digest in the signed release manifest;
+it never pushes, signs, or deletes the existing image. A source change intentionally
+makes an older partial image non-resumable even if its version tag is the same.
 
 This lookup is not an atomic tag reservation: GHCR provides no conditional create
 or documented immutable-tag primitive. The protected `release` environment and

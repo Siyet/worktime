@@ -28,25 +28,49 @@ func run(ctx context.Context) error {
 	checker := releaseguard.GHCRChecker{
 		Origin: "https://ghcr.io",
 		Client: &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return errors.New("registry redirects are not allowed")
-			},
+			Timeout:       30 * time.Second,
+			CheckRedirect: releaseguard.CheckGHCRBlobRedirect,
 		},
 	}
-	err := checker.RequireTagAbsent(
-		ctx,
-		os.Getenv("GITHUB_ACTOR"),
-		os.Getenv("GH_TOKEN"),
-		strings.TrimPrefix(image, imagePrefix),
-		os.Getenv("VERSION"),
-	)
-	if errors.Is(err, releaseguard.ErrTagExists) {
-		return fmt.Errorf("container image %s:%s already exists; stopping before push", image, os.Getenv("VERSION"))
+	repository := strings.TrimPrefix(image, imagePrefix)
+	actor := os.Getenv("GITHUB_ACTOR")
+	token := os.Getenv("GH_TOKEN")
+	version := os.Getenv("VERSION")
+	expectedDigest := os.Getenv("EXPECTED_IMAGE_DIGEST")
+	if expectedDigest != "" {
+		if err := checker.VerifyReusableTag(ctx, actor, token, repository, version, expectedDigest, os.Getenv("SOURCE_SHA")); err != nil {
+			return fmt.Errorf("verify reusable container image %s@%s: %w", image, expectedDigest, err)
+		}
+		fmt.Printf("reusable container image %s@%s is unchanged and matches release metadata\n", image, expectedDigest)
+		return nil
 	}
+
+	resolution, err := checker.ResolveTag(ctx, actor, token, repository, version)
 	if err != nil {
-		return fmt.Errorf("cannot prove that container image %s:%s is absent: %w", image, os.Getenv("VERSION"), err)
+		return fmt.Errorf("resolve container image %s:%s: %w", image, version, err)
 	}
-	fmt.Printf("container image %s:%s is absent\n", image, os.Getenv("VERSION"))
+	if err := writeGitHubOutput(os.Getenv("GITHUB_OUTPUT"), resolution); err != nil {
+		return err
+	}
+	if resolution.Exists {
+		fmt.Printf("container image %s:%s resolves to %s and requires signature verification\n", image, version, resolution.Digest)
+	} else {
+		fmt.Printf("container image %s:%s is absent\n", image, version)
+	}
+	return nil
+}
+
+func writeGitHubOutput(filename string, resolution releaseguard.TagResolution) error {
+	if filename == "" {
+		return errors.New("GITHUB_OUTPUT is required")
+	}
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
+	}
+	defer file.Close()
+	if _, err := fmt.Fprintf(file, "exists=%t\ndigest=%s\n", resolution.Exists, resolution.Digest); err != nil {
+		return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+	}
 	return nil
 }

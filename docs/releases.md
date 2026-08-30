@@ -157,6 +157,14 @@ while the tag ref still points at that exact source revision.
 A pre-existing release, an immutable release, or a response with missing/unknown
 immutability is never touched.
 
+Before pushing the multi-platform image, the workflow uses the authenticated
+registry client to prove that the version tag is absent. An existing tag, an
+authorization failure, or any registry error that cannot be identified as a
+missing manifest stops the run; the workflow never overwrites or deletes a GHCR
+tag. The image build has plain progress logs and a 30-minute limit, and signing is
+a separate step. If a timed-out push created the tag, a retry therefore stops for
+operator review instead of silently replacing the partial result.
+
 Immutable releases and branch protection are manual repository prerequisites. The
 ordinary workflow `GITHUB_TOKEN` has no Administration read permission and therefore
 cannot prove those settings itself. Before approving the protected `release`

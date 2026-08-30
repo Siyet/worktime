@@ -32,6 +32,17 @@ export function visibleReportProjects(projects: Project[], entries: ReportEntry[
   return projects.filter((project) => !project.archived || projectIDsInRange.has(project.id));
 }
 
+// Range changes can remove archived project chips. A disabled key that outlives
+// its chip would make that project silently disabled if a later range brings it
+// back, so discard only keys the current strip can no longer represent.
+export function reconcileDisabledProjectKeys(
+  disabledProjectKeys: Set<string>,
+  visibleProjectKeys: Set<string>,
+): Set<string> {
+  const retained = [...disabledProjectKeys].filter((key) => visibleProjectKeys.has(key));
+  return retained.length === disabledProjectKeys.size ? disabledProjectKeys : new Set(retained);
+}
+
 // Finished entries only; running timers never enter reports.
 export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {
   const result: ReportEntry[] = [];

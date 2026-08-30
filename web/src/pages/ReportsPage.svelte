@@ -11,6 +11,7 @@
     listDays,
     maxChartDays,
     NO_PROJECT_KEY,
+    reconcileDisabledProjectKeys,
     roundMinutes,
     splitOverlapMinutes,
     summariseReport,
@@ -99,7 +100,13 @@
       { key: NO_PROJECT_KEY, name: t("No project"), color: "var(--border)" },
     ];
   });
-  const activeProjectKeys = $derived(new Set(chips.map((chip) => chip.key).filter((key) => !disabledProjects.has(key))));
+  const chipKeys = $derived(new Set(chips.map((chip) => chip.key)));
+  const activeProjectKeys = $derived(new Set([...chipKeys].filter((key) => !disabledProjects.has(key))));
+
+  $effect(() => {
+    const reconciled = reconcileDisabledProjectKeys(disabledProjects, chipKeys);
+    if (reconciled !== disabledProjects) disabledProjects = reconciled;
+  });
 
   function toggleProject(key: string) {
     const next = new Set(disabledProjects);

@@ -5,6 +5,7 @@ import {
   groupKeysOf,
   listDays,
   NO_PROJECT_KEY,
+  reconcileDisabledProjectKeys,
   roundMinutes,
   splitOverlapMinutes,
   summariseReport,
@@ -86,6 +87,21 @@ describe("visibleReportProjects", () => {
         [makeEntry({ projectID: archivedInRange.id })],
       ),
     ).toEqual([active, archivedInRange]);
+  });
+});
+
+describe("reconcileDisabledProjectKeys", () => {
+  it("drops disabled keys whose chips disappeared while preserving visible choices", () => {
+    const disabled = new Set(["active", "archived-a", NO_PROJECT_KEY]);
+    const reconciled = reconcileDisabledProjectKeys(disabled, new Set(["active", "archived-b", NO_PROJECT_KEY]));
+
+    expect(reconciled).toEqual(new Set(["active", NO_PROJECT_KEY]));
+    expect(disabled).toEqual(new Set(["active", "archived-a", NO_PROJECT_KEY]));
+  });
+
+  it("returns the same set when every disabled key still has a chip", () => {
+    const disabled = new Set(["active", NO_PROJECT_KEY]);
+    expect(reconcileDisabledProjectKeys(disabled, new Set(["active", "archived", NO_PROJECT_KEY]))).toBe(disabled);
   });
 });
 

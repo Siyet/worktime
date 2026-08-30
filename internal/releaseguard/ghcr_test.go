@@ -187,6 +187,7 @@ func TestGHCRBlobRedirectRejectsUnsafeTargetsAndExtraHops(t *testing.T) {
 		{name: "wrong path", target: "https://pkg-containers.githubusercontent.com/files/" + digest, via: []*http.Request{source}},
 		{name: "old mock family", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
 		{name: "zero shard", target: "https://pkg-containers.githubusercontent.com/ghcrblobs0/blobs/" + digest, via: []*http.Request{source}},
+		{name: "all-zero shard", target: "https://pkg-containers.githubusercontent.com/ghcrblobs000/blobs/" + digest, via: []*http.Request{source}},
 		{name: "misleading prefix", target: "https://pkg-containers.githubusercontent.com/prefix/ghcrblobs11/blobs/" + digest, via: []*http.Request{source}},
 		{name: "misleading family suffix", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11evil/blobs/" + digest, via: []*http.Request{source}},
 		{name: "misleading path suffix", target: "https://pkg-containers.githubusercontent.com/ghcrblobs11/blobs/" + digest + "/extra", via: []*http.Request{source}},
@@ -202,6 +203,25 @@ func TestGHCRBlobRedirectRejectsUnsafeTargetsAndExtraHops(t *testing.T) {
 			target.Header.Set("Authorization", "Bearer must-not-leak")
 			if err := CheckGHCRBlobRedirect(target, tt.via); err == nil {
 				t.Fatal("expected unsafe redirect to be rejected")
+			}
+		})
+	}
+}
+
+func TestGHCRBlobRedirectAcceptsObservedNumericShards(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	source, err := http.NewRequest(http.MethodGet, "https://ghcr.io/v2/"+testRepository+"/blobs/"+digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shard := range []string{"05", "11"} {
+		t.Run(shard, func(t *testing.T) {
+			target, requestErr := http.NewRequest(http.MethodGet, "https://pkg-containers.githubusercontent.com/ghcrblobs"+shard+"/blobs/"+digest+"?sig=secret", nil)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			if err := CheckGHCRBlobRedirect(target, []*http.Request{source}); err != nil {
+				t.Fatalf("accept observed GHCR shard %s: %v", shard, err)
 			}
 		})
 	}

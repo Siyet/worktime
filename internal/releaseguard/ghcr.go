@@ -22,7 +22,7 @@ var (
 	versionTag             = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	digestRE               = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	revisionRE             = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	ghcrBlobRedirectPathRE = regexp.MustCompile(`^/ghcrblobs[1-9][0-9]*/blobs/(sha256:[0-9a-f]{64})$`)
+	ghcrBlobRedirectPathRE = regexp.MustCompile(`^/ghcrblobs0*[1-9][0-9]*/blobs/(sha256:[0-9a-f]{64})$`)
 )
 
 type TagResolution struct {

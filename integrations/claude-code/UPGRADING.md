@@ -6,14 +6,33 @@
 Claude Code or for Codex, and then proves the result by sending a signal through
 the hook and reading it back. The rest of this file is what that prompt does.
 
-## One queue per instance, and a name for the client
+## Collision-safe private queue, and a name for the client
 
-The hook now spools into `~/.worktime/queue/<instance>` instead of one flat
-directory. A request spooled for one instance could otherwise be replayed with
-another instance's token - and the 401 that answers it counts as a permanent
-rejection, so the event was dropped as well. Requests left by the old flat layout
-are adopted by whichever instance they were addressed to on the next flush;
-nothing is lost and there is nothing to do by hand.
+The hook now binds every spool directory to the exact `WORKTIME_URL`. The
+previous `<instance>` name replaced punctuation with `_`; distinct URLs such as
+`http://host:8080` and `http://host/8080` therefore collided. A request for one
+instance could be replayed with another instance's token - and the 401 response
+then deleted that foreign event. The new v2 path uses a validated SHA-256 (or a
+lossless, bounded-component hex fallback) and stores the exact origin in a
+private `.origin` file. A mismatched binding fails closed: no request in that
+directory is sent or deleted.
+
+Requests left by both older layouts - the original flat root and the lossy
+per-instance directory - are inspected and adopted only when their request URL
+matches the exact current origin. Mixed collided directories are split over
+time without overwriting or reordering either instance's records; no manual
+migration is required. Existing events already deleted by an old wrong-origin
+401 cannot be reconstructed.
+
+The hook applies `umask 077` before its first write because queued start events
+may contain a working directory and Git branch. New queue directories are mode
+700 and queue, binding and optional log files are mode 600 on POSIX systems.
+The FIFO accepts new records only while fewer than 1000 are retained per exact
+origin; a larger backlog adopted from both legacy layouts is preserved rather
+than truncated. Accepted records replay in order; events beyond the cap, local
+write failures, transient retry and permanent HTTP rejection are visible in
+`WORKTIME_HOOK_LOG`. The hook still always exits 0 so tracking cannot block the
+agent.
 
 `WORKTIME_AGENT_SOURCE` names the client in the `start` signal (default
 `claude-code`). Codex fires the same events with the same payload, so the same

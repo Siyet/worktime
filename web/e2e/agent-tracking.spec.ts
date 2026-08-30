@@ -1,7 +1,19 @@
 import { expect, pushBarrier, test, triggerSync } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
+import { spawn } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 const MINUTE = 60_000;
+
+interface AgentSessionResult {
+  id: string;
+  status: "active" | "closed";
+  last_heartbeat_at: number;
+  ended_at: number | null;
+  end_reason: string | null;
+  time_entry_id: string | null;
+}
 
 // The agent hooks speak plain HTTP, so the whole loop can be driven from a test:
 // signals in, rows in the browser out.
@@ -11,11 +23,37 @@ async function signal(
   sessionID: string,
   kind: "start" | "heartbeat" | "stop",
   body: Record<string, unknown>,
-): Promise<void> {
+): Promise<AgentSessionResult> {
   const response = await request.post(`${serverURL}/api/agent/sessions/${sessionID}/${kind}`, { data: body });
   if (!response.ok()) {
     throw new Error(`agent ${kind} failed: ${response.status()} ${await response.text()}`);
   }
+  return response.json() as Promise<AgentSessionResult>;
+}
+
+async function runRealHook(
+  scriptPath: string,
+  event: "start" | "heartbeat" | "tool_start" | "stop",
+  payload: Record<string, unknown>,
+  environment: Record<string, string>,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("sh", [scriptPath, event], {
+      env: { ...process.env, ...environment },
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`real hook exited ${code}: ${stderr}`));
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
 }
 
 // Minimal MCP client: the server runs stateless, so one POST per call is enough.
@@ -49,6 +87,55 @@ async function pollUI(page: Page, check: () => Promise<void>): Promise<void> {
 }
 
 test.describe("agent tracking", () => {
+  test("the shipped hook speaks to the live binary with a minted Bearer token", async ({ request, agentServer }) => {
+    test.skip(process.platform === "win32", "the reference hook requires a POSIX shell");
+
+    const tokenResponse = await request.post(`${agentServer.url}/api/tokens`, {
+      data: { name: "real hook e2e" },
+    });
+    expect(tokenResponse.status()).toBe(201);
+    const token = (await tokenResponse.json()) as { plaintext: string };
+    expect(token.plaintext).toMatch(/^wt_/);
+
+    const sessionID = crypto.randomUUID();
+    const queueDir = path.join(test.info().outputDir, "real-hook-queue");
+    const scriptPath = path.join(test.info().outputDir, "wt-hook.sh");
+    const scriptResponse = await request.get(`${agentServer.url}/api/agent/hook.sh`, {
+      headers: { Authorization: `Bearer ${token.plaintext}` },
+    });
+    expect(scriptResponse.ok()).toBe(true);
+    const script = await scriptResponse.text();
+    expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    mkdirSync(test.info().outputDir, { recursive: true });
+    writeFileSync(scriptPath, script, { mode: 0o600 });
+    const hookEnvironment = {
+      WORKTIME_URL: agentServer.url,
+      WORKTIME_TOKEN: token.plaintext,
+      WORKTIME_QUEUE_DIR: queueDir,
+      WORKTIME_AGENT_SOURCE: "codex",
+    };
+    await runRealHook(scriptPath, "start", { session_id: sessionID, cwd: test.info().project.testDir }, hookEnvironment);
+    await runRealHook(scriptPath, "heartbeat", { session_id: sessionID }, hookEnvironment);
+    await callMCPTool(request, agentServer.url, "set_agent_task", {
+      session_id: sessionID,
+      task_key: "#1",
+      task_title: "Live hook protocol smoke",
+    });
+    await runRealHook(scriptPath, "stop", { session_id: sessionID, reason: "clear" }, hookEnvironment);
+
+    const entriesResponse = await request.get(`${agentServer.url}/api/entries`);
+    expect(entriesResponse.ok()).toBe(true);
+    const entries = (await entriesResponse.json()) as Array<{
+      agent_session_id: string | null;
+      description: string;
+      stopped_at: number | null;
+    }>;
+    const tracked = entries.filter((entry) => entry.agent_session_id === sessionID);
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0]).toMatchObject({ description: "#1 Live hook protocol smoke" });
+    expect(tracked[0].stopped_at).not.toBeNull();
+  });
+
   test("an untouched technical session that would display as 0m leaves no feed row", async ({
     page,
     request,
@@ -207,6 +294,71 @@ test.describe("agent tracking", () => {
       // Closed at the last heartbeat, not at the moment the job noticed: five
       // minutes of work, not six.
       await expect(row.locator(".dur")).toHaveText("5m");
+    });
+
+    // A later duplicate stop is a readback of the already-closed session. It
+    // pins the periodic job's durable outcome rather than only its UI shape.
+    const reconciled = await signal(request, agentServerStale.url, sessionID, "stop", {
+      ended_at: Date.now(),
+      reason: "late_probe",
+    });
+    expect(reconciled).toMatchObject({
+      status: "closed",
+      last_heartbeat_at: lastActivity,
+      ended_at: lastActivity,
+      end_reason: "stale_heartbeat",
+    });
+  });
+
+  test("startup reconciliation closes work that became stale while the server was down", async ({
+    request,
+    agentServerRestart,
+  }) => {
+    const sessionID = crypto.randomUUID();
+    const lastActivity = Date.now();
+    await signal(request, agentServerRestart.url, sessionID, "start", {
+      started_at: lastActivity - MINUTE,
+      source: "codex",
+    });
+    await signal(request, agentServerRestart.url, sessionID, "heartbeat", { at: lastActivity });
+    await callMCPTool(request, agentServerRestart.url, "set_agent_task", {
+      session_id: sessionID,
+      task_key: "#1",
+      task_title: "Startup reconcile probe",
+    });
+
+    // The first process has a one-hour grace and cannot close this session. It
+    // becomes stale only while no process is running. The replacement process
+    // also has a one-hour periodic interval, so a prompt close can only be its
+    // mandatory first reconciliation pass.
+    await agentServerRestart.stop();
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await agentServerRestart.restart({
+      WORKTIME_AGENT_GRACE: "1s",
+      WORKTIME_AGENT_RECONCILE: "1h",
+    });
+
+    await expect
+      .poll(async () => {
+        const response = await request.get(`${agentServerRestart.url}/api/entries`);
+        if (!response.ok()) return null;
+        const entries = (await response.json()) as Array<{
+          agent_session_id: string | null;
+          stopped_at: number | null;
+        }>;
+        return entries.find((entry) => entry.agent_session_id === sessionID)?.stopped_at ?? null;
+      })
+      .toBe(lastActivity);
+
+    const reconciled = await signal(request, agentServerRestart.url, sessionID, "stop", {
+      ended_at: Date.now(),
+      reason: "late_probe",
+    });
+    expect(reconciled).toMatchObject({
+      status: "closed",
+      last_heartbeat_at: lastActivity,
+      ended_at: lastActivity,
+      end_reason: "stale_heartbeat",
     });
   });
 });

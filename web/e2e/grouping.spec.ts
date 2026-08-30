@@ -470,7 +470,7 @@ test.describe("task grouping", () => {
         changes: { time_entries: [{
           id: runningIDs[0], project_id: null, description: "Live group", tags: [],
           started_at: base, stopped_at: base + 30_000, created_at: base,
-          updated_at: Date.now(), deleted_at: null,
+          updated_at: Date.now() + 1_000, deleted_at: null,
         }] },
       },
     });
@@ -511,13 +511,15 @@ test.describe("task grouping", () => {
         changes: { time_entries: [{
           id: conflictIDs[0], project_id: null, description: "Remote split", tags: [],
           started_at: remoteStart, stopped_at: remoteStart + HOUR, created_at: remoteStart,
-          updated_at: Date.now(), deleted_at: null,
+          updated_at: remoteStart + DAY, deleted_at: null,
         }] },
       },
     });
     expect(remote.ok()).toBe(true);
-    await triggerSync(page);
-    await expect(conflictDialog.getByRole("alert")).toContainText("changed on another device");
+    await expect(async () => {
+      await triggerSync(page);
+      await expect(conflictDialog.getByRole("alert")).toContainText("changed on another device");
+    }).toPass({ timeout: 15_000 });
     await expect(conflictDialog.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 

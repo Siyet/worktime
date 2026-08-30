@@ -3,8 +3,11 @@ package update
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,7 +20,10 @@ import (
 
 	sigstoredata "github.com/sigstore/sigstore-go/pkg/testing/data"
 	sigstoretuf "github.com/sigstore/sigstore-go/pkg/tuf"
+	"github.com/sigstore/sigstore/pkg/signature"
+	"github.com/theupdateframework/go-tuf/v2/examples/repository/repository"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
+	"github.com/theupdateframework/go-tuf/v2/metadata/trustedmetadata"
 )
 
 func TestValidSigstoreBundleAndPolicy(t *testing.T) {
@@ -213,6 +219,182 @@ func TestCachedTUFRootChainRejectsCorruptNextRoot(t *testing.T) {
 	if _, err := loadCachedTUFRootChain(cacheDirectory); err == nil || !strings.Contains(err.Error(), "verify root") {
 		t.Fatalf("corrupt cached root chain must fail closed, got %v", err)
 	}
+}
+
+func TestCachedTUFRootChainRejectsOversizedNextRoot(t *testing.T) {
+	embedded, err := metadata.Root().FromBytes(sigstoretuf.DefaultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDirectory := t.TempDir()
+	rootDirectory := filepath.Join(cacheDirectory, "root-chain")
+	if err := os.MkdirAll(rootDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nextVersion := embedded.Signed.Version + 1
+	path := filepath.Join(rootDirectory, strconv.FormatInt(nextVersion, 10)+".root.json")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), int(tufRootMaxBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = loadCachedTUFRootChain(cacheDirectory)
+	var lengthError *metadata.ErrDownloadLengthMismatch
+	if !errors.As(err, &lengthError) {
+		t.Fatalf("oversized cached root must return a typed length error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), strconv.FormatInt(tufRootMaxBytes, 10)) || !strings.Contains(err.Error(), strconv.FormatInt(nextVersion, 10)+".root.json") {
+		t.Fatalf("oversized cached root error must identify the cap and root, got %v", err)
+	}
+}
+
+func TestAuthenticExpiredTUFCacheFailsClosedWithoutNetworkEgress(t *testing.T) {
+	repositoryFixture := newAuthenticTUFRepository(t)
+	cacheDirectory := t.TempDir()
+	options := sigstoretuf.DefaultOptions().
+		WithRoot(repositoryFixture.rootBytes(t)).
+		WithCachePath(cacheDirectory).
+		WithRepositoryBaseURL(repositoryFixture.baseURL).
+		WithFetcher(repositoryFixture).
+		WithForceCache()
+	if _, err := sigstoretuf.New(options); err != nil {
+		t.Fatalf("populate authentic signed TUF cache: %v", err)
+	}
+
+	repositoryFixture.roles.Timestamp().Signed.Expires = time.Now().UTC().Add(-time.Hour)
+	repositoryFixture.signRole(t, metadata.TIMESTAMP)
+	expiredTimestamp, err := repositoryFixture.roles.Timestamp().ToBytes(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedSet, err := trustedmetadata.New(repositoryFixture.rootBytes(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = trustedSet.UpdateTimestamp(expiredTimestamp)
+	var expiredError *metadata.ErrExpiredMetadata
+	if !errors.As(err, &expiredError) {
+		t.Fatalf("signed timestamp fixture must authenticate and fail specifically on expiry, got %v", err)
+	}
+	timestampPath := filepath.Join(cacheDirectory, sigstoretuf.URLToPath(repositoryFixture.baseURL), "timestamp.json")
+	if err := os.WriteFile(timestampPath, expiredTimestamp, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	offline := &offlineTUFFetcher{}
+	offlineOptions := sigstoretuf.DefaultOptions().
+		WithRoot(repositoryFixture.rootBytes(t)).
+		WithCachePath(cacheDirectory).
+		WithRepositoryBaseURL(repositoryFixture.baseURL).
+		WithFetcher(offline).
+		WithForceCache()
+	if _, err := sigstoretuf.New(offlineOptions); err == nil {
+		t.Fatalf("authentic signed expired cache must fail closed, got %v", err)
+	}
+	if offline.calls == 0 {
+		t.Fatal("expired cache did not attempt a refresh through the injected offline fetcher")
+	}
+}
+
+type authenticTUFRepository struct {
+	baseURL string
+	keys    map[string]ed25519.PrivateKey
+	roles   *repository.Type
+}
+
+func newAuthenticTUFRepository(t *testing.T) *authenticTUFRepository {
+	t.Helper()
+	fixture := &authenticTUFRepository{
+		baseURL: "https://tuf.testing.invalid",
+		keys:    make(map[string]ed25519.PrivateKey),
+		roles:   repository.New(),
+	}
+	expires := time.Now().UTC().Add(24 * time.Hour)
+	fixture.roles.SetRoot(metadata.Root(expires))
+	fixture.roles.SetTargets(metadata.TARGETS, metadata.Targets(expires))
+	fixture.roles.SetSnapshot(metadata.Snapshot(expires))
+	fixture.roles.SetTimestamp(metadata.Timestamp(expires))
+	fixture.roles.Snapshot().Signed.Meta["targets.json"] = metadata.MetaFile(fixture.roles.Targets(metadata.TARGETS).Signed.Version)
+	fixture.roles.Timestamp().Signed.Meta["snapshot.json"] = metadata.MetaFile(fixture.roles.Snapshot().Signed.Version)
+
+	for _, role := range metadata.TOP_LEVEL_ROLE_NAMES {
+		_, privateKey, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.keys[role] = privateKey
+		publicKey, err := metadata.KeyFromPublicKey(privateKey.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.roles.Root().Signed.AddKey(publicKey, role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, role := range metadata.TOP_LEVEL_ROLE_NAMES {
+		fixture.signRole(t, role)
+	}
+	return fixture
+}
+
+func (fixture *authenticTUFRepository) signRole(t *testing.T, role string) {
+	t.Helper()
+	signer, err := signature.LoadSigner(fixture.keys[role], crypto.Hash(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch role {
+	case metadata.ROOT:
+		fixture.roles.Root().ClearSignatures()
+		_, err = fixture.roles.Root().Sign(signer)
+	case metadata.TARGETS:
+		fixture.roles.Targets(metadata.TARGETS).ClearSignatures()
+		_, err = fixture.roles.Targets(metadata.TARGETS).Sign(signer)
+	case metadata.SNAPSHOT:
+		fixture.roles.Snapshot().ClearSignatures()
+		_, err = fixture.roles.Snapshot().Sign(signer)
+	case metadata.TIMESTAMP:
+		fixture.roles.Timestamp().ClearSignatures()
+		_, err = fixture.roles.Timestamp().Sign(signer)
+	default:
+		t.Fatalf("unsupported TUF role %q", role)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (fixture *authenticTUFRepository) rootBytes(t *testing.T) []byte {
+	t.Helper()
+	data, err := fixture.roles.Root().ToBytes(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func (fixture *authenticTUFRepository) DownloadFile(target string, _ int64, _ time.Duration) ([]byte, error) {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	switch parsed.Path {
+	case "/timestamp.json":
+		return fixture.roles.Timestamp().ToBytes(false)
+	case fmt.Sprintf("/%d.snapshot.json", fixture.roles.Snapshot().Signed.Version):
+		return fixture.roles.Snapshot().ToBytes(false)
+	case fmt.Sprintf("/%d.targets.json", fixture.roles.Targets(metadata.TARGETS).Signed.Version):
+		return fixture.roles.Targets(metadata.TARGETS).ToBytes(false)
+	default:
+		return nil, &metadata.ErrDownloadHTTP{StatusCode: http.StatusNotFound, URL: target}
+	}
+}
+
+type offlineTUFFetcher struct {
+	calls int
+}
+
+func (fetcher *offlineTUFFetcher) DownloadFile(string, int64, time.Duration) ([]byte, error) {
+	fetcher.calls++
+	return nil, errors.New("network is disabled for this test")
 }
 
 func TestPersistVerifiedTUFRootsRejectsExistingMismatch(t *testing.T) {

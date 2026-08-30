@@ -30,6 +30,9 @@ const (
 	releaseWorkflowSAN  = "https://github.com/Siyet/worktime/.github/workflows/release.yml@refs/heads/main"
 	tufRepositoryHost   = "tuf-repo-cdn.sigstore.dev"
 	tufRequestTimeout   = 20 * time.Second
+	// Match go-tuf's default maximum for trusted root metadata. Cached roots
+	// are untrusted input until the complete chain has been replay-verified.
+	tufRootMaxBytes int64 = 512_000
 )
 
 type Verifier interface {
@@ -188,7 +191,7 @@ func loadCachedTUFRootChain(cacheDirectory string) ([]byte, error) {
 	}
 	rootDirectory := filepath.Join(cacheDirectory, "root-chain")
 	for version := trustedRoots.Root.Signed.Version + 1; ; version++ {
-		candidate, readErr := os.ReadFile(filepath.Join(rootDirectory, strconv.FormatInt(version, 10)+".root.json"))
+		candidate, readErr := readCachedTUFRoot(filepath.Join(rootDirectory, strconv.FormatInt(version, 10)+".root.json"))
 		if errors.Is(readErr, os.ErrNotExist) {
 			return currentRoot, nil
 		}
@@ -200,6 +203,22 @@ func loadCachedTUFRootChain(cacheDirectory string) ([]byte, error) {
 		}
 		currentRoot = candidate
 	}
+}
+
+func readCachedTUFRoot(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, tufRootMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > tufRootMaxBytes {
+		return nil, &metadata.ErrDownloadLengthMismatch{Msg: fmt.Sprintf("cached root %s exceeds maximum length %d", filepath.Base(path), tufRootMaxBytes)}
+	}
+	return data, nil
 }
 
 func updateCachedTUFRoot(trustedRoots *trustedmetadata.TrustedMetadata, candidate []byte) (err error) {
@@ -227,7 +246,7 @@ func persistVerifiedTUFRoots(cacheDirectory string, roots map[int64][]byte) erro
 	sort.Slice(versions, func(left, right int) bool { return versions[left] < versions[right] })
 	for _, version := range versions {
 		path := filepath.Join(rootDirectory, strconv.FormatInt(version, 10)+".root.json")
-		existing, err := os.ReadFile(path)
+		existing, err := readCachedTUFRoot(path)
 		if err == nil {
 			if !bytes.Equal(existing, roots[version]) {
 				return fmt.Errorf("cached root %d differs from verified root", version)

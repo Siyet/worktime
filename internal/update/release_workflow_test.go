@@ -2,8 +2,13 @@ package update
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func releaseWorkflow(t *testing.T) string {
@@ -237,28 +242,199 @@ func TestReleaseCleanupDisarmsOnlyAfterLateVerification(t *testing.T) {
 func TestReleaseWaitsOnlyForAsynchronousGitHubAttestation(t *testing.T) {
 	workflow := releaseWorkflow(t)
 	published := strings.Index(workflow, `gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false`)
-	attestationStart := strings.Index(workflow, "          release_attestation_verified=false\n")
+	attestationStart := strings.Index(workflow, "          bash .github/scripts/wait-release-attestation.sh 300 10\n")
 	immutable := strings.Index(workflow, "if(r.draft || !r.immutable")
 	assetVerification := strings.LastIndex(workflow, "gh release verify-asset")
 	if published < 0 || attestationStart <= published || immutable <= attestationStart || assetVerification <= immutable {
 		t.Fatalf("release attestation polling order is unsafe: publish=%d attestation=%d immutable=%d assets=%d", published, attestationStart, immutable, assetVerification)
 	}
-	poll := workflow[attestationStart:immutable]
-	for _, required := range []string{
-		"          for attempt in {1..30}; do\n",
-		`verification_output="$(gh release verify "$VERSION" 2>&1)"`,
-		`*"no attestations for tag"*|*"no attestations found for release"*) ;;`,
-		`if test "$attempt" -eq 30`,
-		"            sleep 10\n",
-		`test "$release_attestation_verified" = true`,
+	stepStart := strings.LastIndex(workflow[:attestationStart], "      - name: Create, verify, and publish immutable draft")
+	if stepStart < 0 || !strings.Contains(workflow[stepStart:attestationStart], "        timeout-minutes: 20\n") {
+		t.Fatal("irreversible publish step needs a last-resort timeout")
+	}
+	disarm := strings.LastIndex(workflow, "cleanup_armed=false")
+	if disarm <= assetVerification {
+		t.Fatal("release cleanup was disarmed before attestation and asset verification completed")
+	}
+}
+
+const (
+	testReleaseVersion = "v9.8.7"
+	testReleaseSHA     = "0123456789abcdef0123456789abcdef01234567"
+)
+
+func TestReleaseAttestationWaitAcceptsOnlyExactPendingMessages(t *testing.T) {
+	for _, pending := range []string{
+		"no attestations for tag " + testReleaseVersion + " (sha1:" + testReleaseSHA + ")",
+		"no attestations found for release " + testReleaseVersion + " in worktime",
 	} {
-		if !strings.Contains(poll, required) {
-			t.Fatalf("bounded release attestation polling is missing %q", required)
-		}
+		t.Run(pending, func(t *testing.T) {
+			directory := t.TempDir()
+			writeExecutable(t, filepath.Join(directory, "timeout"), `#!/bin/sh
+while test "$#" -gt 0; do
+  case "$1" in --signal=*|--kill-after=*) shift ;; *) break ;; esac
+done
+shift
+exec "$@"
+`)
+			writeExecutable(t, filepath.Join(directory, "gh"), `#!/bin/sh
+count=0
+test ! -f "$FAKE_GH_COUNT" || count="$(cat "$FAKE_GH_COUNT")"
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_GH_COUNT"
+if test "$count" -eq 1; then
+  printf '%s\n' "$FAKE_GH_PENDING"
+  exit 1
+fi
+printf 'verified\n'
+`)
+			countPath := filepath.Join(directory, "count")
+			command := releaseAttestationCommand(t, directory, "5", "1",
+				"FAKE_GH_COUNT="+countPath, "FAKE_GH_PENDING="+pending)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("exact pending response did not retry to success: %v\n%s", err, output)
+			}
+			if count := readCount(t, countPath); count != 2 {
+				t.Fatalf("gh invocation count = %d, want 2", count)
+			}
+		})
 	}
-	unknownFailure := strings.Index(poll, `printf '%s\n' "$verification_output" >&2`)
-	unknownExit := strings.Index(poll, "                exit 1\n")
-	if unknownFailure < 0 || unknownExit <= unknownFailure {
-		t.Fatal("unexpected GitHub release verification errors must fail immediately")
+}
+
+func TestReleaseAttestationWaitRejectsCompositeAndUnknownErrors(t *testing.T) {
+	pending := "no attestations for tag " + testReleaseVersion + " (sha1:" + testReleaseSHA + ")"
+	pendingRelease := "no attestations found for release " + testReleaseVersion + " in worktime"
+	for _, output := range []string{
+		"prefix " + pending,
+		pending + " suffix",
+		"HTTP 503\n" + pending,
+		"prefix " + pendingRelease,
+		pendingRelease + " suffix",
+		"HTTP 503\n" + pendingRelease,
+		"no attestations for tag v9.8.8 (sha1:" + testReleaseSHA + ")",
+		"no attestations for tag " + testReleaseVersion + " (sha1:1123456789abcdef0123456789abcdef01234567)",
+		"no attestations found for release v9.8.8 in worktime",
+		"no attestations found for release " + testReleaseVersion + " in another-repository",
+		"HTTP 401 unauthorized",
+		"HTTP 403 forbidden",
+		"HTTP 429 rate limited",
+		"HTTP 500 server error",
+		"network connection reset",
+		"no attestation for tag " + testReleaseVersion,
+	} {
+		t.Run(strings.ReplaceAll(output, "\n", "_"), func(t *testing.T) {
+			directory := t.TempDir()
+			writeExecutable(t, filepath.Join(directory, "timeout"), `#!/bin/sh
+while test "$#" -gt 0; do
+  case "$1" in --signal=*|--kill-after=*) shift ;; *) break ;; esac
+done
+shift
+exec "$@"
+`)
+			writeExecutable(t, filepath.Join(directory, "gh"), `#!/bin/sh
+printf '1' > "$FAKE_GH_COUNT"
+printf '%s\n' "$FAKE_GH_OUTPUT"
+exit 1
+`)
+			countPath := filepath.Join(directory, "count")
+			command := releaseAttestationCommand(t, directory, "3", "1",
+				"FAKE_GH_COUNT="+countPath, "FAKE_GH_OUTPUT="+output)
+			started := time.Now()
+			if command.Run() == nil {
+				t.Fatal("unknown/composite verification error was accepted")
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("unknown error was retried for %s", elapsed)
+			}
+			if count := readCount(t, countPath); count != 1 {
+				t.Fatalf("gh invocation count = %d, want 1", count)
+			}
+		})
 	}
+}
+
+func TestReleaseAttestationWaitBoundsHungGH(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the release runner uses GNU timeout on Linux")
+	}
+	directory := t.TempDir()
+	writeExecutable(t, filepath.Join(directory, "gh"), `#!/bin/sh
+trap '' TERM
+while :; do sleep 10; done
+`)
+	helper, err := filepath.Abs("../../.github/scripts/wait-release-attestation.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, "cleanup-state")
+	harness := filepath.Join(directory, "workflow-harness")
+	writeExecutable(t, harness, `#!/usr/bin/env bash
+set -euo pipefail
+cleanup_armed=true
+cleanup() {
+  status=$?
+  printf '%s' "$cleanup_armed" > "$CLEANUP_MARKER"
+  exit "$status"
+}
+trap cleanup EXIT
+bash "$ATTESTATION_HELPER" 2 1
+cleanup_armed=false
+`)
+	command := exec.Command("bash", harness)
+	command.Env = append(os.Environ(),
+		"PATH="+directory+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VERSION="+testReleaseVersion,
+		"SOURCE_SHA="+testReleaseSHA,
+		"GITHUB_REPOSITORY=Siyet/worktime",
+		"ATTESTATION_HELPER="+helper,
+		"CLEANUP_MARKER="+marker,
+	)
+	started := time.Now()
+	if command.Run() == nil {
+		t.Fatal("hung gh unexpectedly succeeded")
+	}
+	elapsed := time.Since(started)
+	if elapsed < time.Second || elapsed > 5*time.Second {
+		t.Fatalf("hung gh bounded in %s, want 1s..5s", elapsed)
+	}
+	cleanupState, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cleanupState) != "true" {
+		t.Fatalf("cleanup state after bounded failure = %q, want armed", cleanupState)
+	}
+}
+
+func releaseAttestationCommand(t *testing.T, binDirectory, deadline, retry string, extraEnvironment ...string) *exec.Cmd {
+	t.Helper()
+	command := exec.Command("bash", "../../.github/scripts/wait-release-attestation.sh", deadline, retry)
+	command.Env = append(os.Environ(),
+		"PATH="+binDirectory+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"VERSION="+testReleaseVersion,
+		"SOURCE_SHA="+testReleaseSHA,
+		"GITHUB_REPOSITORY=Siyet/worktime",
+	)
+	command.Env = append(command.Env, extraEnvironment...)
+	return command
+}
+
+func writeExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readCount(t *testing.T, path string) int {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := strconv.Atoi(string(contents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

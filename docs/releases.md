@@ -153,9 +153,12 @@ All third-party Actions are pinned by full revision. The job receives only
 uploads and downloads every asset, compares the bytes, verifies the Sigstore
 identity, and smoke-tests both Linux binaries before publishing. GitHub creates its
 own release attestation asynchronously after immutable publication, so the workflow
-waits up to five minutes only for the two explicit not-yet-available responses; any
-other verification error fails immediately. It then verifies the immutable release
-and every asset against that GitHub attestation. Cleanup stays armed until those
+uses a monotonic five-minute deadline and a per-call process timeout while accepting
+only the two exact one-line not-yet-available responses for this version/revision;
+any other output fails immediately. The GitHub CLI may collapse some upstream API
+failures into an absence response, so absence is retried but never accepted as
+success. It then verifies the immutable release and every asset against that GitHub
+attestation. Cleanup stays armed until those
 late checks finish. On failure it may delete the exact draft or public mutable
 release created by that run only when the release ID, version tag, target revision,
 and source revision match the run and the API explicitly reports

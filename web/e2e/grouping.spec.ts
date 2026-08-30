@@ -1,4 +1,4 @@
-import { expect, pushBarrier, seedServer, test } from "./fixtures";
+import { expect, pushBarrier, seedServer, test, triggerSync } from "./fixtures";
 import type { Locator, Page } from "@playwright/test";
 
 const HOUR = 3_600_000;
@@ -254,6 +254,323 @@ test.describe("task grouping", () => {
     await expect(group.locator(".group-row")).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("the separate group editor changes shared metadata atomically and preserves every boundary", async ({
+    page,
+    request,
+    server,
+  }) => {
+    const backendID = crypto.randomUUID();
+    const frontendID = crypto.randomUUID();
+    const entryIDs = [crypto.randomUUID(), crypto.randomUUID()];
+    const joinedLaterID = crypto.randomUUID();
+    const base = dayNine();
+    await seedServer(server.url, {
+      projects: [
+        { id: backendID, name: "Backend", archived: true },
+        { id: frontendID, name: "Frontend" },
+      ],
+      entries: [
+        { id: entryIDs[0], description: "Grouped Work", startedAt: base, stoppedAt: base + HOUR, projectID: backendID, tags: ["review"] },
+        { id: entryIDs[1], description: "grouped   work", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR, projectID: backendID, tags: ["review"] },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const card = await dayCard(page);
+    const summary = card.locator(".group-row");
+    const edit = card.getByRole("button", { name: /Edit group grouped work, 2 entries/i });
+    await edit.click();
+    await expect(summary).toHaveAttribute("aria-expanded", "false");
+
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Description")).toBeFocused();
+    await expect(dialog.getByLabel("Project", { exact: true })).toContainText("Backend");
+    await expect(dialog.getByText("Date", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText("Time", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText("Session identifier", { exact: true })).toHaveCount(0);
+
+    // A matching row arriving after open is visible after pull but deliberately
+    // excluded from the fixed two-member edit.
+    const joinedAt = base + 4 * HOUR;
+    const joined = await request.post(server.url + "/api/sync", {
+      data: {
+        since: Number.MAX_SAFE_INTEGER,
+        changes: {
+          time_entries: [{
+            id: joinedLaterID,
+            project_id: backendID,
+            description: "Grouped Work",
+            tags: ["review"],
+            started_at: joinedAt,
+            stopped_at: joinedAt + HOUR,
+            created_at: joinedAt,
+            updated_at: joinedAt,
+            deleted_at: null,
+          }],
+        },
+      },
+    });
+    expect(joined.ok()).toBe(true);
+    await triggerSync(page);
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByLabel("Description").fill("Unified task");
+    await dialog.getByLabel("Project", { exact: true }).click();
+    await dialog.getByRole("option", { name: "Frontend" }).click();
+    await dialog.getByRole("button", { name: "review", exact: true }).click();
+    await dialog.getByRole("button", { name: "development", exact: true }).click();
+
+    const pushed = pushBarrier(page, "Unified task");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await pushed;
+    await expect(page.getByRole("status")).toContainText("2/2 group entries synced");
+
+    const serverEntries = (await (await request.get(server.url + "/api/entries")).json()) as Array<{
+      id: string;
+      project_id: string | null;
+      description: string;
+      tags: string[];
+      started_at: number;
+      stopped_at: number;
+    }>;
+    const edited = serverEntries.filter((entry) => entryIDs.includes(entry.id));
+    expect(edited).toHaveLength(2);
+    expect(edited.map((entry) => ({
+      id: entry.id,
+      description: entry.description,
+      projectID: entry.project_id,
+      tags: entry.tags,
+      startedAt: entry.started_at,
+      stoppedAt: entry.stopped_at,
+    }))).toEqual(expect.arrayContaining([
+      { id: entryIDs[0], description: "Unified task", projectID: frontendID, tags: ["development"], startedAt: base, stoppedAt: base + HOUR },
+      { id: entryIDs[1], description: "Unified task", projectID: frontendID, tags: ["development"], startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR },
+    ]));
+    expect(serverEntries.find((entry) => entry.id === joinedLaterID)).toMatchObject({
+      description: "Grouped Work",
+      project_id: backendID,
+      tags: ["review"],
+    });
+
+    const replacementEdit = card.getByRole("button", { name: /Edit group Unified task, 2 entries/ });
+    await expect(replacementEdit).toBeFocused();
+    await replacementEdit.locator("xpath=ancestor::*[contains(@class, 'group-line')]").locator(".group-row").press("Enter");
+    await expect(card.locator(".item.member")).toHaveCount(2);
+  });
+
+  test("a no-op preserves normalised spelling variants and cancel restores focus", async ({ page, server }) => {
+    const archivedID = crypto.randomUUID();
+    const base = dayNine();
+    await seedServer(server.url, {
+      projects: [{ id: archivedID, name: "Archived current", archived: true }],
+      entries: [
+        { description: "Keep Spelling", startedAt: base, stoppedAt: base + HOUR, projectID: archivedID },
+        { description: "keep   spelling", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR, projectID: archivedID },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    const card = await dayCard(page);
+    const edit = card.getByRole("button", { name: /Edit group keep spelling, 2 entries/i });
+
+    await edit.click();
+    let dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await expect(dialog.getByLabel("Project", { exact: true })).toContainText("Archived current");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(edit).toBeFocused();
+
+    await card.locator(".group-row").click();
+    await expect(card.locator(".item.member .desc")).toHaveText(["keep spelling", "Keep Spelling"]);
+    await card.locator(".group-row").click();
+
+    await edit.click();
+    dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(edit).toBeFocused();
+
+    await edit.click();
+    await expect(dialog).toBeVisible();
+    await page.mouse.click(4, 4);
+    await expect(dialog).toHaveCount(0);
+    await expect(edit).toBeFocused();
+  });
+
+  test("a remote Stop is merged but remote grouping metadata blocks the fixed-set save", async ({ page, request, server }) => {
+    const runningIDs = [crypto.randomUUID(), crypto.randomUUID()];
+    const base = Date.now() - HOUR;
+    await seedServer(server.url, {
+      entries: runningIDs.map((id) => ({ id, description: "Live group", startedAt: base, stoppedAt: null })),
+    });
+    await page.goto(server.url + "/#/");
+    await runningCard(page).getByRole("button", { name: /Edit group Live group, 2 entries/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+
+    const stop = await request.post(server.url + "/api/sync", {
+      data: {
+        since: Number.MAX_SAFE_INTEGER,
+        changes: { time_entries: [{
+          id: runningIDs[0], project_id: null, description: "Live group", tags: [],
+          started_at: base, stopped_at: base + 30_000, created_at: base,
+          updated_at: Date.now(), deleted_at: null,
+        }] },
+      },
+    });
+    expect(stop.ok()).toBe(true);
+    await triggerSync(page);
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    await dialog.getByLabel("Description").fill("Live corrected");
+    const pushed = pushBarrier(page, "Live corrected");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await pushed;
+    const entries = (await (await request.get(server.url + "/api/entries")).json()) as Array<{ id: string; description: string; stopped_at: number | null }>;
+    expect(entries.filter((entry) => runningIDs.includes(entry.id)).map((entry) => entry.description)).toEqual([
+      "Live corrected",
+      "Live corrected",
+    ]);
+    expect(entries.find((entry) => entry.id === runningIDs[0])?.stopped_at).toBe(base + 30_000);
+
+    // Recreate a finished group and prove a grouping-metadata conflict is not
+    // silently overwritten by a stale dialog.
+    const conflictIDs = [crypto.randomUUID(), crypto.randomUUID()];
+    await seedServer(server.url, {
+      entries: conflictIDs.map((id, index) => ({
+        id,
+        description: "Conflict group",
+        startedAt: dayNine() + index * 2 * HOUR,
+        stoppedAt: dayNine() + (index * 2 + 1) * HOUR,
+      })),
+    });
+    await triggerSync(page);
+    const conflictEdit = page.getByRole("button", { name: /Edit group Conflict group, 2 entries/ });
+    await conflictEdit.click();
+    const conflictDialog = page.getByRole("dialog", { name: "Edit task group" });
+    const remoteStart = dayNine();
+    const remote = await request.post(server.url + "/api/sync", {
+      data: {
+        since: Number.MAX_SAFE_INTEGER,
+        changes: { time_entries: [{
+          id: conflictIDs[0], project_id: null, description: "Remote split", tags: [],
+          started_at: remoteStart, stopped_at: remoteStart + HOUR, created_at: remoteStart,
+          updated_at: Date.now(), deleted_at: null,
+        }] },
+      },
+    });
+    expect(remote.ok()).toBe(true);
+    await triggerSync(page);
+    await expect(conflictDialog.getByRole("alert")).toContainText("changed on another device");
+    await expect(conflictDialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  test("a real LWW refusal reports N/M conflict and Review focuses the resulting entry", async ({ page, request, server }) => {
+    const base = dayNine();
+    await seedServer(server.url, {
+      entries: [
+        { description: "LWW group", startedAt: base, stoppedAt: base + HOUR },
+        { description: "LWW group", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    await page.route("**/api/sync", async (route) => {
+      const body = JSON.parse(route.request().postData() ?? "{}") as {
+        changes?: { time_entries?: Array<Record<string, unknown>> };
+      };
+      const pushedRows = body.changes?.time_entries ?? [];
+      if (pushedRows.some((entry) => entry.description === "Local attempt")) {
+        const remoteWinner = {
+          ...pushedRows[0],
+          description: "Remote winner",
+          updated_at: Number(pushedRows[0]?.updated_at) + 1,
+        };
+        const remote = await request.post(server.url + "/api/sync", {
+          data: { since: Number.MAX_SAFE_INTEGER, changes: { time_entries: [remoteWinner] } },
+        });
+        expect(remote.ok()).toBe(true);
+      }
+      await route.continue();
+    });
+
+    await page.getByRole("button", { name: /Edit group LWW group, 2 entries/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await dialog.getByLabel("Description").fill("Local attempt");
+    const pushed = pushBarrier(page, "Local attempt");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await pushed;
+
+    const result = page.locator(".group-sync-result");
+    await expect(result.getByRole("status")).toContainText("1/2 group entries synced");
+    await expect(result.getByRole("status")).toContainText("1 changed elsewhere");
+    await result.getByRole("button", { name: "Review entries" }).click();
+    await expect(page.locator(".item .desc:focus")).toHaveCount(1);
+  });
+
+  test("offline group save survives reload and permanent rejection has an N/M recovery path", async ({
+    page,
+    context,
+    server,
+  }) => {
+    const base = dayNine();
+    const offlineIDs = [crypto.randomUUID(), crypto.randomUUID()];
+    await seedServer(server.url, {
+      entries: [
+        { id: offlineIDs[0], description: "Offline group", startedAt: base, stoppedAt: base + HOUR },
+        { id: offlineIDs[1], description: "Offline group", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    await page.getByRole("button", { name: /Edit group Offline group, 2 entries/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await context.setOffline(true);
+    await dialog.getByLabel("Description").fill("Saved offline");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("0/2 group entries synced");
+    await expect(page.getByRole("status")).toContainText("2 pending");
+    await page.route("**/api/sync", (route) => route.fulfill({ status: 500, body: "still offline for reload" }));
+    await context.setOffline(false);
+    await page.reload();
+    await expect(page.getByText("Saved offline", { exact: true }).first()).toBeVisible();
+    await page.unroute("**/api/sync");
+    const pushed = pushBarrier(page, "Saved offline");
+    await triggerSync(page);
+    await pushed;
+
+    // A permanent 400 is not presented as success: exact isolated outcomes reach
+    // both the operation result and the global recovery link.
+    let rejecting = true;
+    const rejectedID = offlineIDs[0];
+    const retriedIDs: string[] = [];
+    await page.route("**/api/sync", async (route) => {
+      const bodyText = route.request().postData() ?? "";
+      if (!bodyText.includes("Rejected group")) {
+        await route.continue();
+        return;
+      }
+      const body = JSON.parse(bodyText) as { changes?: { time_entries?: Array<{ id: string }> } };
+      const rows = body.changes?.time_entries ?? [];
+      if (rejecting && (rows.length > 1 || rows[0]?.id === rejectedID)) {
+        await route.fulfill({ status: 400, body: "refused for test" });
+        return;
+      }
+      if (!rejecting) retriedIDs.push(...rows.map((row) => row.id));
+      await route.continue();
+    });
+    await page.getByRole("button", { name: /Edit group Saved offline, 2 entries/ }).click();
+    const retryDialog = page.getByRole("dialog", { name: "Edit task group" });
+    await retryDialog.getByLabel("Description").fill("Rejected group");
+    await retryDialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("1/2 group entries synced");
+    await expect(page.getByRole("status")).toContainText("1 rejected", { timeout: 15_000 });
+    await expect(page.getByRole("link", { name: "1 changes need attention" })).toBeVisible();
+    const retry = page.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeEnabled();
+    await expect(page.getByRole("link", { name: "Sync details" })).toHaveAttribute("href", "#/settings");
+    rejecting = false;
+    await retry.click();
+    await expect(page.getByRole("status")).toContainText("2/2 group entries synced");
+    expect(retriedIDs).toEqual([rejectedID]);
+  });
+
   test("the group row fits a 360px screen", async ({ page, server }) => {
     await page.setViewportSize({ width: 360, height: 740 });
     const base = dayNine();
@@ -272,7 +589,13 @@ test.describe("task grouping", () => {
     const card = await dayCard(page);
     const group = card.locator(".group-row");
     await expect(group).toBeVisible();
+    await expect(card.locator(".edit-group")).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
+
+    await card.locator(".edit-group").click();
+    await expect(page.getByRole("dialog", { name: "Edit task group" })).toBeVisible();
+    const dialogOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(dialogOverflow).toBeLessThanOrEqual(0);
   });
 });

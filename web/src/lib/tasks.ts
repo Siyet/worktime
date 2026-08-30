@@ -25,6 +25,27 @@ export interface TaskGroup {
   lastStoppedAt: number | null;
 }
 
+export interface TaskGroupSnapshot {
+  key: string;
+  entryIDs: string[];
+  representativeDescription: string;
+  projectID: string | null;
+  tags: string[];
+}
+
+export function snapshotTaskGroup(group: TaskGroup): TaskGroupSnapshot {
+  return {
+    key: group.key,
+    entryIDs: group.entries.map((entry) => entry.id),
+    // taskKey normalises case and whitespace, so members can have different
+    // byte-for-byte descriptions. The newest spelling is only the editor draft;
+    // a no-op must not rewrite the older variants.
+    representativeDescription: group.description,
+    projectID: group.projectID,
+    tags: [...group.tags],
+  };
+}
+
 export interface TaskSuggestion {
   description: string;
   projectID: string | null;
@@ -195,4 +216,3 @@ export function taskSuggestions(entries: TimeEntry[], query: string, cutoff: num
     .slice(0, MAX_SUGGESTIONS)
     .map(([, candidate]) => candidate.suggestion);
 }
-

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import {
     appState,
     clock,
@@ -7,6 +8,8 @@
     runningEntries,
     startTimer,
     stopTimer,
+    updateEntries,
+    type GroupEntryPatch,
   } from "../lib/state/app.svelte";
   import { deleteEntryWithUndo } from "../lib/state/undo.svelte";
   import {
@@ -18,11 +21,28 @@
     formatTime,
     localDateISO,
   } from "../lib/format";
-  import { groupDayEntries, suggestionWindowStart, taskSuggestions, wallClockMs, type TaskGroup } from "../lib/tasks";
+  import {
+    groupDayEntries,
+    snapshotTaskGroup,
+    suggestionWindowStart,
+    taskSuggestions,
+    wallClockMs,
+    type TaskGroup,
+    type TaskGroupSnapshot,
+  } from "../lib/tasks";
+  import {
+    observeLocalMutation,
+    summarizeMutationMembers,
+    type MutationProgress,
+  } from "../lib/mutation-progress";
+  import type { GroupEditSaveResult } from "../lib/group-edit";
+  import type { TrackedLocalMutationReceipt } from "../lib/mutation-progress";
+  import { syncState } from "../lib/sync.svelte";
   import { t } from "../lib/i18n";
   import { maxTextLength } from "../lib/limits";
   import DescriptionInput from "../lib/components/DescriptionInput.svelte";
   import EntryEditor from "../lib/components/EntryEditor.svelte";
+  import GroupEditor from "../lib/components/GroupEditor.svelte";
   import EntryProjectMenu from "../lib/components/EntryProjectMenu.svelte";
   import EntryTagsMenu from "../lib/components/EntryTagsMenu.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
@@ -35,6 +55,20 @@
   let selectedProjectID = $state<string | null>(null);
   let selectedTags = $state<string[]>([]);
   let editingID = $state<string | null>(null);
+  let editingGroup = $state<TaskGroupSnapshot | null>(null);
+  let startForm = $state<HTMLFormElement | null>(null);
+  const entryButtonRefs = new Map<string, HTMLButtonElement>();
+  const groupEditButtonRefs = new Map<string, HTMLButtonElement>();
+
+  interface GroupMutationResult {
+    snapshot: TaskGroupSnapshot;
+    patch: GroupEntryPatch;
+    receipt: TrackedLocalMutationReceipt;
+    progress: MutationProgress;
+  }
+
+  let groupMutationResult = $state<GroupMutationResult | null>(null);
+  let stopMutationObserver: (() => void) | null = null;
   // Expansion is keyed by day as well: an agent task carries the same name every
   // day, and one shared key would unfold it in every card at once.
   let expanded = $state(new Set<string>());
@@ -124,6 +158,128 @@
     void startTimer(group.description, group.projectID, [...group.tags]);
   }
 
+  function groupFocusKey(dayISO: string, group: TaskGroup): string {
+    return `${dayISO}\u0000${group.key}`;
+  }
+
+  function registerEntryButton(node: HTMLButtonElement, entryID: string) {
+    entryButtonRefs.set(entryID, node);
+    return {
+      update(nextID: string) {
+        entryButtonRefs.delete(entryID);
+        entryID = nextID;
+        entryButtonRefs.set(entryID, node);
+      },
+      destroy() {
+        entryButtonRefs.delete(entryID);
+      },
+    };
+  }
+
+  function registerGroupEditButton(node: HTMLButtonElement, key: string) {
+    groupEditButtonRefs.set(key, node);
+    return {
+      update(nextKey: string) {
+        groupEditButtonRefs.delete(key);
+        key = nextKey;
+        groupEditButtonRefs.set(key, node);
+      },
+      destroy() {
+        groupEditButtonRefs.delete(key);
+      },
+    };
+  }
+
+  function currentGroupContaining(entryID: string): { key: string; group: TaskGroup } | null {
+    for (const group of runningGroups) {
+      if (group.entries.some((entry) => entry.id === entryID)) {
+        return { key: groupFocusKey("running", group), group };
+      }
+    }
+    for (const [day, , groups] of recentDays) {
+      for (const group of groups) {
+        if (group.entries.some((entry) => entry.id === entryID)) {
+          return { key: groupFocusKey(day, group), group };
+        }
+      }
+    }
+    return null;
+  }
+
+  async function focusEditedMembers(snapshot: TaskGroupSnapshot): Promise<void> {
+    await tick();
+    for (const entryID of snapshot.entryIDs) {
+      const current = currentGroupContaining(entryID);
+      if (current?.group.entries.length && current.group.entries.length > 1) {
+        const trigger = groupEditButtonRefs.get(current.key);
+        if (trigger) {
+          trigger.focus();
+          return;
+        }
+      }
+      const entryButton = entryButtonRefs.get(entryID);
+      if (entryButton) {
+        entryButton.focus();
+        return;
+      }
+    }
+    startForm?.querySelector<HTMLInputElement>("input")?.focus();
+  }
+
+  function watchMutation(
+    snapshot: TaskGroupSnapshot,
+    result: GroupEditSaveResult,
+    baseMembers: MutationProgress["members"] = [],
+  ): void {
+    stopMutationObserver?.();
+    const retriedIDs = new Set(result.receipt.markers.map((marker) => marker.id));
+    const retained = baseMembers.filter((member) => !retriedIDs.has(member.marker.id));
+    const initial = summarizeMutationMembers([
+      ...retained,
+      ...result.receipt.markers.map((marker) => ({ marker, status: "pending" as const })),
+    ]);
+    groupMutationResult = { snapshot, patch: result.patch, receipt: result.receipt, progress: initial };
+    stopMutationObserver = observeLocalMutation(result.receipt, (progress) => {
+      if (groupMutationResult?.receipt.trackingID !== result.receipt.trackingID) return;
+      groupMutationResult = {
+        ...groupMutationResult,
+        progress: summarizeMutationMembers([...retained, ...progress.members]),
+      };
+    });
+  }
+
+  function closeGroupEditor(result: GroupEditSaveResult | null): void {
+    const snapshot = editingGroup;
+    editingGroup = null;
+    if (snapshot && result) {
+      watchMutation(snapshot, result);
+      void focusEditedMembers(snapshot);
+    }
+  }
+
+  async function retryGroupMutation(): Promise<void> {
+    const current = groupMutationResult;
+    if (!current) return;
+    const rejectedIDs = current.progress.members
+      .filter((member) => member.status === "rejected")
+      .map((member) => member.marker.id);
+    if (rejectedIDs.length === 0 || current.progress.pending > 0) return;
+    try {
+      const receipt = await updateEntries(rejectedIDs, current.patch);
+      watchMutation(current.snapshot, { receipt, patch: current.patch }, current.progress.members);
+    } catch (error) {
+      console.error("group edit retry failed", error);
+    }
+  }
+
+  function dismissGroupMutation(): void {
+    stopMutationObserver?.();
+    stopMutationObserver = null;
+    groupMutationResult = null;
+  }
+
+  $effect(() => () => stopMutationObserver?.());
+
 </script>
 
 <!-- The dial marks a wall-clock reading, so the two numbers next to each other
@@ -151,6 +307,7 @@
       <button
         type="button"
         class="desc"
+        use:registerEntryButton={entry.id}
         onclick={() => (editingID = entry.id)}
       >
         {displayEntryDescription(entry) || t("(no description)")}
@@ -192,6 +349,10 @@
   {@const shown = isExpanded(dayISO, group)}
   {@const countLabel = t("{n} entries", { n: group.entries.length })}
   {@const displayedGroupDescription = displayEntryDescription(group.entries[0]!)}
+  {@const editLabel = t("Edit group {task}, {n} entries", {
+    task: displayedGroupDescription || t("(no description)"),
+    n: group.entries.length,
+  })}
   <!-- A running group is already this task, right now: repeating it would only
        add a second timer for the same work. -->
   {@const repeatable = group.lastStoppedAt !== null}
@@ -259,26 +420,38 @@
       </span>
       <span class="sr-only">{shown ? t("Collapse") : t("Expand")}</span>
     </button>
-    {#if repeatable}
-      <!-- "Repeat", not "Start again": Playwright matches an accessible name by
-           substring, and every spec that clicks the form's Start button would
-           then hit this one too. -->
-      {@const repeatLabel = t("Repeat {task}", { task: displayedGroupDescription })}
-      <button type="button" class="kebab icon repeat" aria-label={repeatLabel} title={repeatLabel} onclick={() => repeatGroup(group)}>
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01" /><path d="M20.5 4.5V10H15" /></svg>
+    <span class="group-actions">
+      <button
+        type="button"
+        class="kebab icon edit-group"
+        aria-label={editLabel}
+        title={editLabel}
+        use:registerGroupEditButton={groupFocusKey(dayISO, group)}
+        onclick={() => (editingGroup = snapshotTaskGroup(group))}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+        </svg>
       </button>
-    {:else}
-      <span class="menu-space" aria-hidden="true"></span>
-    {/if}
+      {#if repeatable}
+        <!-- "Repeat", not "Start again": Playwright matches an accessible name by
+             substring, and every spec that clicks the form's Start button would
+             then hit this one too. -->
+        {@const repeatLabel = t("Repeat {task}", { task: displayedGroupDescription })}
+        <button type="button" class="kebab icon repeat" aria-label={repeatLabel} title={repeatLabel} onclick={() => repeatGroup(group)}>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01" /><path d="M20.5 4.5V10H15" /></svg>
+        </button>
+      {/if}
+    </span>
   </div>
   {#if shown}
     <div class="members" id={listID}>
@@ -297,7 +470,7 @@
   </div>
 {/if}
 
-<form class="card row" onsubmit={submitStart}>
+<form class="card row" bind:this={startForm} onsubmit={submitStart}>
   <DescriptionInput
     bind:value={description}
     {suggestions}
@@ -369,6 +542,39 @@
   <EntryEditor entryID={editingID} onclose={() => (editingID = null)} />
 {/if}
 
+{#if editingGroup !== null}
+  <GroupEditor snapshot={editingGroup} onclose={closeGroupEditor} />
+{/if}
+
+{#if groupMutationResult}
+  <div class="toast group-sync-result" aria-live="polite">
+    <span role="status">
+      {t("{done}/{total} group entries synced", {
+        done: groupMutationResult.progress.accepted,
+        total: groupMutationResult.progress.total,
+      })}
+      {#if groupMutationResult.progress.pending > 0}
+        · {t("{n} pending", { n: groupMutationResult.progress.pending })}
+        {#if syncState.status === "offline"} ({t("offline")}){/if}
+      {/if}
+      {#if groupMutationResult.progress.rejected > 0}
+        · {t("{n} rejected", { n: groupMutationResult.progress.rejected })}
+      {/if}
+      {#if groupMutationResult.progress.conflict > 0}
+        · {t("{n} changed elsewhere", { n: groupMutationResult.progress.conflict })}
+      {/if}
+    </span>
+    {#if groupMutationResult.progress.rejected > 0}
+      <a href="#/settings">{t("Sync details")}</a>
+      <button type="button" disabled={groupMutationResult.progress.pending > 0} onclick={() => void retryGroupMutation()}>{t("Retry")}</button>
+    {/if}
+    {#if groupMutationResult.progress.conflict > 0}
+      <button type="button" onclick={() => void focusEditedMembers(groupMutationResult!.snapshot)}>{t("Review entries")}</button>
+    {/if}
+    <button type="button" onclick={dismissGroupMutation}>{t("Dismiss")}</button>
+  </div>
+{/if}
+
 <style>
   h3 {
     margin: 0 0 0.5rem;
@@ -421,6 +627,27 @@
      row in the card stays put whether or not the row is a group. */
   .repeat {
     flex: none;
+  }
+
+  .group-actions {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+  }
+
+  .group-sync-result {
+    bottom: calc(4.9rem + env(safe-area-inset-bottom));
+    flex-wrap: wrap;
+    z-index: 21;
+  }
+
+  .group-sync-result > span {
+    min-width: 12rem;
+    flex: 1;
+  }
+
+  .group-sync-result a {
+    color: var(--accent);
   }
 
   /* The rail ties the unfolded entries to the row they came from; without it
@@ -499,13 +726,6 @@
   .count svg {
     display: block;
     color: var(--accent);
-  }
-
-  /* Stands in for the kebab the summary row does not have, so both columns of
-     numbers keep the same right edge as every other row. */
-  .menu-space {
-    flex: none;
-    width: 2.2rem;
   }
 
   .wall {

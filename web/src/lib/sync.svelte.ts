@@ -8,10 +8,13 @@ import {
   listDirtyMarkers,
   mergeServerRows,
   readRows,
+  rejectedMetaKey,
+  rejectionKey,
   setCursor,
   setMeta,
   type DirtyMarker,
 } from "./db";
+import { classifyPushedRow, mutationProgressTracker } from "./mutation-progress";
 import type { SyncChanges, SyncedRow, SyncResponse } from "./types";
 
 export type SyncStatus = "idle" | "syncing" | "synced" | "offline" | "error" | "unauthenticated";
@@ -20,16 +23,10 @@ export type SyncStatus = "idle" | "syncing" | "synced" | "offline" | "error" | "
 // its transaction, so pushes are chunked well under the cap. A tag rename or merge in
 // Settings rewrites every affected entry and is the operation that reaches this size.
 const maxPushRows = 2000;
-const rejectedMetaKey = "rejected";
-
 // A rejected row is quarantined by id *and* version, so the next edit of that row is
 // retried rather than skipped forever. Keying by id alone made a single 400 - an
 // over-long description, a tag the server reserves - strand the row on this device
 // permanently, with the header still reading "synced".
-function rejectionKey(marker: DirtyMarker): string {
-  return `${marker.table}:${marker.id}@${marker.updated_at}`;
-}
-
 // rememberRejection keeps at most one quarantined version per row, so the set is
 // bounded by the number of rows the server has ever refused rather than by the number
 // of times the user retried them.
@@ -117,6 +114,20 @@ interface PendingRow {
   row: SyncedRow;
 }
 
+function returnedRow(payload: SyncResponse, pending: PendingRow): SyncedRow | undefined {
+  const rows = (payload.changes[pending.marker.table] ?? []) as SyncedRow[];
+  return rows.find((row) => row.id === pending.marker.id);
+}
+
+function settleSuccessfulPush(payload: SyncResponse, pending: PendingRow[]): void {
+  for (const item of pending) {
+    mutationProgressTracker.settle(
+      item.marker,
+      classifyPushedRow(item.row, item.marker, returnedRow(payload, item)),
+    );
+  }
+}
+
 function changesFrom(pending: PendingRow[]): SyncChanges {
   const changes: SyncChanges = {};
   for (const item of pending) {
@@ -163,6 +174,10 @@ async function pushChunk(
 ): Promise<{ merged: boolean; fatalStatus?: number }> {
   const result = await postSync(changesFrom(pending));
   if (result.payload) {
+    // Record the result against the exact version that was sent before applying
+    // the response. A newer local edit may already have replaced its dirty marker;
+    // it must remain pending without rewriting this operation's accepted result.
+    settleSuccessfulPush(result.payload, pending);
     const merged = await applyPayload(result.payload, pending);
     const markers = pending.map((item) => item.marker);
     forgetRejections(rejected, markers);
@@ -175,6 +190,7 @@ async function pushChunk(
 
   const onlyRow = pending.length === 1 ? pending[0] : undefined;
   if (onlyRow) {
+    mutationProgressTracker.settle(onlyRow.marker, "rejected");
     rememberRejection(rejected, onlyRow.marker);
     await clearDirtyMarkers([onlyRow.marker]);
     return { merged: false };
@@ -185,6 +201,7 @@ async function pushChunk(
   for (const item of pending) {
     const single = await postSync(changesFrom([item]));
     if (single.payload) {
+      settleSuccessfulPush(single.payload, [item]);
       merged = (await applyPayload(single.payload, [item])) || merged;
       forgetRejections(rejected, [item.marker]);
       settled.push(item.marker);
@@ -194,6 +211,7 @@ async function pushChunk(
       await clearDirtyMarkers(settled);
       return { merged, fatalStatus: single.status };
     }
+    mutationProgressTracker.settle(item.marker, "rejected");
     rememberRejection(rejected, item.marker);
     settled.push(item.marker);
   }

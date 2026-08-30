@@ -114,6 +114,11 @@
         <span class="sr-only">{statusLabel}{syncState.pendingCount > 0 ? " " : ""}</span>
         {#if syncState.pendingCount > 0}<span class="pending">({syncState.pendingCount})</span>{/if}
       </span>
+      {#if syncState.rejectedCount > 0}
+        <a class="sync-warning" href="#/settings">
+          {t("{n} changes need attention", { n: syncState.rejectedCount })}
+        </a>
+      {/if}
     {/if}
   </header>
 
@@ -220,6 +225,12 @@
   .status[data-status="error"],
   .status[data-status="unauthenticated"] {
     color: var(--danger);
+  }
+
+  .sync-warning {
+    color: var(--danger);
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
 
   .status[data-status="syncing"] svg {

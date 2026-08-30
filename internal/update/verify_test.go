@@ -7,13 +7,16 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	sigstoredata "github.com/sigstore/sigstore-go/pkg/testing/data"
+	sigstoretuf "github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 )
 
@@ -163,6 +166,62 @@ func TestSigstoreTUFRedirectPolicyStaysOnExactHost(t *testing.T) {
 				t.Fatal("untrusted redirect accepted")
 			}
 		})
+	}
+}
+
+func TestTUFRootVersionAcceptsOnlyCanonicalRootPaths(t *testing.T) {
+	for _, tt := range []struct {
+		target  string
+		version int64
+		valid   bool
+	}{
+		{target: "https://" + tufRepositoryHost + "/14.root.json", version: 14, valid: true},
+		{target: "https://" + tufRepositoryHost + "/0.root.json"},
+		{target: "https://" + tufRepositoryHost + "/014.root.json"},
+		{target: "https://" + tufRepositoryHost + "/14.root.json/extra"},
+		{target: "https://" + tufRepositoryHost + "/metadata/14.root.json"},
+		{target: "https://example.com/14.root.json"},
+		{target: "https://" + tufRepositoryHost + "/14.root.json?token=secret"},
+	} {
+		t.Run(tt.target, func(t *testing.T) {
+			parsed, err := url.Parse(tt.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			version, valid := tufRootVersion(parsed)
+			if valid != tt.valid || version != tt.version {
+				t.Fatalf("root version = (%d, %v), want (%d, %v)", version, valid, tt.version, tt.valid)
+			}
+		})
+	}
+}
+
+func TestCachedTUFRootChainRejectsCorruptNextRoot(t *testing.T) {
+	embedded, err := metadata.Root().FromBytes(sigstoretuf.DefaultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDirectory := t.TempDir()
+	rootDirectory := filepath.Join(cacheDirectory, "root-chain")
+	if err := os.MkdirAll(rootDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nextVersion := embedded.Signed.Version + 1
+	if err := os.WriteFile(filepath.Join(rootDirectory, strconv.FormatInt(nextVersion, 10)+".root.json"), []byte(`{"corrupt":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCachedTUFRootChain(cacheDirectory); err == nil || !strings.Contains(err.Error(), "verify root") {
+		t.Fatalf("corrupt cached root chain must fail closed, got %v", err)
+	}
+}
+
+func TestPersistVerifiedTUFRootsRejectsExistingMismatch(t *testing.T) {
+	cacheDirectory := t.TempDir()
+	if err := persistVerifiedTUFRoots(cacheDirectory, map[int64][]byte{14: []byte("first")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistVerifiedTUFRoots(cacheDirectory, map[int64][]byte{14: []byte("different")}); err == nil || !strings.Contains(err.Error(), "differs") {
+		t.Fatalf("cached root replacement must fail closed, got %v", err)
 	}
 }
 

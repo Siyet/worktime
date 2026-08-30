@@ -147,8 +147,11 @@ prerequisite stops the run; there is no personal access token or GitHub App fall
 All third-party Actions are pinned by full revision. The job receives only
 `contents: write`, `packages: write`, and `id-token: write`. It creates one draft,
 uploads and downloads every asset, compares the bytes, verifies the Sigstore
-identity, and smoke-tests both Linux binaries before publishing. After publication
-it verifies the immutable release and every asset. Cleanup stays armed until those
+identity, and smoke-tests both Linux binaries before publishing. GitHub creates its
+own release attestation asynchronously after immutable publication, so the workflow
+waits up to five minutes only for the two explicit not-yet-available responses; any
+other verification error fails immediately. It then verifies the immutable release
+and every asset against that GitHub attestation. Cleanup stays armed until those
 late checks finish. On failure it may delete the exact draft or public mutable
 release created by that run only when the release ID, version tag, target revision,
 and source revision match the run and the API explicitly reports

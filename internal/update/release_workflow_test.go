@@ -233,3 +233,32 @@ func TestReleaseCleanupDisarmsOnlyAfterLateVerification(t *testing.T) {
 		t.Fatalf("cleanup disarmed before late release verification: publish=%d immutable=%d assets=%d disarm=%d", published, immutable, assetVerification, disarm)
 	}
 }
+
+func TestReleaseWaitsOnlyForAsynchronousGitHubAttestation(t *testing.T) {
+	workflow := releaseWorkflow(t)
+	published := strings.Index(workflow, `gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false`)
+	attestationStart := strings.Index(workflow, "          release_attestation_verified=false\n")
+	immutable := strings.Index(workflow, "if(r.draft || !r.immutable")
+	assetVerification := strings.LastIndex(workflow, "gh release verify-asset")
+	if published < 0 || attestationStart <= published || immutable <= attestationStart || assetVerification <= immutable {
+		t.Fatalf("release attestation polling order is unsafe: publish=%d attestation=%d immutable=%d assets=%d", published, attestationStart, immutable, assetVerification)
+	}
+	poll := workflow[attestationStart:immutable]
+	for _, required := range []string{
+		"          for attempt in {1..30}; do\n",
+		`verification_output="$(gh release verify "$VERSION" 2>&1)"`,
+		`*"no attestations for tag"*|*"no attestations found for release"*) ;;`,
+		`if test "$attempt" -eq 30`,
+		"            sleep 10\n",
+		`test "$release_attestation_verified" = true`,
+	} {
+		if !strings.Contains(poll, required) {
+			t.Fatalf("bounded release attestation polling is missing %q", required)
+		}
+	}
+	unknownFailure := strings.Index(poll, `printf '%s\n' "$verification_output" >&2`)
+	unknownExit := strings.Index(poll, "                exit 1\n")
+	if unknownFailure < 0 || unknownExit <= unknownFailure {
+		t.Fatal("unexpected GitHub release verification errors must fail immediately")
+	}
+}

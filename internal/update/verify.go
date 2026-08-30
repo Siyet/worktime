@@ -14,6 +14,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"github.com/theupdateframework/go-tuf/v2/metadata"
 	"github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 )
 
@@ -36,7 +37,7 @@ type SigstoreVerifier struct {
 func NewSigstoreVerifier(dataDirectory string) *SigstoreVerifier {
 	client := &http.Client{Timeout: 15 * time.Second}
 	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if len(via) >= 3 || request.URL.Scheme != "https" || request.URL.Host != tufRepositoryHost {
+		if len(via) >= 3 || !isTrustedTUFURL(request.URL) {
 			return fmt.Errorf("refusing untrusted Sigstore TUF redirect")
 		}
 		return nil
@@ -60,6 +61,7 @@ func (v *SigstoreVerifier) Verify(ctx context.Context, manifest, bundleJSON []by
 	}
 	options := tuf.DefaultOptions().
 		WithCachePath(v.cacheDirectory).
+		WithForceCache().
 		WithFetcher(&contextTUFFetcher{ctx: verificationContext, client: client})
 	trustedRoot, err := root.FetchTrustedRootWithOptions(options)
 	if err != nil {
@@ -101,7 +103,7 @@ var _ fetcher.Fetcher = (*contextTUFFetcher)(nil)
 
 func (f *contextTUFFetcher) DownloadFile(target string, maximum int64, _ time.Duration) ([]byte, error) {
 	parsed, err := url.Parse(target)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != tufRepositoryHost {
+	if err != nil || !isTrustedTUFURL(parsed) {
 		return nil, fmt.Errorf("refusing untrusted Sigstore TUF URL")
 	}
 	request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, target, nil)
@@ -115,17 +117,23 @@ func (f *contextTUFFetcher) DownloadFile(target string, maximum int64, _ time.Du
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Sigstore TUF returned HTTP %d", response.StatusCode)
+		return nil, &metadata.ErrDownloadHTTP{StatusCode: response.StatusCode, URL: parsed.String()}
 	}
 	if response.ContentLength > maximum {
-		return nil, fmt.Errorf("Sigstore TUF response exceeds %d bytes", maximum)
+		return nil, &metadata.ErrDownloadLengthMismatch{Msg: fmt.Sprintf("download failed for %s, length %d is larger than expected %d", parsed.String(), response.ContentLength, maximum)}
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > maximum {
-		return nil, fmt.Errorf("Sigstore TUF response exceeds %d bytes", maximum)
+		return nil, &metadata.ErrDownloadLengthMismatch{Msg: fmt.Sprintf("download failed for %s, length %d is larger than expected %d", parsed.String(), len(data), maximum)}
 	}
 	return data, nil
+}
+
+func isTrustedTUFURL(value *url.URL) bool {
+	return value != nil && value.Scheme == "https" && value.Hostname() == tufRepositoryHost &&
+		value.Port() == "" && value.User == nil &&
+		value.RawQuery == "" && value.Fragment == ""
 }

@@ -104,14 +104,12 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		nextSeq++
 	}
 	for _, entry := range request.Changes.TimeEntries {
-		// agent_session_id and paused_ms are server-owned: literal values on insert
-		// (ids come from the client, so a pushed value could claim a foreign session
-		// or hand the row a pause it never had) and absent from the update list, so
-		// a push never rewrites them.
+		// agent_session_id is server-owned: a literal NULL on insert and absent from
+		// the update list, so a pushed value cannot claim a foreign session.
 		result, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
-			                          created_at, updated_at, deleted_at, server_seq, agent_session_id, paused_ms)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+			                          created_at, updated_at, deleted_at, server_seq, agent_session_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 			ON CONFLICT(id) DO UPDATE SET
 				project_id = excluded.project_id, description = excluded.description, tags = excluded.tags,
 				started_at = excluded.started_at, stopped_at = excluded.stopped_at,
@@ -129,6 +127,8 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 				return SyncResponse{}, err
 			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
+		} else if err := recordAcceptedAgentEntryMutation(ctx, transaction, userID, entry); err != nil {
+			return SyncResponse{}, err
 		}
 		nextSeq++
 	}
@@ -182,7 +182,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 
 	entryQuery, entryArgs := pullQuery(`
 		SELECT id, project_id, description, tags, started_at, stopped_at, created_at, updated_at, deleted_at,
-		       server_seq, agent_session_id, paused_ms
+		       server_seq, agent_session_id
 		FROM time_entries`, userID, request.Since, refused.timeEntries)
 	entryRows, err := transaction.QueryContext(ctx, entryQuery, entryArgs...)
 	if err != nil {
@@ -191,8 +191,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 	for entryRows.Next() {
 		var entry TimeEntry
 		if err := entryRows.Scan(&entry.ID, &entry.ProjectID, &entry.Description, &entry.Tags, &entry.StartedAt, &entry.StoppedAt,
-			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID,
-			&entry.PausedMs); err != nil {
+			&entry.CreatedAt, &entry.UpdatedAt, &entry.DeletedAt, &entry.ServerSeq, &entry.AgentSessionID); err != nil {
 			entryRows.Close()
 			return SyncResponse{}, err
 		}
@@ -229,6 +228,50 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 	return response, nil
+}
+
+// recordAcceptedAgentEntryMutation makes an accepted outside write durable for
+// the current agent session. Stop/reconcile can close the row before another
+// heartbeat observes its changed server_seq, so the edit marker must be written
+// here rather than relying only on later adoption. The same update carries the
+// accepted project into future idle segments and records a manual description.
+// Internal lifecycle writes do not use Sync and therefore never set these flags.
+func recordAcceptedAgentEntryMutation(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	entry TimeEntry,
+) error {
+	var sessionID, source, taskKey, taskTitle string
+	err := transaction.QueryRowContext(ctx, `
+		SELECT agent_sessions.id, agent_sessions.source,
+		       agent_sessions.task_key, agent_sessions.task_title
+		FROM agent_sessions
+		JOIN time_entries
+		  ON time_entries.id = agent_sessions.time_entry_id
+		 AND time_entries.user_id = agent_sessions.user_id
+		 AND time_entries.agent_session_id = agent_sessions.id
+		WHERE agent_sessions.user_id = ? AND agent_sessions.time_entry_id = ?`,
+		userID, entry.ID).Scan(&sessionID, &source, &taskKey, &taskTitle)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	automaticDescription := agentEntryDescription(AgentSession{
+		ID: sessionID, Source: source, TaskKey: taskKey, TaskTitle: taskTitle,
+	})
+	userNamed := entry.Description != automaticDescription
+	_, err = transaction.ExecContext(ctx, `
+		UPDATE agent_sessions
+		SET project_id = ?, entry_user_edited = 1,
+		    entry_user_named = CASE WHEN ? THEN 1 ELSE entry_user_named END,
+		    updated_at = MAX(updated_at, ?)
+		WHERE id = ? AND user_id = ? AND time_entry_id = ?`,
+		entry.ProjectID, userNamed, entry.UpdatedAt, sessionID, userID, entry.ID)
+	return err
 }
 
 // refusedIDs holds the ids of pushed rows the last-write-wins guard left untouched,

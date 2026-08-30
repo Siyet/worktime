@@ -42,6 +42,7 @@
 
   const current = $derived(appState.entries.find((entry) => entry.id === entryID));
   const isRunning = $derived(current !== undefined && current.stopped_at === null);
+  const agentSessionID = $derived(current?.agent_session_id ?? original.agent_session_id ?? null);
 
   let draftDescription = $state(original.description);
   let draftProjectID = $state(original.project_id);
@@ -279,11 +280,6 @@
   );
   const suggestions = $derived(taskSuggestions(suggestionSource, draftDescription, suggestionCutoff));
 
-  // Idle time an agent session subtracted from this entry. durationLabel is
-  // computed from the form fields, not from the row, so the two would otherwise
-  // disagree with nothing on screen to explain the difference.
-  const pausedMs = $derived(current?.paused_ms ?? 0);
-
   function projectName(projectID: string | null): string {
     return projectByID(projectID)?.name ?? "";
   }
@@ -294,7 +290,15 @@
   }
 </script>
 
-<dialog class="sheet" bind:this={dialogElement} aria-labelledby="ed-title" onclose={() => onclose()}>
+<dialog
+  class="sheet"
+  bind:this={dialogElement}
+  aria-labelledby="ed-title"
+  onclose={() => onclose()}
+  onclick={(event) => {
+    if (event.target === dialogElement) dialogElement?.close();
+  }}
+>
   <form
     method="dialog"
     onsubmit={(event) => {
@@ -330,14 +334,15 @@
         </p>
       {/if}
 
-      {#if pausedMs > 0}
-        <!-- Without this line the interval and the duration disagree by an
-             amount nothing on screen explains: the agent's idle time. -->
-        <p class="ed-hint">{t("{n} of idle time inside this entry is not counted.", { n: formatDurationShort(pausedMs) })}</p>
-      {/if}
-
       {#if stoppedRemotely}
         <p class="ed-hint bad">{t("This entry was stopped on another device; the end time below is the stored one.")}</p>
+      {/if}
+
+      {#if agentSessionID}
+        <div class="ed-field">
+          <span class="ed-label">{t("Session identifier")}</span>
+          <output class="ed-session-id mono" aria-label={t("Session identifier")}>{agentSessionID}</output>
+        </div>
       {/if}
 
       <div class="ed-field">

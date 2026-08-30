@@ -8,15 +8,11 @@ package store
 // reconciliation job closes any session whose last heartbeat is older than
 // a grace period, at the moment of that last heartbeat.
 //
-// A session owns exactly one time entry. A gap between signals longer than the
-// idle threshold is added to that entry's paused_ms and subtracted from its
-// duration, so idle time in the middle of a session is never billed and the
-// session still reads as one row; started_at and stopped_at stay real
-// timestamps, which is what the printed report, the CSV and the day boundaries
-// are built on. Trailing idle is trimmed on stop and by reconciliation. Only a
-// pause crossing the agent's local midnight, or one longer than the maximum
-// pause, cuts the entry in two - both are about which day the work belongs to,
-// not about idling.
+// A session may produce several time entries. A gap between signals longer than
+// the idle threshold closes the current entry at the last billable activity and
+// opens a new one at the next signal. Every row therefore represents one
+// continuous work segment, and an idle gap can never turn into a multi-day row.
+// Trailing idle is trimmed on stop and by reconciliation.
 //
 // Every write here stamps updated_at as MAX(updated_at + 1, now). That column is the
 // version key last-write-wins compares, and it carries the *browser's* clock on rows
@@ -63,14 +59,17 @@ const (
 
 	agentSessionColumns = `id, project_id, source, status, started_at, last_heartbeat_at, ended_at, end_reason,
 		cwd, git_branch, model, time_entry_id, task_key, task_title, entry_server_seq, entry_user_named,
-		tz_offset_min, last_kind`
+		entry_user_edited, tz_offset_min, last_kind`
 
 	// AgentKindToolStart marks the signal sent before a tool runs. It is the only
 	// way the server can tell "a 20 minute Bash call" from "nobody was there":
 	// PostToolUse and SubagentStop both fire after the gap has already happened.
 	AgentKindToolStart = "tool_start"
 
-	msPerDay = int64(24 * 60 * 60 * 1000)
+	// formatDurationShort rounds to the nearest minute, so anything below this
+	// boundary is rendered as 0m. Only untouched, unassigned technical entries
+	// are discarded at that boundary; real user entries keep sub-minute precision.
+	agentZeroMinuteMs = int64(30 * 1000)
 )
 
 type AgentSession struct {
@@ -94,6 +93,9 @@ type AgentSession struct {
 	// EntryUserNamed records that the entry's description was chosen by the user,
 	// which stops the session from ever fixing the name again.
 	EntryUserNamed bool `json:"entry_user_named"`
+	// EntryUserEdited records any outside write without blocking task renames.
+	// It protects deliberate short entries from automatic technical cleanup.
+	EntryUserEdited bool `json:"entry_user_edited"`
 	// TZOffsetMin is the agent's UTC offset in minutes, nullable because 0 is a
 	// valid offset (UTC) and "unknown" has to stay distinguishable from it.
 	TZOffsetMin *int `json:"tz_offset_min"`
@@ -109,13 +111,9 @@ type AgentPolicy struct {
 	IdleMs int64
 	// ToolMaxMs caps how much of a gap that started with a tool call is still
 	// billed. A ceiling, not a switch: a 45 minute gap after a tool start bills
-	// the first 30 and pauses the rest, so a hung tool cannot bill forever and a
-	// tool one minute over the limit does not lose everything.
+	// the first 30 and starts a new segment after the rest, so a hung tool cannot
+	// bill forever and a tool one minute over the limit does not lose everything.
 	ToolMaxMs int64
-	// MaxPauseMs is the pause after which the entry is cut in two even when the
-	// timezone is unknown. Without it a night break would glue yesterday and
-	// today into one row dated yesterday.
-	MaxPauseMs int64
 }
 
 // AgentStart carries the payload of a start signal. Zero StartedAt means "now".
@@ -340,7 +338,9 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 	if signal.At < session.LastHeartbeatAt || signal.At-session.LastHeartbeatAt > policy.IdleMs {
 		effectiveEnd = trailingEnd(session.LastHeartbeatAt, signal.At, session.LastKind, policy)
 	}
-	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now)
+	seq, closed, err := closeAgentEntryWithTechnicalCleanup(
+		ctx, transaction, userID, session, effectiveEnd, now,
+	)
 	if err != nil {
 		return AgentSession{}, err
 	}
@@ -382,12 +382,18 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	type staleSession struct {
 		id              string
 		userID          string
+		source          string
 		timeEntryID     *string
 		entryServerSeq  *int64
+		entryUserNamed  bool
+		entryUserEdited bool
+		taskKey         string
+		taskTitle       string
 		lastHeartbeatAt int64
 	}
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT id, user_id, time_entry_id, entry_server_seq, last_heartbeat_at
+		SELECT id, user_id, source, time_entry_id, entry_server_seq, entry_user_named, entry_user_edited,
+		       task_key, task_title, last_heartbeat_at
 		FROM agent_sessions WHERE status = ? AND last_heartbeat_at < ?`,
 		agentStatusActive, now-graceMs)
 	if err != nil {
@@ -396,8 +402,10 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 	stale := []staleSession{}
 	for rows.Next() {
 		var session staleSession
-		if err := rows.Scan(&session.id, &session.userID, &session.timeEntryID,
-			&session.entryServerSeq, &session.lastHeartbeatAt); err != nil {
+		if err := rows.Scan(&session.id, &session.userID, &session.source, &session.timeEntryID,
+			&session.entryServerSeq, &session.entryUserNamed, &session.entryUserEdited,
+			&session.taskKey, &session.taskTitle,
+			&session.lastHeartbeatAt); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -409,7 +417,15 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 
 	for _, session := range stale {
 		endedAt := session.lastHeartbeatAt
-		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, endedAt, now)
+		agentSession := AgentSession{
+			ID: session.id, Source: session.source, TimeEntryID: session.timeEntryID,
+			EntryServerSeq: session.entryServerSeq, EntryUserNamed: session.entryUserNamed,
+			EntryUserEdited: session.entryUserEdited,
+			TaskKey:         session.taskKey, TaskTitle: session.taskTitle,
+		}
+		seq, closed, err := closeAgentEntryWithTechnicalCleanup(
+			ctx, transaction, session.userID, agentSession, endedAt, now,
+		)
 		if err != nil {
 			return 0, err
 		}
@@ -531,9 +547,9 @@ func (s *Store) SetAgentTask(ctx context.Context, userID string, selector AgentT
 }
 
 // SetAgentSessionProject records which project the session's entries belong to. The
-// entry that is running gets moved by the ordinary sync path, but a session cut at the
-// local midnight or by a long pause opens its next entry from the session row, so
-// without this the project an agent picked would be forgotten by tomorrow morning.
+// entry that is running gets moved by the ordinary sync path, but a session split by
+// a pause opens its next entry from the session row, so without this the project an
+// agent picked would be forgotten after the next idle gap.
 // A nil project detaches future entries, which is the state a session starts in.
 func (s *Store) SetAgentSessionProject(ctx context.Context, userID, sessionID string, projectID *string) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
@@ -568,10 +584,11 @@ type agentEntry struct {
 	stoppedAt   *int64
 	serverSeq   int64
 	userNamed   bool
+	userEdited  bool
 }
 
 // advanceAgentSession applies an activity signal at the given moment: it revives
-// a closed session, subtracts an idle gap from the entry instead of cutting it,
+// a closed session, splits the current entry at an idle gap,
 // adopts or replaces an entry that changed outside the agent flow, and always
 // leaves the session active with its watermark moved forward. Every branch runs
 // through the same tail, so the session can never end up closed while still
@@ -613,21 +630,15 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	opened := false
 	if current == nil && unopened {
 		// Deferred materialization. The row appears with the first activity but
-		// covers the session from its start, and every rule below then applies to
-		// it exactly as if the start had opened it: the gap between the start and
-		// this signal becomes a pause, never billed time. So waiting for activity
-		// decides whether the row exists, and nothing else.
+		// covers the session from its start when that signal arrives before the
+		// idle threshold. A later first signal starts the first segment itself.
 		//
-		// Except where that gap is one the rules below would cut rather than
-		// pause. Nothing is billed before the first signal - an unopened session
-		// has no tool run behind it, so its watermark is still the start itself -
-		// which makes the piece before the cut the start moment closed at the start
-		// moment: a zero-length row, the exact artefact opening on activity exists
-		// to stop writing. The entry opens at the signal instead, and the cut has
-		// already happened by the time the gap logic runs.
+		// Nothing is billed before a first signal that arrives after the idle
+		// threshold. Opening a zero-length segment before that pause would recreate
+		// the artefact deferred materialization exists to prevent, so the first
+		// entry starts at the signal instead.
 		from := session.StartedAt
-		if idle := at - mark; idle > policy.IdleMs &&
-			(crossesLocalMidnight(mark, at, session.TZOffsetMin) || idle > policy.MaxPauseMs) {
+		if at-mark > policy.IdleMs {
 			from = at
 			opened = true
 		}
@@ -646,24 +657,16 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		}
 		workedUntil := mark + billable
 		if idle := at - workedUntil; idle > 0 {
-			switch {
-			case crossesLocalMidnight(workedUntil, at, session.TZOffsetMin) || idle > policy.MaxPauseMs:
-				// A pause across the local midnight has to cut: reports put an entry
-				// on the day it started, so gluing them would move this morning's work
-				// into yesterday and inflate that day's total.
-				if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, workedUntil, now); err != nil {
-					return err
-				}
-				current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
-				if err != nil {
-					return err
-				}
-				opened = true
-			default:
-				if err := addAgentPause(ctx, transaction, userID, current, idle, now); err != nil {
-					return err
-				}
+			if _, _, err := closeAgentEntryWithTechnicalCleanup(
+				ctx, transaction, userID, *session, workedUntil, now,
+			); err != nil {
+				return err
 			}
+			current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
+			if err != nil {
+				return err
+			}
+			opened = true
 		}
 	}
 	if current == nil {
@@ -702,69 +705,25 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	session.TimeEntryID = &current.id
 	session.EntryServerSeq = &current.serverSeq
 	session.EntryUserNamed = current.userNamed
+	session.EntryUserEdited = current.userEdited
 	session.LastKind = truncateRunes(signal.Kind, maxAgentShortLength)
 	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions SET status = ?, ended_at = NULL, end_reason = NULL,
-		       time_entry_id = ?, entry_server_seq = ?, entry_user_named = ?,
+		       time_entry_id = ?, entry_server_seq = ?, entry_user_named = ?, entry_user_edited = ?,
 		       last_heartbeat_at = ?, last_kind = ?, tz_offset_min = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
-		agentStatusActive, current.id, current.serverSeq, current.userNamed,
+		agentStatusActive, current.id, current.serverSeq, current.userNamed, current.userEdited,
 		session.LastHeartbeatAt, session.LastKind, session.TZOffsetMin, now, session.ID, userID)
 	return err
 }
 
-// crossesLocalMidnight reports whether the interval spans a local calendar day
-// boundary. An unknown offset never counts as a crossing: guessing UTC would cut
-// entries at the wrong moment for most of the planet, and MaxPauseMs is the
-// timezone-independent guard for that case.
-func crossesLocalMidnight(fromMs, toMs int64, offsetMin *int) bool {
-	if offsetMin == nil {
-		return false
-	}
-	shift := int64(*offsetMin) * 60_000
-	return floorDiv(fromMs+shift, msPerDay) != floorDiv(toMs+shift, msPerDay)
-}
-
-func floorDiv(value, divisor int64) int64 {
-	quotient := value / divisor
-	if value%divisor != 0 && (value < 0) != (divisor < 0) {
-		quotient--
-	}
-	return quotient
-}
-
 // validTZOffset drops values outside the range real timezones live in, so a
-// broken hook cannot move an entry to a different day.
+// broken hook cannot distort report day boundaries.
 func validTZOffset(offsetMin *int) *int {
 	if offsetMin == nil || *offsetMin < -12*60 || *offsetMin > 14*60 {
 		return nil
 	}
 	return offsetMin
-}
-
-// addAgentPause records idle time inside the entry instead of cutting the entry
-// in two. The guard on server_seq keeps a row someone else has just changed from
-// being written blind; the caller has already checked ownership.
-func addAgentPause(ctx context.Context, transaction *sql.Tx, userID string, entry *agentEntry, pauseMs, now int64) error {
-	seq, err := allocateServerSeq(transaction, 1)
-	if err != nil {
-		return err
-	}
-	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET paused_ms = paused_ms + ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
-		pauseMs, now, seq, entry.id, userID, entry.serverSeq)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected > 0 {
-		entry.serverSeq = seq
-	}
-	return nil
 }
 
 // resolveAgentEntry decides what happens to the row the session points at.
@@ -805,7 +764,7 @@ func resolveAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, 
 	if owns && session.EntryServerSeq != nil {
 		return &agentEntry{
 			id: *session.TimeEntryID, description: description, stoppedAt: stoppedAt,
-			serverSeq: serverSeq, userNamed: session.EntryUserNamed,
+			serverSeq: serverSeq, userNamed: session.EntryUserNamed, userEdited: session.EntryUserEdited,
 		}, nil
 	}
 	if !owns && stoppedAt != nil {
@@ -814,10 +773,10 @@ func resolveAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, 
 		return nil, detachAgentEntry(ctx, transaction, userID, session, now)
 	}
 	// Adopted: whether the name is now the user's is decided by the name itself,
-	// so changing a project or a tag never permanently blocks renaming.
+	// while every outside edit is remembered separately for cleanup safety.
 	return &agentEntry{
 		id: *session.TimeEntryID, description: description, stoppedAt: stoppedAt,
-		serverSeq: serverSeq, userNamed: description != agentEntryDescription(*session),
+		serverSeq: serverSeq, userNamed: description != agentEntryDescription(*session), userEdited: true,
 	}, nil
 }
 
@@ -880,6 +839,117 @@ func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, en
 		return 0, false, err
 	}
 	return seq, affected > 0, nil
+}
+
+// closeAgentEntryWithTechnicalCleanup is the single close path for an entry the
+// lifecycle currently owns. The cleanup predicate is intentionally evaluated
+// before closeAgentEntry advances server_seq: that marker, together with the
+// technical name and durable edit flags, proves the user has not touched the row.
+// This applies equally to final closes and to the segment just closed by an idle
+// split, so a sub-30-second technical fragment cannot survive merely because the
+// same agent session later resumed.
+func closeAgentEntryWithTechnicalCleanup(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	session AgentSession,
+	stoppedAt, now int64,
+) (int64, bool, error) {
+	discardable, err := technicalEntryStillOwned(ctx, transaction, userID, session)
+	if err != nil {
+		return 0, false, err
+	}
+	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, stoppedAt, now)
+	if err != nil || !closed || !discardable {
+		return seq, closed, err
+	}
+	session.EntryServerSeq = &seq
+	tombstoneSeq, discarded, err := discardZeroMinuteTechnicalEntry(
+		ctx, transaction, userID, session, seq, now,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if discarded {
+		seq = tombstoneSeq
+	}
+	return seq, true, nil
+}
+
+// technicalEntryStillOwned is evaluated before closeAgentEntry changes the row's
+// server_seq. An outside edit to any field is meaningful: even if the user left
+// the automatic description intact, a project or tag assignment must keep the row.
+func technicalEntryStillOwned(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession) (bool, error) {
+	if session.TimeEntryID == nil || session.EntryServerSeq == nil || session.EntryUserNamed || session.EntryUserEdited ||
+		session.TaskKey != "" || session.TaskTitle != "" {
+		return false, nil
+	}
+	var one int
+	err := transaction.QueryRowContext(ctx, `
+		SELECT 1 FROM time_entries
+		WHERE id = ? AND user_id = ? AND agent_session_id = ?
+		  AND description = ? AND server_seq = ?
+		  AND stopped_at IS NULL AND deleted_at IS NULL`,
+		*session.TimeEntryID, userID, session.ID, agentEntryDescription(session), *session.EntryServerSeq).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// discardZeroMinuteTechnicalEntry soft-deletes the closed artefact and gives its
+// tombstone a fresh cursor. It is deliberately separate from closeAgentEntry:
+// ordinary entries, renamed agent work and anything edited outside the agent flow
+// must remain visible no matter how short it is.
+func discardZeroMinuteTechnicalEntry(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	session AgentSession,
+	closedSeq, now int64,
+) (int64, bool, error) {
+	if session.TimeEntryID == nil {
+		return closedSeq, false, nil
+	}
+	var entry TimeEntry
+	err := transaction.QueryRowContext(ctx, `
+		SELECT started_at, stopped_at
+		FROM time_entries
+		WHERE id = ? AND user_id = ? AND agent_session_id = ?
+		  AND description = ? AND server_seq = ? AND deleted_at IS NULL`,
+		*session.TimeEntryID, userID, session.ID, agentEntryDescription(session), closedSeq).
+		Scan(&entry.StartedAt, &entry.StoppedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return closedSeq, false, nil
+	}
+	if err != nil {
+		return closedSeq, false, err
+	}
+	if entry.StoppedAt == nil || *entry.StoppedAt-entry.StartedAt >= agentZeroMinuteMs {
+		return closedSeq, false, nil
+	}
+
+	tombstoneSeq, err := allocateServerSeq(transaction, 1)
+	if err != nil {
+		return closedSeq, false, err
+	}
+	result, err := transaction.ExecContext(ctx, `
+		UPDATE time_entries
+		SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
+		WHERE id = ? AND user_id = ? AND stopped_at IS NOT NULL
+		  AND deleted_at IS NULL AND server_seq = ?`,
+		now, now, tombstoneSeq, *session.TimeEntryID, userID, closedSeq)
+	if err != nil {
+		return closedSeq, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return closedSeq, false, err
+	}
+	if affected == 0 {
+		return closedSeq, false, nil
+	}
+	return tombstoneSeq, true, nil
 }
 
 // reopenAgentEntry lets a revived session continue writing into the row it
@@ -1228,7 +1298,7 @@ func scanAgentSession(row rowScanner) (AgentSession, error) {
 	err := row.Scan(&session.ID, &session.ProjectID, &session.Source, &session.Status,
 		&session.StartedAt, &session.LastHeartbeatAt, &session.EndedAt, &session.EndReason,
 		&session.Cwd, &session.GitBranch, &session.Model, &session.TimeEntryID,
-		&session.TaskKey, &session.TaskTitle, &session.EntryServerSeq, &session.EntryUserNamed,
+		&session.TaskKey, &session.TaskTitle, &session.EntryServerSeq, &session.EntryUserNamed, &session.EntryUserEdited,
 		&session.TZOffsetMin, &session.LastKind)
 	return session, err
 }

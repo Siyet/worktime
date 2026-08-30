@@ -193,11 +193,10 @@ func TestMCPUpdateTimeEntryRefusesAnAmbiguousTarget(t *testing.T) {
 }
 
 // The agent's own row is the one an agent will want to move to a project, and it
-// carries server-owned columns a push must never rewrite - a project change that
-// dropped paused_ms would inflate the tracked duration by the idle time.
+// carries server-owned bookkeeping a push must never rewrite.
 func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
 	fixture := newMCPFixture(t)
-	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000, MaxPauseMs: 4 * 60 * 60 * 1000}
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000}
 	now := time.Now().UnixMilli()
 
 	sessionID := uuid.NewString()
@@ -217,8 +216,8 @@ func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if before.PausedMs == 0 {
-		t.Fatalf("expected the idle gap to be recorded, got %+v", before)
+	if before.StartedAt != now-30*60_000 {
+		t.Fatalf("expected the first activity after a pause to start a clean segment, got %+v", before)
 	}
 
 	callTool(t, fixture.session, "create_project", map[string]any{"name": "WorkTime"})
@@ -228,7 +227,7 @@ func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
 	}
 
 	// The session itself has to learn the project, or the entry it opens after the
-	// next midnight cut would land under no project again.
+	// next pause would land under no project again.
 	agentSession, err = fixture.store.GetAgentSession(t.Context(), fixture.userID, sessionID)
 	if err != nil {
 		t.Fatalf("get agent session: %v", err)
@@ -244,8 +243,8 @@ func TestMCPUpdateTimeEntryKeepsAgentBookkeeping(t *testing.T) {
 	if after.ProjectID == nil {
 		t.Fatalf("expected the agent row to be on a project, got %+v", after)
 	}
-	if after.PausedMs != before.PausedMs || after.AgentSessionID == nil || *after.AgentSessionID != sessionID {
-		t.Fatalf("expected paused_ms and the session link to survive the edit, got %+v", after)
+	if after.AgentSessionID == nil || *after.AgentSessionID != sessionID {
+		t.Fatalf("expected the segment bookkeeping and session link to survive the edit, got %+v", after)
 	}
 }
 
@@ -488,13 +487,14 @@ func TestMCPSetAgentTaskWithoutSession(t *testing.T) {
 	}
 }
 
-func TestMCPElapsedExcludesAgentPause(t *testing.T) {
+func TestMCPAgentElapsedStartsAfterPause(t *testing.T) {
 	fixture := newMCPFixture(t)
-	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000, MaxPauseMs: 4 * 60 * 60 * 1000}
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000, ToolMaxMs: 30 * 60 * 1000}
 	now := time.Now().UnixMilli()
 
-	// An hour of wall clock with a half hour of idling inside it: the agent asking
-	// "how long have I been on this" must be told half an hour.
+	// The first activity arrives after a half-hour pause, so the running segment
+	// starts there and the agent asking "how long have I been on this" gets only
+	// the current half hour.
 	sessionID := uuid.NewString()
 	if _, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
 		SessionID: sessionID, StartedAt: now - 60*60_000,

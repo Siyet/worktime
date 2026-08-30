@@ -29,9 +29,6 @@ export interface TimeEntry {
   // agent tracking shipped, and rows from an unmigrated server, carry no key.
   // Present only on rows an agent session produced.
   agent_session_id?: string | null;
-  // Server-owned: idle time inside the interval that must not be billed. Rows
-  // written before it existed simply have none.
-  paused_ms?: number;
 }
 
 export type TimeOffKind = "sick" | "vacation" | "dayoff";

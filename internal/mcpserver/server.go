@@ -322,7 +322,7 @@ func (d toolDeps) stopTimer(ctx context.Context, req *mcp.CallToolRequest, input
 	return nil, timerOut{
 		EntryID: entry.ID, Description: entry.Description,
 		StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
-		Elapsed:   formatDuration(store.BillableDurationMs(stored, *stored.StoppedAt)),
+		Elapsed:   formatDuration(store.EntryDurationMs(stored, *stored.StoppedAt)),
 	}, nil
 }
 
@@ -385,7 +385,7 @@ func (d toolDeps) listRunningTimers(ctx context.Context, req *mcp.CallToolReques
 		timer := timerOut{
 			EntryID: entry.ID, Description: entry.Description, Project: projectName,
 			StartedAt: time.UnixMilli(entry.StartedAt).Format(time.RFC3339),
-			Elapsed:   formatDuration(store.BillableDurationMs(entry, now)),
+			Elapsed:   formatDuration(store.EntryDurationMs(entry, now)),
 		}
 		if entry.AgentSessionID != nil {
 			timer.SessionTag = store.AgentSessionTag(*entry.AgentSessionID)
@@ -462,7 +462,7 @@ func (d toolDeps) updateTimeEntry(ctx context.Context, req *mcp.CallToolRequest,
 	out := timerOut{
 		EntryID: stored.ID, Description: stored.Description, Project: projectName,
 		StartedAt: time.UnixMilli(stored.StartedAt).Format(time.RFC3339),
-		Elapsed:   formatDuration(store.BillableDurationMs(stored, end)),
+		Elapsed:   formatDuration(store.EntryDurationMs(stored, end)),
 	}
 	if stored.AgentSessionID != nil {
 		out.SessionTag = store.AgentSessionTag(*stored.AgentSessionID)

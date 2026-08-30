@@ -16,7 +16,7 @@ func (s *Store) BuildReport(ctx context.Context, userID string, fromMs, toMs int
 	report := Report{Projects: []ProjectReport{}, TimeOff: []TimeOffReport{}}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT project_id, SUM(MAX(0, stopped_at - started_at - paused_ms)) AS total_ms
+		SELECT project_id, SUM(MAX(0, stopped_at - started_at)) AS total_ms
 		FROM time_entries
 		WHERE user_id = ? AND deleted_at IS NULL AND stopped_at IS NOT NULL
 		  AND started_at >= ? AND started_at < ?

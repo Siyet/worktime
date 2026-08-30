@@ -19,9 +19,8 @@ const (
 )
 
 var testPolicy = AgentPolicy{
-	IdleMs:     testIdleMs,
-	ToolMaxMs:  30 * 60 * 1000,
-	MaxPauseMs: 4 * 60 * 60 * 1000,
+	IdleMs:    testIdleMs,
+	ToolMaxMs: 30 * 60 * 1000,
 }
 
 func startTestAgentSession(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64) AgentSession {
@@ -182,12 +181,116 @@ func TestAgentFirstSignalAtTheStartMomentStillOpensTheEntry(t *testing.T) {
 	}
 }
 
+func TestAgentStopDiscardsOnlyUntouchedTechnicalZeroMinuteEntries(t *testing.T) {
+	tests := []struct {
+		name       string
+		durationMs int64
+		prepare    func(*testing.T, *Store, string, string, string)
+		wantKept   bool
+	}{
+		{name: "zero length", durationMs: 0},
+		{name: "last duration rendered as zero minutes", durationMs: agentZeroMinuteMs - 1},
+		{name: "first duration rendered as one minute", durationMs: agentZeroMinuteMs, wantKept: true},
+		{
+			name: "task assigned", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, _ string) {
+				if _, err := testStore.SetAgentTask(t.Context(), userID,
+					AgentTaskSelector{SessionID: sessionID}, "WT-1", "Real task"); err != nil {
+					t.Fatalf("set task: %v", err)
+				}
+			},
+		},
+		{
+			name: "description edited", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, entryID string) {
+				entry, err := testStore.GetTimeEntry(t.Context(), userID, entryID)
+				if err != nil {
+					t.Fatalf("get entry: %v", err)
+				}
+				entry.Description = "Manual note"
+				pushEntry(t, testStore, userID, entry)
+				testHeartbeat(t, testStore, userID, sessionID, agentBaseMs+500)
+			},
+		},
+		{
+			name: "tags edited", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, entryID string) {
+				entry, err := testStore.GetTimeEntry(t.Context(), userID, entryID)
+				if err != nil {
+					t.Fatalf("get entry: %v", err)
+				}
+				entry.Tags = TagList{"review"}
+				pushEntry(t, testStore, userID, entry)
+				testHeartbeat(t, testStore, userID, sessionID, agentBaseMs+500)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-zero-minute@test.local")
+			sessionID := uuid.NewString()
+			session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			entryID := *session.TimeEntryID
+			if test.prepare != nil {
+				test.prepare(t, testStore, user.ID, sessionID, entryID)
+			}
+
+			closed := testStop(t, testStore, user.ID, sessionID, agentBaseMs+test.durationMs, "session_end")
+			_, err := testStore.GetTimeEntry(t.Context(), user.ID, entryID)
+			if test.wantKept && err != nil {
+				t.Fatalf("meaningful short entry was removed: %v", err)
+			}
+			if !test.wantKept && !errors.Is(err, ErrNotFound) {
+				t.Fatalf("technical zero-minute entry survived: %v", err)
+			}
+			if !test.wantKept {
+				var deletedAt, serverSeq int64
+				if err := testStore.db.QueryRow(
+					"SELECT deleted_at, server_seq FROM time_entries WHERE id = ?", entryID,
+				).Scan(&deletedAt, &serverSeq); err != nil {
+					t.Fatalf("read tombstone: %v", err)
+				}
+				if deletedAt == 0 || closed.EntryServerSeq == nil || *closed.EntryServerSeq != serverSeq {
+					t.Fatalf("session does not own the synced tombstone: deleted=%d seq=%d session=%v",
+						deletedAt, serverSeq, closed.EntryServerSeq)
+				}
+				pull, err := testStore.Sync(t.Context(), user.ID, SyncRequest{Since: serverSeq - 1})
+				if err != nil {
+					t.Fatalf("pull tombstone: %v", err)
+				}
+				if len(pull.Changes.TimeEntries) != 1 || pull.Changes.TimeEntries[0].DeletedAt == nil {
+					t.Fatalf("cleanup did not sync a tombstone: %+v", pull.Changes.TimeEntries)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentReconcileDiscardsTechnicalZeroMinuteEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-zero-minute-reconcile@test.local")
+	sessionID := uuid.NewString()
+	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+
+	closed, err := testStore.ReconcileAgentSessions(t.Context(), agentBaseMs+testGraceMs+1, testGraceMs)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed %d sessions, want 1", closed)
+	}
+	if _, err := testStore.GetTimeEntry(t.Context(), user.ID, *session.TimeEntryID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reconcile left the zero-minute technical entry: %v", err)
+	}
+}
+
 // Back-dating the entry to the start is right up to the point where the gap to
-// the first signal is one the rules cut rather than pause. Nothing is billed
-// before that signal, so the piece before the cut would be the start moment
-// closed at the start moment - the zero-length row this whole rule exists to
-// stop writing. Both cutting gaps are covered: the local midnight and MaxPause.
-func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
+// the first signal becomes a pause. Nothing is billed before that signal, so a
+// zero-length row before the pause would only recreate the artefact deferred
+// materialization exists to prevent.
+func TestAgentFirstSignalAfterAnIdleGapOpensAtTheSignal(t *testing.T) {
 	ctx := context.Background()
 	// UTC+3: local midnight is 21:00 UTC, so 23:30 -> 00:30 local crosses it.
 	offset := 180
@@ -200,8 +303,8 @@ func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
 		startedAt int64
 		signalAt  int64
 	}{
+		{name: "same day", startedAt: agentBaseMs, signalAt: agentBaseMs + testIdleMs + 1},
 		{name: "across the local midnight", offset: &offset, startedAt: evening, signalAt: morning},
-		{name: "past MaxPause", startedAt: agentBaseMs, signalAt: agentBaseMs + testPolicy.MaxPauseMs + 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -220,7 +323,7 @@ func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get entry: %v", err)
 			}
-			if entry.StartedAt != test.signalAt || entry.StoppedAt != nil || entry.PausedMs != 0 {
+			if entry.StartedAt != test.signalAt || entry.StoppedAt != nil {
 				t.Fatalf("the entry must open at the signal, got %+v", entry)
 			}
 			// One row and no stub before it: the cut left nothing to close.
@@ -438,7 +541,7 @@ func TestAgentHeartbeatFillsMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestAgentIdleGapKeepsOneEntry(t *testing.T) {
+func TestAgentIdleGapStartsANewEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-idle@test.local")
 	ctx := context.Background()
@@ -450,30 +553,144 @@ func TestAgentIdleGapKeepsOneEntry(t *testing.T) {
 	lastActive := agentBaseMs + 60_000
 	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 
-	// Silence longer than the idle threshold: the gap must not be billed, but it
-	// must not cost the session its entry either - one session is one row.
+	// Silence longer than the idle threshold ends the current work segment. The
+	// same agent session stays active and points to a fresh running entry.
 	gap := testIdleMs + 300_000
 	afterIdle := lastActive + gap
 	session := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
-	if *session.TimeEntryID != entryID {
-		t.Fatal("an idle gap must not open a second entry")
+	if *session.TimeEntryID == entryID {
+		t.Fatal("an idle gap must open a second entry")
 	}
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+	first, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get first entry: %v", err)
 	}
-	if entry.StoppedAt != nil {
-		t.Fatalf("the entry must still be running: %+v", entry)
+	if first.StoppedAt == nil || *first.StoppedAt != lastActive {
+		t.Fatalf("the first entry must end at the last activity: %+v", first)
 	}
-	if entry.PausedMs != gap {
-		t.Fatalf("expected the whole gap paused, got %d of %d", entry.PausedMs, gap)
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
 	}
-	if count := countUserEntries(t, testStore, user.ID); count != 1 {
-		t.Fatalf("expected exactly one entry, got %d", count)
+	if second.StartedAt != afterIdle || second.StoppedAt != nil {
+		t.Fatalf("the second entry must start at resumed activity: %+v", second)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 2 {
+		t.Fatalf("expected exactly two entries, got %d", count)
 	}
 }
 
-func TestAgentDurationExcludesPause(t *testing.T) {
+func TestAgentIdleSplitCleansOnlyUntouchedTechnicalZeroMinuteSegments(t *testing.T) {
+	tests := []struct {
+		name       string
+		durationMs int64
+		edit       bool
+		assignTask bool
+		wantKept   bool
+	}{
+		{name: "zero length"},
+		{name: "last duration rendered as zero minutes", durationMs: agentZeroMinuteMs - 1},
+		{name: "first duration rendered as one minute", durationMs: agentZeroMinuteMs, wantKept: true},
+		{name: "edited technical segment", durationMs: 1_000, edit: true, wantKept: true},
+		{name: "task-assigned segment", durationMs: 1_000, assignTask: true, wantKept: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-idle-cleanup@test.local")
+			ctx := t.Context()
+			sessionID := uuid.NewString()
+			started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			entryID := *started.TimeEntryID
+			lastActive := agentBaseMs + test.durationMs
+			if test.durationMs > 0 {
+				testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
+			}
+			if test.edit {
+				entry, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+				if err != nil {
+					t.Fatalf("get entry before edit: %v", err)
+				}
+				entry.Tags = TagList{"review"}
+				pushEntry(t, testStore, user.ID, entry)
+			}
+			if test.assignTask {
+				if _, err := testStore.SetAgentTask(ctx, user.ID,
+					AgentTaskSelector{SessionID: sessionID}, "WT-1", "Assigned work"); err != nil {
+					t.Fatalf("assign task: %v", err)
+				}
+			}
+
+			var beforeSeq int64
+			if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&beforeSeq); err != nil {
+				t.Fatalf("read cursor before split: %v", err)
+			}
+			resumedAt := lastActive + testIdleMs + 1
+			resumed := testHeartbeat(t, testStore, user.ID, sessionID, resumedAt)
+			if resumed.TimeEntryID == nil || *resumed.TimeEntryID == entryID {
+				t.Fatalf("idle split did not open a new segment: %+v", resumed)
+			}
+
+			var deletedAt *int64
+			var stoppedAt *int64
+			var firstSeq int64
+			if err := testStore.db.QueryRow(`
+				SELECT deleted_at, stopped_at, server_seq FROM time_entries
+				WHERE id = ? AND user_id = ?`, entryID, user.ID).
+				Scan(&deletedAt, &stoppedAt, &firstSeq); err != nil {
+				t.Fatalf("read closed segment: %v", err)
+			}
+			if stoppedAt == nil || *stoppedAt != lastActive {
+				t.Fatalf("segment closed at %v, want %d", stoppedAt, lastActive)
+			}
+			if test.wantKept && deletedAt != nil {
+				t.Fatalf("meaningful segment was deleted at %d", *deletedAt)
+			}
+			if !test.wantKept && deletedAt == nil {
+				t.Fatal("untouched technical zero-minute segment survived the idle split")
+			}
+
+			var secondSeq int64
+			if err := testStore.db.QueryRow(
+				"SELECT server_seq FROM time_entries WHERE id = ?", *resumed.TimeEntryID,
+			).Scan(&secondSeq); err != nil {
+				t.Fatalf("read resumed segment cursor: %v", err)
+			}
+			if firstSeq <= beforeSeq || secondSeq <= firstSeq {
+				t.Fatalf("split cursors are not fresh and unique: before=%d closed=%d resumed=%d",
+					beforeSeq, firstSeq, secondSeq)
+			}
+
+			if !test.wantKept {
+				pull, err := testStore.Sync(ctx, user.ID, SyncRequest{Since: beforeSeq})
+				if err != nil {
+					t.Fatalf("pull split changes: %v", err)
+				}
+				if len(pull.Changes.TimeEntries) != 2 || pull.Changes.TimeEntries[0].ID != entryID ||
+					pull.Changes.TimeEntries[0].DeletedAt == nil ||
+					pull.Changes.TimeEntries[1].ID != *resumed.TimeEntryID {
+					t.Fatalf("split did not publish one tombstone and one new row: %+v", pull.Changes.TimeEntries)
+				}
+			}
+
+			var splitSeq int64
+			if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&splitSeq); err != nil {
+				t.Fatalf("read cursor after split: %v", err)
+			}
+			testHeartbeat(t, testStore, user.ID, sessionID, resumedAt)
+			var replaySeq int64
+			if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&replaySeq); err != nil {
+				t.Fatalf("read cursor after replay: %v", err)
+			}
+			if replaySeq != splitSeq {
+				t.Fatalf("idle signal replay advanced cursor from %d to %d", splitSeq, replaySeq)
+			}
+		})
+	}
+}
+
+func TestAgentDurationIsSplitAroundPause(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-duration@test.local")
 	ctx := context.Background()
@@ -487,40 +704,23 @@ func TestAgentDurationExcludesPause(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, resumed+60_000)
 	testStop(t, testStore, user.ID, sessionID, resumed+60_000, "prompt_input_exit")
 
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get first entry: %v", err)
 	}
-	billable := *entry.StoppedAt - entry.StartedAt - entry.PausedMs
-	if billable != 120_000 {
-		t.Fatalf("expected two billed minutes, got %d ms (paused %d)", billable, entry.PausedMs)
+	if first.StoppedAt == nil || *first.StoppedAt-first.StartedAt != 60_000 {
+		t.Fatalf("unexpected first segment: %+v", first)
 	}
-}
-
-func TestAgentPausedMsNeverExceedsSpan(t *testing.T) {
-	testStore := openTestStore(t)
-	user := testUser(t, testStore, "agent-pause-bounds@test.local")
-	ctx := context.Background()
-
-	sessionID := uuid.NewString()
-	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// Out of order, repeated and far apart signals in one go.
-	moments := []int64{60_000, 61_000, 20 * 60_000, 20*60_000 + 1, 90 * 60_000, 30 * 60_000, 95 * 60_000}
-	for _, offset := range moments {
-		if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
-			AgentSignal{At: agentBaseMs + offset}, testPolicy); err != nil {
-			t.Fatalf("heartbeat at +%d: %v", offset, err)
-		}
-	}
-	testStop(t, testStore, user.ID, sessionID, agentBaseMs+95*60_000, "other")
-
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get session: %v", err)
 	}
-	span := *entry.StoppedAt - entry.StartedAt
-	if entry.PausedMs < 0 || entry.PausedMs > span {
-		t.Fatalf("paused_ms %d is outside 0..%d", entry.PausedMs, span)
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
+	}
+	if second.StoppedAt == nil || *second.StoppedAt-second.StartedAt != 60_000 {
+		t.Fatalf("unexpected second segment: %+v", second)
 	}
 }
 
@@ -542,25 +742,26 @@ func TestAgentLongToolRunBilledUpToCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 0 {
-		t.Fatalf("a tool run inside the cap must be billed in full, paused %d", entry.PausedMs)
-	}
 
-	// A forty five minute one bills the first thirty and pauses the rest: a hung
-	// tool must not bill forever, and one minute over the cap must not lose all.
+	// A forty five minute one bills the first thirty and splits before the rest: a
+	// hung tool must not bill forever, and one minute over the cap must not lose all.
 	longRun := uuid.NewString()
 	longStarted := startWorkingTestAgentSession(t, testStore, user.ID, longRun, agentBaseMs)
 	if _, err := testStore.AgentHeartbeat(ctx, user.ID, longRun,
 		AgentSignal{At: agentBaseMs + 60_000, Kind: AgentKindToolStart}, testPolicy); err != nil {
 		t.Fatalf("tool start: %v", err)
 	}
-	testHeartbeat(t, testStore, user.ID, longRun, agentBaseMs+60_000+45*60_000)
+	resumed := testHeartbeat(t, testStore, user.ID, longRun, agentBaseMs+60_000+45*60_000)
 	entry, err = testStore.GetTimeEntry(ctx, user.ID, *longStarted.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 15*60_000 {
-		t.Fatalf("expected 15 minutes paused past the cap, got %d", entry.PausedMs)
+	if *resumed.TimeEntryID == *longStarted.TimeEntryID {
+		t.Fatal("time past the tool cap must start a new entry")
+	}
+	wantStoppedAt := agentBaseMs + 60_000 + testPolicy.ToolMaxMs
+	if entry.StoppedAt == nil || *entry.StoppedAt != wantStoppedAt {
+		t.Fatalf("expected the first entry capped at %d, got %+v", wantStoppedAt, entry)
 	}
 }
 
@@ -587,11 +788,45 @@ func TestAgentResumeDoesNotPauseBilledTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 0 {
-		t.Fatalf("a one minute resume gap is under the idle threshold, paused %d", entry.PausedMs)
-	}
 	if entry.StoppedAt != nil {
 		t.Fatalf("the entry must be running again: %+v", entry)
+	}
+}
+
+func TestAgentResumeAfterPauseStartsNewEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-resume-pause@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	endedAt := agentBaseMs + 5*60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, endedAt)
+	testStop(t, testStore, user.ID, sessionID, endedAt, "prompt_input_exit")
+
+	resumedAt := endedAt + testIdleMs + 1
+	resumed, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: resumedAt,
+	}, testPolicy)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if *resumed.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("resuming after a pause must start a new entry")
+	}
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get first entry: %v", err)
+	}
+	if first.StoppedAt == nil || *first.StoppedAt != endedAt {
+		t.Fatalf("the first entry must stay stopped before the pause: %+v", first)
+	}
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *resumed.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
+	}
+	if second.StartedAt != resumedAt || second.StoppedAt != nil {
+		t.Fatalf("the resumed entry must start after the pause: %+v", second)
 	}
 }
 
@@ -603,7 +838,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 	// UTC+3: local midnight is 21:00 UTC, so 23:30 -> 00:30 local crosses it.
 	offset := 180
 	sessionID := uuid.NewString()
-	evening := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC).UnixMilli()
+	evening := time.Date(2026, 7, 1, 20, 25, 0, 0, time.UTC).UnixMilli()
 	started, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
 		SessionID: sessionID, StartedAt: evening, TZOffsetMin: &offset,
 	}, testPolicy)
@@ -634,7 +869,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get second entry: %v", err)
 	}
-	if second.StartedAt != morning || second.PausedMs != 0 {
+	if second.StartedAt != morning {
 		t.Fatalf("unexpected morning entry: %+v", second)
 	}
 
@@ -649,7 +884,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 	}
 }
 
-func TestAgentUnknownTimezoneNeverSplits(t *testing.T) {
+func TestAgentIdleGapSplitsWithoutTimezone(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-notz@test.local")
 	ctx := context.Background()
@@ -657,39 +892,42 @@ func TestAgentUnknownTimezoneNeverSplits(t *testing.T) {
 	sessionID := uuid.NewString()
 	evening := time.Date(2026, 7, 1, 20, 30, 0, 0, time.UTC).UnixMilli()
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, evening)
+	lastEvening := evening + 60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, lastEvening)
 	morning := time.Date(2026, 7, 1, 21, 30, 0, 0, time.UTC).UnixMilli()
 	session := testHeartbeat(t, testStore, user.ID, sessionID, morning)
-	if *session.TimeEntryID != *started.TimeEntryID {
-		t.Fatal("without a known offset there is no local midnight to cut at")
+	if *session.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("an idle gap must split even without a known timezone")
 	}
 	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != morning-evening {
-		t.Fatalf("the whole gap must be paused, got %d", entry.PausedMs)
+	if entry.StoppedAt == nil || *entry.StoppedAt != lastEvening {
+		t.Fatalf("the first entry must stop before the pause: %+v", entry)
 	}
 }
 
-func TestAgentMaxPauseSplitsEntry(t *testing.T) {
+func TestAgentLongPauseSplitsEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-maxpause@test.local")
 	ctx := context.Background()
 
 	sessionID := uuid.NewString()
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// Longer than the maximum pause and with no timezone known: the
-	// timezone-independent guard has to cut the entry anyway.
-	afterNight := agentBaseMs + 5*60*60*1000
+	lastActive := agentBaseMs + 60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
+	// A long pause follows the same rule as every other idle gap.
+	afterNight := lastActive + 5*60*60*1000
 	session := testHeartbeat(t, testStore, user.ID, sessionID, afterNight)
 	if *session.TimeEntryID == *started.TimeEntryID {
-		t.Fatal("a pause longer than the maximum must open a new entry")
+		t.Fatal("a long pause must open a new entry")
 	}
 	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get first entry: %v", err)
 	}
-	if first.StoppedAt == nil || *first.StoppedAt != agentBaseMs {
+	if first.StoppedAt == nil || *first.StoppedAt != lastActive {
 		t.Fatalf("unexpected first entry: %+v", first)
 	}
 }
@@ -1001,8 +1239,7 @@ func TestAgentLateStopClosesAtWatermark(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 	testStop(t, testStore, user.ID, sessionID, lastActive+testIdleMs+1, "other")
 
-	// Work resumes: the session must pick its own entry back up rather than
-	// scatter the rest of the session over new rows.
+	// Work resumes inside the idle threshold, so it is still the same segment.
 	session := testHeartbeat(t, testStore, user.ID, sessionID, lastActive+60_000)
 	if *session.TimeEntryID != *started.TimeEntryID {
 		t.Fatal("the revived session must continue its own entry")
@@ -1276,8 +1513,10 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 
 	staleID := uuid.NewString()
 	stale := startWorkingTestAgentSession(t, testStore, user.ID, staleID, agentBaseMs)
+	lastActivity := agentBaseMs + 60_000
+	stale = testHeartbeat(t, testStore, user.ID, staleID, lastActivity)
 	freshID := uuid.NewString()
-	now := agentBaseMs + testGraceMs + 60_000
+	now := lastActivity + testGraceMs + 60_000
 	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{SessionID: freshID, StartedAt: now - 1000}, testPolicy); err != nil {
 		t.Fatalf("start fresh: %v", err)
 	}
@@ -1294,7 +1533,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get stale: %v", err)
 	}
-	if staleSession.Status != agentStatusClosed || *staleSession.EndedAt != agentBaseMs {
+	if staleSession.Status != agentStatusClosed || *staleSession.EndedAt != lastActivity {
 		t.Fatalf("unexpected stale session: %+v", staleSession)
 	}
 	if *staleSession.EndReason != AgentEndReasonStale {
@@ -1304,7 +1543,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.StoppedAt == nil || *entry.StoppedAt != agentBaseMs {
+	if entry.StoppedAt == nil || *entry.StoppedAt != lastActivity {
 		t.Fatalf("stale entry must stop at the last heartbeat, got %+v", entry)
 	}
 
@@ -1407,8 +1646,8 @@ func TestAgentStartValidatesProject(t *testing.T) {
 }
 
 // A project chosen mid-session has to reach the session row, not only the entry that
-// is running: the next entry - after a pause past the maximum, or a cut at the local
-// midnight - is opened from the session and would otherwise land under no project.
+// is running: the next entry after any pause is opened from the session and would
+// otherwise land under no project.
 func TestSetAgentSessionProjectCarriesToTheNextEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-session-project@test.local")
@@ -1449,6 +1688,347 @@ func TestSetAgentSessionProjectCarriesToTheNextEntry(t *testing.T) {
 	}
 }
 
+func TestSyncAcceptedCurrentEntryProjectCarriesToAgentSession(t *testing.T) {
+	testStore := openTestStore(t)
+	owner := testUser(t, testStore, "agent-sync-project@test.local")
+	intruder := testUser(t, testStore, "agent-sync-project-intruder@test.local")
+	ctx := t.Context()
+
+	firstProjectID := uuid.NewString()
+	secondProjectID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, owner.ID, SyncRequest{Changes: SyncChanges{
+		Projects: []Project{
+			{ID: firstProjectID, Name: "First", Color: "#123456", CreatedAt: 1, UpdatedAt: 1},
+			{ID: secondProjectID, Name: "Second", Color: "#654321", CreatedAt: 1, UpdatedAt: 1},
+		},
+	}}); err != nil {
+		t.Fatalf("create projects: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, owner.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, owner.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get current entry: %v", err)
+	}
+
+	accepted := entry
+	accepted.ProjectID = &firstProjectID
+	accepted.UpdatedAt++
+	if _, err := testStore.Sync(ctx, owner.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{accepted}},
+	}); err != nil {
+		t.Fatalf("push accepted project: %v", err)
+	}
+	session, err := testStore.GetAgentSession(ctx, owner.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after accepted project: %v", err)
+	}
+	if session.ProjectID == nil || *session.ProjectID != firstProjectID {
+		t.Fatalf("accepted project did not reach session: %+v", session)
+	}
+	if !session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("accepted project edit did not persist the outside-edit marker: %+v", session)
+	}
+
+	stale := entry
+	stale.ProjectID = &secondProjectID
+	if _, err := testStore.Sync(ctx, owner.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{stale}},
+	}); err != nil {
+		t.Fatalf("push stale project: %v", err)
+	}
+	session, err = testStore.GetAgentSession(ctx, owner.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after stale project: %v", err)
+	}
+	if session.ProjectID == nil || *session.ProjectID != firstProjectID {
+		t.Fatalf("refused LWW row changed session project: %+v", session)
+	}
+
+	// Make the first segment visible at the 30-second boundary, then prove the
+	// accepted project is what creates the next segment after idle.
+	lastActive := agentBaseMs + agentZeroMinuteMs
+	testHeartbeat(t, testStore, owner.ID, sessionID, lastActive)
+	resumedAt := lastActive + testIdleMs + 1
+	resumed := testHeartbeat(t, testStore, owner.ID, sessionID, resumedAt)
+	secondEntry, err := testStore.GetTimeEntry(ctx, owner.ID, *resumed.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get resumed entry: %v", err)
+	}
+	if secondEntry.ProjectID == nil || *secondEntry.ProjectID != firstProjectID {
+		t.Fatalf("next segment did not inherit accepted project: %+v", secondEntry)
+	}
+
+	// An accepted edit to an older segment is not allowed to retarget the session:
+	// only the entry currently named by time_entry_id owns future defaults.
+	oldEntry, err := testStore.GetTimeEntry(ctx, owner.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get old entry: %v", err)
+	}
+	oldEntry.ProjectID = &secondProjectID
+	oldEntry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, owner.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{oldEntry}},
+	}); err != nil {
+		t.Fatalf("push old segment project: %v", err)
+	}
+	session, err = testStore.GetAgentSession(ctx, owner.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after old segment edit: %v", err)
+	}
+	if session.ProjectID == nil || *session.ProjectID != firstProjectID {
+		t.Fatalf("old segment changed current session project: %+v", session)
+	}
+
+	// NULL is a real accepted value: clearing the current entry must clear the
+	// session and therefore the next segment as well.
+	secondEntry.ProjectID = nil
+	secondEntry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, owner.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{secondEntry}},
+	}); err != nil {
+		t.Fatalf("clear current project: %v", err)
+	}
+	session, err = testStore.GetAgentSession(ctx, owner.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after clearing project: %v", err)
+	}
+	if session.ProjectID != nil {
+		t.Fatalf("accepted null project did not clear session: %+v", session)
+	}
+
+	secondLastActive := resumedAt + agentZeroMinuteMs
+	testHeartbeat(t, testStore, owner.ID, sessionID, secondLastActive)
+	third := testHeartbeat(t, testStore, owner.ID, sessionID, secondLastActive+testIdleMs+1)
+	thirdEntry, err := testStore.GetTimeEntry(ctx, owner.ID, *third.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get segment after cleared project: %v", err)
+	}
+	if thirdEntry.ProjectID != nil {
+		t.Fatalf("segment after cleared project was filed unexpectedly: %+v", thirdEntry)
+	}
+
+	// A foreign account cannot claim the server-owned entry/session relationship.
+	foreign := thirdEntry
+	foreign.ProjectID = &secondProjectID
+	foreign.UpdatedAt++
+	if _, err := testStore.Sync(ctx, intruder.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{foreign}},
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("foreign project push returned %v, want ErrInvalidInput", err)
+	}
+	session, err = testStore.GetAgentSession(ctx, owner.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get owner session after foreign push: %v", err)
+	}
+	if session.ProjectID != nil {
+		t.Fatalf("foreign push changed owner session project: %+v", session)
+	}
+}
+
+func TestAcceptedAgentEntryEditsSurviveImmediateCloseResumeAndSecondShortStop(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*TimeEntry, string)
+		wantNamed bool
+		verify    func(*testing.T, TimeEntry, string)
+	}{
+		{
+			name: "project",
+			mutate: func(entry *TimeEntry, projectID string) {
+				entry.ProjectID = &projectID
+			},
+			verify: func(t *testing.T, entry TimeEntry, projectID string) {
+				if entry.ProjectID == nil || *entry.ProjectID != projectID {
+					t.Fatalf("project edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "tags",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.Tags = TagList{"review"}
+			},
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if !reflect.DeepEqual(entry.Tags, TagList{"review"}) {
+					t.Fatalf("tags edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "bounds",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.StartedAt = agentBaseMs - 1_000
+			},
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if entry.StartedAt != agentBaseMs-1_000 {
+					t.Fatalf("bounds edit was lost: %+v", entry)
+				}
+			},
+		},
+		{
+			name: "manual description",
+			mutate: func(entry *TimeEntry, _ string) {
+				entry.Description = "Reviewed short work"
+			},
+			wantNamed: true,
+			verify: func(t *testing.T, entry TimeEntry, _ string) {
+				if entry.Description != "Reviewed short work" {
+					t.Fatalf("manual description was lost: %+v", entry)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-durable-edit-"+strings.ReplaceAll(test.name, " ", "-")+"@test.local")
+			ctx := t.Context()
+			projectID := uuid.NewString()
+			if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{
+				Projects: []Project{{
+					ID: projectID, Name: "Durable", Color: "#123456", CreatedAt: 1, UpdatedAt: 1,
+				}},
+			}}); err != nil {
+				t.Fatalf("create project: %v", err)
+			}
+
+			sessionID := uuid.NewString()
+			started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+			if err != nil {
+				t.Fatalf("get running entry: %v", err)
+			}
+			test.mutate(&entry, projectID)
+			pushEntry(t, testStore, user.ID, entry)
+
+			editedSession, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+			if err != nil {
+				t.Fatalf("get session after edit: %v", err)
+			}
+			if !editedSession.EntryUserEdited || editedSession.EntryUserNamed != test.wantNamed {
+				t.Fatalf("outside-edit flags are not durable before heartbeat: %+v", editedSession)
+			}
+
+			firstStop := testStop(t, testStore, user.ID, sessionID, agentBaseMs+1_000, "session_end")
+			if !firstStop.EntryUserEdited || firstStop.EntryUserNamed != test.wantNamed {
+				t.Fatalf("close lost outside-edit flags: %+v", firstStop)
+			}
+			resumed := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+2_000)
+			if resumed.TimeEntryID == nil || *resumed.TimeEntryID != entry.ID || !resumed.EntryUserEdited {
+				t.Fatalf("resume did not adopt the edited row: %+v", resumed)
+			}
+			testStop(t, testStore, user.ID, sessionID, agentBaseMs+3_000, "session_end")
+
+			stored, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+			if err != nil {
+				t.Fatalf("second short stop discarded meaningful entry: %v", err)
+			}
+			test.verify(t, stored, projectID)
+		})
+	}
+}
+
+func TestRejectedStaleAgentEntryEditDoesNotMarkSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-stale-edit-marker@test.local")
+	ctx := t.Context()
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get running entry: %v", err)
+	}
+	entry.Tags = TagList{"stale"}
+	entry.UpdatedAt--
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{entry}},
+	}); err != nil {
+		t.Fatalf("push stale edit: %v", err)
+	}
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after stale edit: %v", err)
+	}
+	if session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("rejected stale edit marked the session: %+v", session)
+	}
+
+	testStop(t, testStore, user.ID, sessionID, agentBaseMs+1_000, "session_end")
+	if _, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale edit unexpectedly protected technical row: %v", err)
+	}
+}
+
+func TestSyncAgentProjectPropagationIsAtomicWithEntryUpsert(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-sync-project-atomic@test.local")
+	ctx := t.Context()
+	projectID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{
+		Projects: []Project{{
+			ID: projectID, Name: "Atomic", Color: "#123456", CreatedAt: 1, UpdatedAt: 1,
+		}},
+	}}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get current entry: %v", err)
+	}
+	var beforeSeq int64
+	if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&beforeSeq); err != nil {
+		t.Fatalf("read cursor: %v", err)
+	}
+
+	if _, err := testStore.db.Exec(`
+		CREATE TRIGGER reject_agent_project
+		BEFORE UPDATE OF project_id ON agent_sessions
+		WHEN NEW.id = '` + sessionID + `'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced propagation failure');
+		END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	entry.ProjectID = &projectID
+	entry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{
+		Changes: SyncChanges{TimeEntries: []TimeEntry{entry}},
+	}); err == nil {
+		t.Fatal("sync succeeded despite forced session propagation failure")
+	}
+
+	stored, err := testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry after rollback: %v", err)
+	}
+	if stored.ProjectID != nil {
+		t.Fatalf("entry upsert escaped failed propagation transaction: %+v", stored)
+	}
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get session after rollback: %v", err)
+	}
+	if session.ProjectID != nil {
+		t.Fatalf("session project changed despite rollback: %+v", session)
+	}
+	if session.EntryUserEdited || session.EntryUserNamed {
+		t.Fatalf("outside-edit markers changed despite rollback: %+v", session)
+	}
+	var afterSeq int64
+	if err := testStore.db.QueryRow("SELECT seq FROM sync_state").Scan(&afterSeq); err != nil {
+		t.Fatalf("read cursor after rollback: %v", err)
+	}
+	if afterSeq != beforeSeq {
+		t.Fatalf("failed propagation advanced cursor from %d to %d", beforeSeq, afterSeq)
+	}
+}
+
 func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-task@test.local")
@@ -1456,10 +2036,11 @@ func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 
 	sessionID := uuid.NewString()
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// A pause past the maximum leaves the session with two entries; both belong
-	// to the same task, and half the work would keep the technical name if only
-	// the current entry were renamed.
-	afterIdle := agentBaseMs + 5*60*60*1000
+	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	// A pause leaves the session with two entries; both belong to the same task,
+	// and half the work would keep the technical name if only the current entry
+	// were renamed.
+	afterIdle := agentBaseMs + 60_000 + 5*60*60*1000
 	second := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
 	if *second.TimeEntryID == *started.TimeEntryID {
 		t.Fatal("expected two segments for this test")

@@ -1,4 +1,4 @@
-import { expect, pushBarrier, seedServer, test } from "./fixtures";
+import { expect, pushBarrier, seedServer, test, triggerSync } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 function runningCard(page: Page) {
@@ -183,5 +183,463 @@ test.describe("entry editing", () => {
     const chips = entryRow(page, "tag me").locator(".tags");
     await expect(chips.locator(".tag").first()).toHaveText("development");
     await expect(chips.locator(".tag").nth(1)).toHaveText("+1");
+  });
+
+  test("one tags-only draft supports several changes without remounting the picker", async ({ page, request, server }) => {
+    const projectID = crypto.randomUUID();
+    const startedAt = todayAt(9, 0);
+    const stoppedAt = todayAt(10, 0);
+    await seedServer(server.url, {
+      projects: [{ id: projectID, name: "Backend" }],
+      entries: [{ description: "quick tags", startedAt, stoppedAt, projectID }],
+    });
+    await page.goto(server.url + "/#/");
+
+    const row = entryRow(page, "quick tags");
+    const trigger = row.getByRole("button", { name: "Add tags" });
+    await expect(trigger).toBeVisible();
+    await expect(trigger.locator("svg")).toHaveCount(1);
+    await expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    const touchTarget = await trigger.boundingBox();
+    expect(touchTarget?.width).toBeGreaterThanOrEqual(32);
+    expect(touchTarget?.height).toBeGreaterThanOrEqual(32);
+
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toBeFocused();
+
+    await trigger.click();
+    await expect(page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "review", exact: true }).click();
+    const startInput = page.getByPlaceholder("What are you working on?");
+    await startInput.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(startInput).toBeFocused();
+
+    await trigger.click();
+    let tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await tagsMenu.getByRole("button", { name: "analysis", exact: true }).click();
+    await tagsMenu.getByRole("button", { name: "Cancel" }).click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toBeFocused();
+
+    await trigger.click();
+    tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await expect(tagsMenu.getByRole("button", { name: "analysis", exact: true })).toHaveAttribute("aria-pressed", "false");
+
+    // The draft is local until Save, so changing grouping metadata cannot
+    // remount the row halfway through a multi-select interaction.
+    await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
+    await expect(tagsMenu).toBeVisible();
+    await tagsMenu.getByRole("button", { name: "review", exact: true }).click();
+    await expect(tagsMenu).toBeVisible();
+    await expect(tagsMenu.getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+    await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
+    await expect(tagsMenu).toBeVisible();
+    await tagsMenu.getByLabel("Tags").fill("focus");
+    await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    await expect(tagsMenu).toBeVisible();
+    const focusOption = tagsMenu.getByRole("button", { name: "focus", exact: true });
+    await expect(focusOption).toHaveAttribute("aria-pressed", "true");
+    await focusOption.click();
+    await expect(focusOption).toHaveCount(0);
+    await tagsMenu.getByLabel("Tags").fill("focus");
+    await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    await expect(tagsMenu.getByRole("button", { name: "focus", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+    const focusCreated = pushBarrier(page, '"focus","review"');
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
+    await focusCreated;
+    await expect(tagsMenu).toHaveCount(0);
+    const savedTrigger = row.getByRole("button", { name: "Edit tags" });
+    await expect(savedTrigger).toBeVisible();
+    await expect(savedTrigger).toBeFocused();
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "quick tags",
+    );
+    expect(synced).toMatchObject({
+      description: "quick tags",
+      project_id: projectID,
+      started_at: startedAt,
+      stopped_at: stoppedAt,
+      tags: ["focus", "review"],
+    });
+  });
+
+  test("a failed tags-only write rolls back safely and accepts external and later changes", async ({ page, request, server }) => {
+    await seedServer(server.url, {
+      entries: [{ description: "recover tags", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+
+    // Inject one synchronous object-store failure: updateEntry rejects exactly
+    // as it would when the local database cannot accept the transaction.
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextTimeEntryPut: boolean };
+      faultWindow.failNextTimeEntryPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextTimeEntryPut && this.name === "time_entries") {
+          faultWindow.failNextTimeEntryPut = false;
+          throw new Error("injected IndexedDB write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "recover tags");
+    const addTrigger = row.getByRole("button", { name: "Add tags" });
+    await addTrigger.click();
+    await page.evaluate(() => {
+      (window as typeof window & { failNextTimeEntryPut: boolean }).failNextTimeEntryPut = true;
+    });
+    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
+    await expect(tagsMenu).toBeVisible();
+    await expect(tagsMenu.getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await page.waitForTimeout(50);
+    expect(pageErrors).toEqual([]);
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const serverEntry = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "recover tags",
+    );
+    const externalUpdate = {
+      id: serverEntry.id,
+      project_id: serverEntry.project_id,
+      description: serverEntry.description,
+      tags: ["review"],
+      started_at: serverEntry.started_at,
+      stopped_at: serverEntry.stopped_at,
+      created_at: serverEntry.created_at,
+      updated_at: serverEntry.updated_at + 10_000,
+      deleted_at: null,
+    };
+    await request.post(server.url + "/api/sync", {
+      data: { since: 0, changes: { time_entries: [externalUpdate] } },
+    });
+    await triggerSync(page);
+
+    // External grouping metadata legitimately remounts the keyed row. Reopen
+    // after that external replacement; the new component must reflect it.
+    await expect(tagsMenu).toHaveCount(0);
+    await row.getByRole("button", { name: "Edit tags" }).click();
+    await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await tagsMenu.getByLabel("Tags").fill("focus");
+    await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    const pushed = pushBarrier(page, '"focus","review"');
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
+    await pushed;
+
+    const finalPull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const finalEntry = (await finalPull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "recover tags",
+    );
+    expect(finalEntry.tags).toEqual(["focus", "review"]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("project quick editing excludes archived choices but keeps the current archived project", async ({ page, request, server }) => {
+    const activeID = crypto.randomUUID();
+    const archivedID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [
+        { id: activeID, name: "Active project" },
+        { id: archivedID, name: "Archived project", archived: true },
+      ],
+      entries: [
+        { description: "move project", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) },
+        { description: "archived current", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0), projectID: archivedID },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const archivedRow = entryRow(page, "archived current");
+    await expect(archivedRow.getByRole("combobox", { name: "Edit project" })).toHaveText("Archived project");
+
+    const row = entryRow(page, "move project");
+    const projectTrigger = row.getByRole("combobox", { name: "Edit project" });
+    await expect(projectTrigger).toHaveAttribute("aria-haspopup", "listbox");
+    await expect(projectTrigger).toHaveAttribute("aria-expanded", "false");
+    await projectTrigger.click();
+    await page.keyboard.press("Escape");
+    await expect(projectTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(projectTrigger).toBeFocused();
+
+    await projectTrigger.click();
+    const startInput = page.getByPlaceholder("What are you working on?");
+    await startInput.click();
+    await expect(projectTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(startInput).toBeFocused();
+
+    await projectTrigger.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(row.getByRole("option", { name: /Archived project/ })).toHaveCount(0);
+    const initialActiveID = await projectTrigger.getAttribute("aria-activedescendant");
+    expect(initialActiveID).not.toBeNull();
+    await expect(page.locator(`[id="${initialActiveID}"]`)).toHaveText("No project");
+
+    await page.keyboard.press("ArrowDown");
+    const nextActiveID = await projectTrigger.getAttribute("aria-activedescendant");
+    expect(nextActiveID).not.toBe(initialActiveID);
+    const activeOption = page.locator(`[id="${nextActiveID}"]`);
+    await expect(activeOption).toContainText("Active project");
+    await expect(activeOption).toHaveClass(/active/);
+    await expect(activeOption).toHaveAttribute("aria-selected", "false");
+
+    const pushed = pushBarrier(page, activeID);
+    await page.keyboard.press("Enter");
+    await pushed;
+    const replacementTrigger = entryRow(page, "move project").getByRole("combobox", { name: "Edit project" });
+    await expect(replacementTrigger).toHaveText("Active project");
+    await expect(replacementTrigger).toBeFocused();
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "move project",
+    );
+    expect(synced).toMatchObject({
+      description: "move project",
+      project_id: activeID,
+      started_at: todayAt(9, 0),
+      stopped_at: todayAt(10, 0),
+      tags: [],
+    });
+  });
+
+  test("project pointer selection focuses the exact replacement row after regrouping", async ({ page, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Focus destination" }],
+      entries: [
+        { description: "first project row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) },
+        { description: "second project row", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0) },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const first = entryRow(page, "first project row");
+    const second = entryRow(page, "second project row");
+    await first.getByRole("combobox", { name: "Edit project" }).click();
+    const pushed = pushBarrier(page, activeID);
+    await first.getByRole("option", { name: "Focus destination" }).click();
+    await pushed;
+
+    await expect(entryRow(page, "first project row").getByRole("combobox", { name: "Edit project" })).toBeFocused();
+    await expect(second.getByRole("combobox", { name: "Edit project" })).not.toBeFocused();
+  });
+
+  test("project quick editing survives a local write failure without an unhandled error", async ({ page, request, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Retry project" }],
+      entries: [{ description: "retry project row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextProjectEntryPut: boolean };
+      faultWindow.failNextProjectEntryPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextProjectEntryPut && this.name === "time_entries") {
+          faultWindow.failNextProjectEntryPut = false;
+          throw new Error("injected project IndexedDB write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "retry project row");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.click();
+    await page.evaluate(() => {
+      (window as typeof window & { failNextProjectEntryPut: boolean }).failNextProjectEntryPut = true;
+    });
+    const retryOption = row.getByRole("option", { name: "Retry project" });
+    await retryOption.click();
+    await expect(retryOption).toBeVisible();
+    await expect(row.getByRole("listbox", { name: "Project" })).toHaveAttribute("aria-busy", "false");
+    await expect(row.getByRole("option", { name: "No project" })).toHaveClass(/active/);
+    await expect(trigger).toBeFocused();
+    expect(pageErrors).toEqual([]);
+
+    const pushed = pushBarrier(page, activeID);
+    await retryOption.click();
+    await pushed;
+    const replacement = entryRow(page, "retry project row").getByRole("combobox", { name: "Edit project" });
+    await expect(replacement).toHaveText("Retry project");
+    await expect(replacement).toBeFocused();
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "retry project row",
+    );
+    expect(synced.project_id).toBe(activeID);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("a rejected keyboard project write restores the open combobox for retry", async ({ page, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Keyboard retry" }],
+      entries: [{ description: "keyboard retry row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextKeyboardProjectPut: boolean };
+      faultWindow.failNextKeyboardProjectPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextKeyboardProjectPut && this.name === "time_entries") {
+          faultWindow.failNextKeyboardProjectPut = false;
+          throw new Error("injected keyboard project write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "keyboard retry row");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.evaluate(() => {
+      (window as typeof window & { failNextKeyboardProjectPut: boolean }).failNextKeyboardProjectPut = true;
+    });
+    await page.keyboard.press("Enter");
+
+    const menu = row.getByRole("listbox", { name: "Project" });
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute("aria-busy", "false");
+    await expect(trigger).toBeFocused();
+    const activeDescendant = await trigger.getAttribute("aria-activedescendant");
+    expect(activeDescendant).not.toBeNull();
+    await expect(page.locator(`[id="${activeDescendant}"]`)).toHaveText("No project");
+    expect(pageErrors).toEqual([]);
+
+    await page.keyboard.press("ArrowDown");
+    const pushed = pushBarrier(page, activeID);
+    await page.keyboard.press("Enter");
+    await pushed;
+    const replacement = entryRow(page, "keyboard retry row").getByRole("combobox", { name: "Edit project" });
+    await expect(replacement).toHaveText("Keyboard retry");
+    await expect(replacement).toBeFocused();
+    expect(pageErrors).toEqual([]);
+  });
+
+  for (const interaction of ["pointer", "keyboard"] as const) {
+    test(`project ${interaction} merge uses the locale-independent focus fallback`, async ({ page, server }) => {
+      const projectID = crypto.randomUUID();
+      await seedServer(server.url, {
+        projects: [{ id: projectID, name: "Общий проект" }],
+        entries: [
+          { description: "одинаковая задача", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0), projectID },
+          { description: "одинаковая задача", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0) },
+        ],
+      });
+      await page.goto(server.url + "/#/settings");
+      await page.getByLabel("Language").selectOption("ru");
+      await page.goto(server.url + "/#/");
+
+      const unassigned = page.locator(".item").filter({ hasText: "Без проекта" });
+      const trigger = unassigned.getByRole("combobox", { name: "Изменить проект" });
+      const pushed = pushBarrier(page, projectID);
+      if (interaction === "pointer") {
+        await trigger.click();
+        await unassigned.getByRole("option", { name: "Общий проект" }).click();
+      } else {
+        await trigger.focus();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+      }
+      await pushed;
+
+      await expect(page.locator(".item").filter({ hasText: "одинаковая задача" })).toHaveCount(0);
+      const startCombobox = page.locator('form.card.row input[role="combobox"]');
+      await expect(startCombobox).toHaveAttribute("placeholder", "Над чем работаешь?");
+      await expect(startCombobox).toBeFocused();
+    });
+  }
+
+  test("project active descendant remains valid when sync removes its option", async ({ page, request, server }) => {
+    const currentID = crypto.randomUUID();
+    const removedID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [
+        { id: currentID, name: "Current project" },
+        { id: removedID, name: "Removed remotely" },
+      ],
+      entries: [{ description: "live project options", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0), projectID: currentID }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+
+    const row = entryRow(page, "live project options");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const removedOption = row.getByRole("option", { name: "Removed remotely" });
+    await expect(removedOption).toHaveClass(/active/);
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const remoteProject = (await pull.json()).changes.projects.find((project: { id: string }) => project.id === removedID);
+    await request.post(server.url + "/api/sync", {
+      data: {
+        since: 0,
+        changes: {
+          projects: [{
+            id: remoteProject.id,
+            name: remoteProject.name,
+            color: remoteProject.color,
+            archived: remoteProject.archived,
+            created_at: remoteProject.created_at,
+            updated_at: remoteProject.updated_at + 10_000,
+            deleted_at: remoteProject.updated_at + 10_000,
+          }],
+        },
+      },
+    });
+    await triggerSync(page);
+
+    await expect(removedOption).toHaveCount(0);
+    const activeDescendant = await trigger.getAttribute("aria-activedescendant");
+    expect(activeDescendant).not.toBeNull();
+    await expect(page.locator(`[id="${activeDescendant}"]`)).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("clicking the modal backdrop closes the editor without breaking its own controls", async ({ page, server }) => {
+    await seedServer(server.url, {
+      entries: [{ description: "backdrop target", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    await page.goto(server.url + "/#/");
+
+    await entryRow(page, "backdrop target").locator(".desc").click();
+    const dialog = editorDialog(page);
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Description").click();
+    await expect(dialog).toBeVisible();
+
+    await page.mouse.click(4, 4);
+    await expect(dialog).toHaveCount(0);
   });
 });

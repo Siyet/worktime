@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { descriptionKey, entryDurationMs, sessionTag } from "./format";
+import { descriptionKey, displayEntryDescription, entryDurationMs, sessionTag } from "./format";
 import type { TimeEntry } from "./types";
 
 function makeEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
@@ -32,6 +32,18 @@ describe("descriptionKey", () => {
   });
 });
 
+describe("displayEntryDescription", () => {
+  it("keeps technical session identifiers out of entry lists", () => {
+    const sessionID = "01a03f80-1234-5678-9abc-def012345678";
+    expect(displayEntryDescription({ description: "Codex #01a03f80", agent_session_id: sessionID })).toBe("Codex");
+    expect(displayEntryDescription({ description: "WT-1 Real task", agent_session_id: sessionID })).toBe("WT-1 Real task");
+  });
+
+  it("does not strip text from ordinary entries", () => {
+    expect(displayEntryDescription({ description: "Codex #01a03f80", agent_session_id: null })).toBe("Codex #01a03f80");
+  });
+});
+
 describe("entryDurationMs", () => {
   it("measures a finished entry by its own boundaries", () => {
     expect(entryDurationMs(makeEntry(), 9_999_999)).toBe(60_000);
@@ -43,15 +55,6 @@ describe("entryDurationMs", () => {
 
   it("never goes negative on a hand-edited boundary", () => {
     expect(entryDurationMs(makeEntry({ stopped_at: 999_000 }), 0)).toBe(0);
-  });
-
-  it("subtracts the idle time an agent session recorded", () => {
-    expect(entryDurationMs(makeEntry({ paused_ms: 20_000 }), 0)).toBe(40_000);
-    expect(entryDurationMs(makeEntry({ stopped_at: null, paused_ms: 10_000 }), 1_030_000)).toBe(20_000);
-  });
-
-  it("clamps a pause larger than the interval a hand-edited boundary left", () => {
-    expect(entryDurationMs(makeEntry({ paused_ms: 999_999 }), 0)).toBe(0);
   });
 });
 

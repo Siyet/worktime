@@ -2,13 +2,10 @@ import { formattingLocale, hourCycle, prefs } from "./settings.svelte";
 import type { TimeEntry } from "./types";
 
 // The one place that knows what an entry's duration is. Running entries are
-// measured against `now`, which is what makes offline timers work at all.
-// paused_ms is idle time inside the interval that must not be billed; entries
-// written before it existed simply have none. It is clamped to the span, so a
+// measured against `now`, which is what makes offline timers work at all. A
 // hand-edited boundary can never produce a negative duration.
 export function entryDurationMs(entry: TimeEntry, now: number): number {
-  const span = Math.max(0, (entry.stopped_at ?? now) - entry.started_at);
-  return Math.max(0, span - Math.min(entry.paused_ms ?? 0, span));
+  return Math.max(0, (entry.stopped_at ?? now) - entry.started_at);
 }
 
 // Two spellings of the same task must not read as two tasks. Same argument as
@@ -21,6 +18,18 @@ export function descriptionKey(description: string): string {
 // entry name before the task is known (AgentSessionTag in internal/store).
 export function sessionTag(sessionID: string): string {
   return sessionID.replaceAll("-", "").slice(0, 8).toLowerCase();
+}
+
+// The technical suffix identifies the producing agent session, not the user's
+// work. Lists show the source label; the full identifier remains in the editor.
+export function displayEntryDescription(entry: Pick<TimeEntry, "description" | "agent_session_id">): string {
+  if (entry.agent_session_id) {
+    const suffix = ` #${sessionTag(entry.agent_session_id)}`;
+    if (entry.description.toLowerCase().endsWith(suffix)) {
+      return entry.description.slice(0, -suffix.length).trim();
+    }
+  }
+  return entry.description;
 }
 
 export function formatDuration(ms: number): string {

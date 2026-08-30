@@ -14,7 +14,17 @@
 
   let filter = $state("");
 
-  const catalogue = $derived(tagCatalogue());
+  const catalogue = $derived.by(() => {
+    const byName = new Map(tagCatalogue().map((tag) => [tag.name, tag] as const));
+    // A tag created in a local editor draft is not in appState yet. Keep every
+    // selected value in the option set so it can be toggled off before Save.
+    for (const name of selected) {
+      if (!byName.has(name)) byName.set(name, { name, count: 0 });
+    }
+    return [...byName.values()].sort(
+      (left, right) => right.count - left.count || left.name.localeCompare(right.name),
+    );
+  });
   const query = $derived(normaliseTag(filter));
   const visible = $derived(query === "" ? catalogue : catalogue.filter((tag) => tag.name.includes(query)));
   // Matching is case-insensitive through normaliseTag, so typing "Review" toggles the

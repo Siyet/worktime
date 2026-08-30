@@ -11,18 +11,20 @@
   import { deleteEntryWithUndo } from "../lib/state/undo.svelte";
   import {
     entryDurationMs,
+    displayEntryDescription,
     formatDay,
     formatDuration,
     formatDurationShort,
     formatTime,
     localDateISO,
-    sessionTag,
   } from "../lib/format";
   import { groupDayEntries, suggestionWindowStart, taskSuggestions, wallClockMs, type TaskGroup } from "../lib/tasks";
   import { t } from "../lib/i18n";
   import { maxTextLength } from "../lib/limits";
   import DescriptionInput from "../lib/components/DescriptionInput.svelte";
   import EntryEditor from "../lib/components/EntryEditor.svelte";
+  import EntryProjectMenu from "../lib/components/EntryProjectMenu.svelte";
+  import EntryTagsMenu from "../lib/components/EntryTagsMenu.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
   import RowMenu from "../lib/components/RowMenu.svelte";
   import TagChips from "../lib/components/TagChips.svelte";
@@ -122,16 +124,6 @@
     void startTimer(group.description, group.projectID, [...group.tags]);
   }
 
-  function entrySessionTag(entry: TimeEntry): string {
-    return entry.agent_session_id ? `#${sessionTag(entry.agent_session_id)}` : "";
-  }
-
-  // The distinct agent sessions inside a group. Three fit; beyond that the row
-  // would be a wall of hex, so the rest become a counter.
-  function groupSessionTags(group: TaskGroup): string[] {
-    const tags = [...new Set(group.entries.map(entrySessionTag).filter((tag) => tag !== ""))];
-    return tags.length > 3 ? [...tags.slice(0, 3), `+${tags.length - 3}`] : tags;
-  }
 </script>
 
 <!-- The dial marks a wall-clock reading, so the two numbers next to each other
@@ -153,29 +145,20 @@
      both the look and every existing selector intact. -->
 {#snippet entryRow(entry: TimeEntry, member: boolean)}
   {@const project = projectByID(entry.project_id)}
-  {@const tag = entrySessionTag(entry)}
   <div class="row item" class:member>
     <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
     <span class="main">
-      <!-- Inside a group the description, the project and the tags are the same
-           on every member by construction - that is what made them a group. So a
-           member shows what actually differs: which session it came from, and
-           when. The full description stays one hover away. -->
       <button
         type="button"
         class="desc"
-        class:session={member && tag !== ""}
-        title={member ? entry.description : undefined}
         onclick={() => (editingID = entry.id)}
       >
-        {member && tag !== "" ? tag : entry.description || t("(no description)")}
+        {displayEntryDescription(entry) || t("(no description)")}
       </button>
-      {#if !member}
-        <span class="meta muted">
-          {#if project}<span class="proj">{project.name}</span>{/if}
-          <TagChips tags={entryTags(entry)} />
-        </span>
-      {/if}
+      <span class="meta muted">
+        <EntryProjectMenu entryID={entry.id} projectID={entry.project_id} />
+        <EntryTagsMenu entryID={entry.id} tags={entryTags(entry)} />
+      </span>
     </span>
     {#if entry.stopped_at === null}
       <span class="when">
@@ -207,8 +190,8 @@
   {@const project = projectByID(group.projectID)}
   {@const listID = `g-${dayISO}-${index}`}
   {@const shown = isExpanded(dayISO, group)}
-  {@const sessions = groupSessionTags(group)}
   {@const countLabel = t("{n} entries", { n: group.entries.length })}
+  {@const displayedGroupDescription = displayEntryDescription(group.entries[0]!)}
   <!-- A running group is already this task, right now: repeating it would only
        add a second timer for the same work. -->
   {@const repeatable = group.lastStoppedAt !== null}
@@ -235,7 +218,7 @@
       <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
       <span class="main">
         <span class="desc-line">
-          <span class="desc-static">{group.description || t("(no description)")}</span>
+          <span class="desc-static">{displayedGroupDescription || t("(no description)")}</span>
           <!-- Stacked lines plus the number: "several rows live here" without a
                noun, which no plural rule can then get wrong. -->
           <span class="count" title={countLabel}>
@@ -249,9 +232,6 @@
         <span class="meta muted">
           {#if project}<span class="proj">{project.name}</span>{/if}
           <TagChips tags={group.tags} />
-          <!-- Which agent sessions are inside, so "one task worked twice in
-               parallel" is visible without unfolding. -->
-          {#if sessions.length > 0}<span class="sessions">{sessions.join(" ")}</span>{/if}
           {#if group.wallMs !== group.totalMs}
             <!-- Two hours of tracked time inside one hour of wall clock reads as a
                  mistake without the second number; the dial says which of the two
@@ -283,7 +263,7 @@
       <!-- "Repeat", not "Start again": Playwright matches an accessible name by
            substring, and every spec that clicks the form's Start button would
            then hit this one too. -->
-      {@const repeatLabel = t("Repeat {task}", { task: group.description })}
+      {@const repeatLabel = t("Repeat {task}", { task: displayedGroupDescription })}
       <button type="button" class="kebab icon repeat" aria-label={repeatLabel} title={repeatLabel} onclick={() => repeatGroup(group)}>
         <svg
           width="15"
@@ -519,18 +499,6 @@
   .count svg {
     display: block;
     color: var(--accent);
-  }
-
-  .sessions {
-    font-family: var(--mono);
-    font-size: 0.75rem;
-    white-space: nowrap;
-  }
-
-  .desc.session {
-    font-family: var(--mono);
-    font-size: 0.9rem;
-    color: var(--text-dim);
   }
 
   /* Stands in for the kebab the summary row does not have, so both columns of

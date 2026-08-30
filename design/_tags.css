@@ -8,9 +8,8 @@
 /* --- tag chip --------------------------------------------------------------
    One neutral treatment. Hue in an entry row already means "project" (15 of
    them, user-picked), and teal/purple/danger already mean vacation/dayoff/sick
-   on Time off. A tag is read, not decoded. Transparent fill so the chip keeps
-   the contrast of whatever surface it sits on (text-dim on --surface is 6.8:1
-   dark / 4.75:1 light - AA for 12px text; a tinted fill would drop it under). */
+   on Time off. A restrained accent tint makes tags easier to find without
+   turning them into another project-colour channel. */
 .tag {
   display: inline-block;
   max-width: 9rem;
@@ -19,10 +18,10 @@
   white-space: nowrap;
   vertical-align: baseline;
   padding: 0.05rem 0.45rem;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
   border-radius: 999px;
-  background: transparent;
-  color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
   font-size: 0.8rem;
   line-height: 1.45;
 }

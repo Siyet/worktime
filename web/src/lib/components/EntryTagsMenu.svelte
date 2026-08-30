@@ -4,7 +4,6 @@
   import { t } from "../i18n";
   import TagChips from "./TagChips.svelte";
   import TagPicker from "./TagPicker.svelte";
-  import { TagWriteQueue } from "./tag-write-queue.svelte";
 
   interface Props {
     entryID: string;
@@ -15,36 +14,72 @@
   let open = $state(false);
   let root = $state<HTMLElement | null>(null);
   let triggerElement = $state<HTMLButtonElement | null>(null);
-  const tagWrites = new TagWriteQueue(
-    untrack(() => [...tags]),
-    () => [...tags],
-    (nextTags) => updateEntry(entryID, { tags: nextTags }),
-  );
+  let draftTags = $state(untrack(() => [...tags]));
+  let baselineTags = $state(untrack(() => [...tags]));
+  let saving = $state(false);
   const uid = $props.id();
   const menuID = `${uid}-entry-tags-menu`;
 
+  function tagsEqual(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((tag, index) => tag === right[index]);
+  }
+
   $effect(() => {
-    tagWrites.reconcile(tags);
+    const incomingTags = [...tags];
+    if (open && !tagsEqual(draftTags, baselineTags)) return;
+    if (!tagsEqual(draftTags, incomingTags)) draftTags = incomingTags;
+    if (!tagsEqual(baselineTags, incomingTags)) baselineTags = incomingTags;
   });
 
-  function closeMenu(restoreFocus = false): void {
+  function openMenu(): void {
+    draftTags = [...tags];
+    baselineTags = [...tags];
+    open = true;
+  }
+
+  function cancelMenu(restoreFocus = false): void {
     if (!open) return;
     open = false;
+    draftTags = [...tags];
+    baselineTags = [...tags];
     if (restoreFocus) queueMicrotask(() => triggerElement?.focus());
   }
 
   function change(nextTags: string[]): void {
-    void tagWrites.change(nextTags);
+    draftTags = [...nextTags];
+  }
+
+  async function saveMenu(): Promise<void> {
+    if (saving) return;
+    if (tagsEqual(draftTags, tags)) {
+      cancelMenu();
+      return;
+    }
+    saving = true;
+    try {
+      await updateEntry(entryID, { tags: [...draftTags] });
+      open = false;
+    } catch {
+      // Keep the picker open after a storage failure, but discard a draft that
+      // was never persisted. External changes remain the source of truth and a
+      // subsequent user edit can be saved normally.
+      draftTags = [...tags];
+      baselineTags = [...tags];
+    } finally {
+      saving = false;
+    }
   }
 
   function onDocumentClick(event: MouseEvent): void {
-    if (open && root && !root.contains(event.target as Node)) closeMenu();
+    // A create-tag click removes its own button before the event bubbles to the
+    // document. composedPath still records that the click originated inside.
+    if (open && root && !event.composedPath().includes(root)) cancelMenu();
   }
 
   function onDocumentKeydown(event: KeyboardEvent): void {
     if (open && event.key === "Escape") {
       event.preventDefault();
-      closeMenu(true);
+      cancelMenu(true);
     }
   }
 </script>
@@ -56,15 +91,16 @@
     bind:this={triggerElement}
     type="button"
     class="entry-tags-trigger"
-    class:empty={tagWrites.draftTags.length === 0}
-    aria-label={t(tagWrites.draftTags.length === 0 ? "Add tags" : "Edit tags")}
+    class:empty={tags.length === 0}
+    aria-label={t(tags.length === 0 ? "Add tags" : "Edit tags")}
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-controls={menuID}
-    onclick={() => (open = !open)}
+    disabled={saving}
+    onclick={() => (open ? cancelMenu() : openMenu())}
   >
-    {#if tagWrites.draftTags.length > 0}
-      <TagChips tags={tagWrites.draftTags} />
+    {#if tags.length > 0}
+      <TagChips {tags} />
     {:else}
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M20.6 13.6 11 23.2 1.8 14V1.8H14l6.6 6.6a3.7 3.7 0 0 1 0 5.2Z" /><circle cx="7" cy="7" r="1.4" />
@@ -73,7 +109,11 @@
   </button>
   {#if open}
     <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")}>
-      <TagPicker selected={tagWrites.draftTags} onchange={change} />
+      <TagPicker selected={draftTags} onchange={change} />
+      <span class="menu-actions">
+        <button type="button" onclick={() => cancelMenu()} disabled={saving}>{t("Cancel")}</button>
+        <button type="button" class="primary" onclick={() => void saveMenu()} disabled={saving}>{t("Save")}</button>
+      </span>
     </span>
   {/if}
 </span>
@@ -125,6 +165,17 @@
     background: var(--surface);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     z-index: 8;
+  }
+
+  .menu-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
+  }
+
+  .menu-actions button {
+    min-width: 4.5rem;
   }
 
   @media (max-width: 34rem) {

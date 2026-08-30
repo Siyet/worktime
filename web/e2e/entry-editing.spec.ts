@@ -185,7 +185,7 @@ test.describe("entry editing", () => {
     await expect(chips.locator(".tag").nth(1)).toHaveText("+1");
   });
 
-  test("rapid tags-only edits are coalesced without changing any other field", async ({ page, request, server }) => {
+  test("one tags-only draft supports several changes without remounting the picker", async ({ page, request, server }) => {
     const projectID = crypto.randomUUID();
     const startedAt = todayAt(9, 0);
     const stoppedAt = todayAt(10, 0);
@@ -207,50 +207,43 @@ test.describe("entry editing", () => {
 
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true }).click();
     await page.keyboard.press("Escape");
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(trigger).toBeFocused();
 
     await trigger.click();
+    await expect(page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "review", exact: true }).click();
     const startInput = page.getByPlaceholder("What are you working on?");
     await startInput.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(startInput).toBeFocused();
 
     await trigger.click();
-    let tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "false");
 
-    // Both clicks land before the first IndexedDB write refreshes the row. The
-    // component must derive the second toggle from its optimistic draft, not
-    // from the original empty props.
-    const bothAdded = pushBarrier(page, '"development","review"');
-    await tagsMenu.evaluate(async (menu) => {
-      const findTag = (name: string) =>
-        [...menu.querySelectorAll<HTMLButtonElement>("button.tag")].find((button) => button.textContent?.trim() === name);
-      findTag("development")?.click();
-      // Let Svelte publish the optimistic parent draft to TagPicker, but keep
-      // both clicks ahead of the asynchronous IndexedDB write and row regroup.
-      await Promise.resolve();
-      findTag("review")?.click();
-    });
-    await bothAdded;
-
-    const editTrigger = row.getByRole("button", { name: "Edit tags" });
-    await editTrigger.click();
-    tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    // The draft is local until Save, so changing grouping metadata cannot
+    // remount the row halfway through a multi-select interaction.
+    await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
+    await expect(tagsMenu).toBeVisible();
+    await tagsMenu.getByRole("button", { name: "review", exact: true }).click();
+    await expect(tagsMenu).toBeVisible();
     await expect(tagsMenu.getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "true");
 
-    const developmentRemoved = pushBarrier(page, '"review"');
     await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
-    await developmentRemoved;
-
-    await editTrigger.click();
-    tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await expect(tagsMenu).toBeVisible();
     await tagsMenu.getByLabel("Tags").fill("focus");
-    const focusCreated = pushBarrier(page, '"focus","review"');
     await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    await expect(tagsMenu).toBeVisible();
+
+    const focusCreated = pushBarrier(page, '"focus","review"');
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
     await focusCreated;
+    await expect(tagsMenu).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Edit tags" })).toBeVisible();
 
     const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
     const synced = (await pull.json()).changes.time_entries.find(
@@ -294,8 +287,11 @@ test.describe("entry editing", () => {
     await page.evaluate(() => {
       (window as typeof window & { failNextTimeEntryPut: boolean }).failNextTimeEntryPut = true;
     });
-    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true }).click();
-    await expect(addTrigger).toBeVisible();
+    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await tagsMenu.getByRole("button", { name: "development", exact: true }).click();
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
+    await expect(tagsMenu).toBeVisible();
+    await expect(tagsMenu.getByRole("button", { name: "development", exact: true })).toHaveAttribute("aria-pressed", "false");
     await page.waitForTimeout(50);
     expect(pageErrors).toEqual([]);
 
@@ -319,13 +315,15 @@ test.describe("entry editing", () => {
     });
     await triggerSync(page);
 
-    const editTrigger = row.getByRole("button", { name: "Edit tags" });
-    await expect(editTrigger).toContainText("review");
-    await editTrigger.click();
-    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    // External grouping metadata legitimately remounts the keyed row. Reopen
+    // after that external replacement; the new component must reflect it.
+    await expect(tagsMenu).toHaveCount(0);
+    await row.getByRole("button", { name: "Edit tags" }).click();
+    await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "true");
     await tagsMenu.getByLabel("Tags").fill("focus");
-    const pushed = pushBarrier(page, '"focus","review"');
     await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    const pushed = pushBarrier(page, '"focus","review"');
+    await tagsMenu.getByRole("button", { name: "Save" }).click();
     await pushed;
 
     const finalPull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });

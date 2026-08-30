@@ -76,7 +76,7 @@
   }
 
   function onDocumentClick(event: MouseEvent): void {
-    if (open && root && !root.contains(event.target as Node)) closeMenu();
+    if (open && root && !event.composedPath().includes(root)) closeMenu();
   }
 
   function onDocumentKeydown(event: KeyboardEvent): void {

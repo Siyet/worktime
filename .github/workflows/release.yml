@@ -80,6 +80,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unset VERSION
           npm ci --no-fund --no-audit --prefix web
           npm run build --prefix web
           go vet ./...

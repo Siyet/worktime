@@ -1,4 +1,4 @@
-import { expect, pushBarrier, seedServer, test } from "./fixtures";
+import { expect, pushBarrier, seedServer, test, triggerSync } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 function runningCard(page: Page) {
@@ -212,9 +212,10 @@ test.describe("entry editing", () => {
     await expect(trigger).toBeFocused();
 
     await trigger.click();
-    await page.getByPlaceholder("What are you working on?").click();
+    const startInput = page.getByPlaceholder("What are you working on?");
+    await startInput.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
-    await expect(trigger).toBeFocused();
+    await expect(startInput).toBeFocused();
 
     await trigger.click();
     let tagsMenu = page.getByRole("dialog", { name: "Tags" });
@@ -264,6 +265,77 @@ test.describe("entry editing", () => {
     });
   });
 
+  test("a failed tags-only write rolls back safely and accepts external and later changes", async ({ page, request, server }) => {
+    await seedServer(server.url, {
+      entries: [{ description: "recover tags", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+
+    // Inject one synchronous object-store failure: updateEntry rejects exactly
+    // as it would when the local database cannot accept the transaction.
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextTimeEntryPut: boolean };
+      faultWindow.failNextTimeEntryPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextTimeEntryPut && this.name === "time_entries") {
+          faultWindow.failNextTimeEntryPut = false;
+          throw new Error("injected IndexedDB write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "recover tags");
+    const addTrigger = row.getByRole("button", { name: "Add tags" });
+    await addTrigger.click();
+    await page.evaluate(() => {
+      (window as typeof window & { failNextTimeEntryPut: boolean }).failNextTimeEntryPut = true;
+    });
+    await page.getByRole("dialog", { name: "Tags" }).getByRole("button", { name: "development", exact: true }).click();
+    await expect(addTrigger).toBeVisible();
+    await page.waitForTimeout(50);
+    expect(pageErrors).toEqual([]);
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const serverEntry = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "recover tags",
+    );
+    const externalUpdate = {
+      id: serverEntry.id,
+      project_id: serverEntry.project_id,
+      description: serverEntry.description,
+      tags: ["review"],
+      started_at: serverEntry.started_at,
+      stopped_at: serverEntry.stopped_at,
+      created_at: serverEntry.created_at,
+      updated_at: serverEntry.updated_at + 10_000,
+      deleted_at: null,
+    };
+    await request.post(server.url + "/api/sync", {
+      data: { since: 0, changes: { time_entries: [externalUpdate] } },
+    });
+    await triggerSync(page);
+
+    const editTrigger = row.getByRole("button", { name: "Edit tags" });
+    await expect(editTrigger).toContainText("review");
+    await editTrigger.click();
+    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await tagsMenu.getByLabel("Tags").fill("focus");
+    const pushed = pushBarrier(page, '"focus","review"');
+    await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    await pushed;
+
+    const finalPull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const finalEntry = (await finalPull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "recover tags",
+    );
+    expect(finalEntry.tags).toEqual(["focus", "review"]);
+    expect(pageErrors).toEqual([]);
+  });
+
   test("project quick editing excludes archived choices but keeps the current archived project", async ({ page, request, server }) => {
     const activeID = crypto.randomUUID();
     const archivedID = crypto.randomUUID();
@@ -292,15 +364,28 @@ test.describe("entry editing", () => {
     await expect(projectTrigger).toBeFocused();
 
     await projectTrigger.click();
-    await page.getByPlaceholder("What are you working on?").click();
+    const startInput = page.getByPlaceholder("What are you working on?");
+    await startInput.click();
     await expect(projectTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(projectTrigger).toBeFocused();
+    await expect(startInput).toBeFocused();
 
-    await projectTrigger.click();
+    await projectTrigger.focus();
+    await page.keyboard.press("ArrowDown");
     await expect(row.getByRole("option", { name: /Archived project/ })).toHaveCount(0);
+    const initialActiveID = await projectTrigger.getAttribute("aria-activedescendant");
+    expect(initialActiveID).not.toBeNull();
+    await expect(page.locator(`[id="${initialActiveID}"]`)).toHaveText("No project");
+
+    await page.keyboard.press("ArrowDown");
+    const nextActiveID = await projectTrigger.getAttribute("aria-activedescendant");
+    expect(nextActiveID).not.toBe(initialActiveID);
+    const activeOption = page.locator(`[id="${nextActiveID}"]`);
+    await expect(activeOption).toContainText("Active project");
+    await expect(activeOption).toHaveClass(/active/);
+    await expect(activeOption).toHaveAttribute("aria-selected", "false");
 
     const pushed = pushBarrier(page, activeID);
-    await row.getByRole("option", { name: "Active project" }).click();
+    await page.keyboard.press("Enter");
     await pushed;
     await expect(projectTrigger).toHaveText("Active project");
 

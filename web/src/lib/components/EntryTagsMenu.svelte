@@ -4,6 +4,7 @@
   import { t } from "../i18n";
   import TagChips from "./TagChips.svelte";
   import TagPicker from "./TagPicker.svelte";
+  import { TagWriteQueue } from "./tag-write-queue.svelte";
 
   interface Props {
     entryID: string;
@@ -14,36 +15,17 @@
   let open = $state(false);
   let root = $state<HTMLElement | null>(null);
   let triggerElement = $state<HTMLButtonElement | null>(null);
-  let draftTags = $state(untrack(() => [...tags]));
-  let queuedTags = $state<string[] | null>(null);
-  let writing = $state(false);
+  const tagWrites = new TagWriteQueue(
+    untrack(() => [...tags]),
+    () => [...tags],
+    (nextTags) => updateEntry(entryID, { tags: nextTags }),
+  );
   const uid = $props.id();
   const menuID = `${uid}-entry-tags-menu`;
 
-  function tagsEqual(left: string[], right: string[]): boolean {
-    return left.length === right.length && left.every((tag, index) => tag === right[index]);
-  }
-
   $effect(() => {
-    const incomingTags = [...tags];
-    if (!writing && queuedTags === null && !tagsEqual(incomingTags, draftTags)) {
-      draftTags = incomingTags;
-    }
+    tagWrites.reconcile(tags);
   });
-
-  async function flushChanges(): Promise<void> {
-    if (writing) return;
-    writing = true;
-    try {
-      while (queuedTags !== null) {
-        const nextTags = queuedTags;
-        queuedTags = null;
-        await updateEntry(entryID, { tags: nextTags });
-      }
-    } finally {
-      writing = false;
-    }
-  }
 
   function closeMenu(restoreFocus = false): void {
     if (!open) return;
@@ -52,13 +34,11 @@
   }
 
   function change(nextTags: string[]): void {
-    draftTags = [...nextTags];
-    queuedTags = [...nextTags];
-    void flushChanges();
+    void tagWrites.change(nextTags);
   }
 
   function onDocumentClick(event: MouseEvent): void {
-    if (open && root && !root.contains(event.target as Node)) closeMenu(true);
+    if (open && root && !root.contains(event.target as Node)) closeMenu();
   }
 
   function onDocumentKeydown(event: KeyboardEvent): void {
@@ -76,15 +56,15 @@
     bind:this={triggerElement}
     type="button"
     class="entry-tags-trigger"
-    class:empty={draftTags.length === 0}
-    aria-label={t(draftTags.length === 0 ? "Add tags" : "Edit tags")}
+    class:empty={tagWrites.draftTags.length === 0}
+    aria-label={t(tagWrites.draftTags.length === 0 ? "Add tags" : "Edit tags")}
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-controls={menuID}
     onclick={() => (open = !open)}
   >
-    {#if draftTags.length > 0}
-      <TagChips tags={draftTags} />
+    {#if tagWrites.draftTags.length > 0}
+      <TagChips tags={tagWrites.draftTags} />
     {:else}
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M20.6 13.6 11 23.2 1.8 14V1.8H14l6.6 6.6a3.7 3.7 0 0 1 0 5.2Z" /><circle cx="7" cy="7" r="1.4" />
@@ -93,7 +73,7 @@
   </button>
   {#if open}
     <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")}>
-      <TagPicker selected={draftTags} onchange={change} />
+      <TagPicker selected={tagWrites.draftTags} onchange={change} />
     </span>
   {/if}
 </span>

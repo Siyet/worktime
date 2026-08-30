@@ -15,6 +15,10 @@
   const uid = $props.id();
   const menuID = `${uid}-entry-project-menu`;
 
+  function optionID(projectOptionID: string | null): string {
+    return `${menuID}-option-${projectOptionID ?? "none"}`;
+  }
+
   const currentProject = $derived(projectByID(projectID));
   const assignableProjects = $derived(
     appState.projects
@@ -72,7 +76,7 @@
   }
 
   function onDocumentClick(event: MouseEvent): void {
-    if (open && root && !root.contains(event.target as Node)) closeMenu(true);
+    if (open && root && !root.contains(event.target as Node)) closeMenu();
   }
 
   function onDocumentKeydown(event: KeyboardEvent): void {
@@ -95,6 +99,7 @@
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-controls={menuID}
+    aria-activedescendant={open ? optionID(options[activeIndex]!.id) : undefined}
     onclick={() => (open ? closeMenu() : openMenu())}
     onkeydown={onTriggerKeydown}
   >
@@ -104,6 +109,7 @@
     <span class="entry-quick-menu project-menu" id={menuID} role="listbox" aria-label={t("Project")}>
       {#each options as option, index (option.id)}
         <button
+          id={optionID(option.id)}
           type="button"
           role="option"
           aria-selected={option.id === projectID}

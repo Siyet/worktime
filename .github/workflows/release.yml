@@ -131,7 +131,8 @@ jobs:
             rm -rf "$check_dir"
           done
 
-      - name: Refuse an existing container image tag
+      - name: Resolve existing container image tag
+        id: container-image
         timeout-minutes: 2
         shell: bash
         run: |
@@ -139,6 +140,7 @@ jobs:
           go run ./cmd/ghcr-tag-check
 
       - name: Build and push multi-platform image
+        if: steps.container-image.outputs.exists == 'false'
         timeout-minutes: 30
         shell: bash
         run: |
@@ -154,11 +156,33 @@ jobs:
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
       - name: Sign multi-platform image
+        if: steps.container-image.outputs.exists == 'false'
         timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
           cosign sign --yes "$IMAGE@$IMAGE_DIGEST"
+          cosign verify \
+            --certificate-identity "https://github.com/Siyet/worktime/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-sha "$SOURCE_SHA" \
+            "$IMAGE@$IMAGE_DIGEST"
+
+      - name: Verify and reuse signed multi-platform image
+        if: steps.container-image.outputs.exists == 'true'
+        timeout-minutes: 10
+        shell: bash
+        env:
+          EXPECTED_IMAGE_DIGEST: ${{ steps.container-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity "https://github.com/Siyet/worktime/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-sha "$SOURCE_SHA" \
+            "$IMAGE@$EXPECTED_IMAGE_DIGEST"
+          go run ./cmd/ghcr-tag-check
+          echo "IMAGE_DIGEST=$EXPECTED_IMAGE_DIGEST" >> "$GITHUB_ENV"
 
       - name: Enforce manifest generation and create signed manifest
         shell: bash
@@ -265,6 +289,9 @@ jobs:
             dist/release-manifest.sigstore.json
           mkdir "$RUNNER_TEMP/downloaded"
           gh release download "$VERSION" --dir "$RUNNER_TEMP/downloaded"
+          chmod 0755 \
+            "$RUNNER_TEMP/downloaded/worktime-linux-amd64" \
+            "$RUNNER_TEMP/downloaded/worktime-linux-arm64"
           for asset in worktime-linux-amd64 worktime-linux-arm64 release-manifest.json release-manifest.sigstore.json; do
             cmp "dist/$asset" "$RUNNER_TEMP/downloaded/$asset"
           done
@@ -286,6 +313,9 @@ jobs:
           rm -rf "$RUNNER_TEMP/published-download"
           mkdir "$RUNNER_TEMP/published-download"
           gh release download "$VERSION" --dir "$RUNNER_TEMP/published-download"
+          chmod 0755 \
+            "$RUNNER_TEMP/published-download/worktime-linux-amd64" \
+            "$RUNNER_TEMP/published-download/worktime-linux-arm64"
           for asset in worktime-linux-amd64 worktime-linux-arm64 release-manifest.json release-manifest.sigstore.json; do
             gh release verify-asset "$VERSION" "$RUNNER_TEMP/published-download/$asset"
             cmp "dist/$asset" "$RUNNER_TEMP/published-download/$asset"

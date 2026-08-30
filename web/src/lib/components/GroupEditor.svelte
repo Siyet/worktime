@@ -113,9 +113,13 @@
   class="sheet group-editor"
   bind:this={dialogElement}
   aria-labelledby="group-editor-title"
+  aria-busy={saving}
   onclose={() => onclose(savedResult)}
+  oncancel={(event) => {
+    if (saving) event.preventDefault();
+  }}
   onclick={(event) => {
-    if (event.target === dialogElement) dialogElement?.close();
+    if (event.target === dialogElement && !saving) dialogElement?.close();
   }}
 >
   <form
@@ -139,44 +143,46 @@
       {/if}
       {#if saveError}<p class="ed-hint bad" role="alert">{saveError}</p>{/if}
 
-      <div class="ed-field">
-        <label class="ed-label" for="group-ed-desc">{t("Description")}</label>
-        <DescriptionInput
-          id="group-ed-desc"
-          bind:value={draftDescription}
-          {suggestions}
-          {projectName}
-          onpick={applySuggestion}
-          maxlength={maxTextLength}
-        />
-        {#if draftDescription !== snapshot.representativeDescription}
-          <p class="ed-hint">
-            {t("A description different from an agent's automatic name prevents it from renaming the entries it currently owns.")}
-          </p>
-        {/if}
-      </div>
+      <fieldset class="ed-fields" disabled={saving}>
+        <div class="ed-field">
+          <label class="ed-label" for="group-ed-desc">{t("Description")}</label>
+          <DescriptionInput
+            id="group-ed-desc"
+            bind:value={draftDescription}
+            {suggestions}
+            {projectName}
+            onpick={applySuggestion}
+            maxlength={maxTextLength}
+          />
+          {#if draftDescription !== snapshot.representativeDescription}
+            <p class="ed-hint">
+              {t("A description different from an agent's automatic name prevents it from renaming the entries it currently owns.")}
+            </p>
+          {/if}
+        </div>
 
-      <div class="ed-field">
-        <span class="ed-label">{t("Project")}</span>
-        <div><ProjectSelect projects={activeProjects} bind:value={draftProjectID} /></div>
-      </div>
+        <div class="ed-field">
+          <span class="ed-label">{t("Project")}</span>
+          <div><ProjectSelect projects={activeProjects} bind:value={draftProjectID} /></div>
+        </div>
 
-      <div class="ed-field">
-        <span class="ed-label">{t("Tags")} <span class="muted">{draftTags.length}/8</span></span>
-        <TagPicker selected={draftTags} onchange={(tags) => (draftTags = tags)} />
-      </div>
+        <div class="ed-field">
+          <span class="ed-label">{t("Tags")} <span class="muted">{draftTags.length}/8</span></span>
+          <TagPicker selected={draftTags} onchange={(tags) => (draftTags = tags)} />
+        </div>
 
-      <p class="ed-hint">
-        {t("These {n} entries were selected when the dialog opened; newer matching entries are not changed.", {
-          n: snapshot.entryIDs.length,
-        })}
-      </p>
-      <p class="ed-hint">{t("Changes are saved on this device first; the sync indicator reports server delivery.")}</p>
+        <p class="ed-hint">
+          {t("These {n} entries were selected when the dialog opened; newer matching entries are not changed.", {
+            n: snapshot.entryIDs.length,
+          })}
+        </p>
+        <p class="ed-hint">{t("Changes are saved on this device first; the sync indicator reports server delivery.")}</p>
+      </fieldset>
     </div>
 
     <div class="ed-foot">
       <span class="spacer"></span>
-      <button type="button" onclick={() => dialogElement?.close()}>{t("Cancel")}</button>
+      <button type="button" disabled={saving} onclick={() => dialogElement?.close()}>{t("Cancel")}</button>
       <button type="submit" class="primary" disabled={groupChanged || saving}>
         {saving ? t("Saving…") : t("Save")}
       </button>
@@ -189,5 +195,14 @@
     color: var(--text-dim);
     font-size: 0.82rem;
     font-variant-numeric: tabular-nums;
+  }
+
+  .ed-fields {
+    display: grid;
+    gap: 0.75rem;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 </style>

@@ -29,6 +29,32 @@ function runningCard(page: Page) {
   return page.locator(".card").filter({ has: page.getByRole("heading", { name: "Running" }) });
 }
 
+async function holdGroupWrites(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("worktime");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction(["time_entries", "dirty"], "readwrite");
+    const store = transaction.objectStore("time_entries");
+    let holding = true;
+    const keepAlive = () => {
+      if (!holding) return;
+      const request = store.get("__group_commit_hold__");
+      request.onsuccess = keepAlive;
+    };
+    keepAlive();
+    (window as unknown as { releaseGroupWrites: () => void }).releaseGroupWrites = () => {
+      holding = false;
+    };
+  });
+}
+
+async function releaseGroupWrites(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { releaseGroupWrites: () => void }).releaseGroupWrites());
+}
+
 test.describe("task grouping", () => {
   test("repeats of one task collapse into a single row that unfolds", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
@@ -396,6 +422,38 @@ test.describe("task grouping", () => {
     await expect(edit).toBeFocused();
   });
 
+  test("an in-flight local group commit cannot be cancelled or dismissed", async ({ page, server }) => {
+    const base = dayNine();
+    await seedServer(server.url, {
+      entries: [
+        { description: "Commit group", startedAt: base, stoppedAt: base + HOUR },
+        { description: "Commit group", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    await page.getByRole("button", { name: /Edit group Commit group, 2 entries/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await dialog.getByLabel("Description").fill("Committed together");
+
+    // Keep a readwrite transaction alive so the editor's transaction queues
+    // behind it. This makes the saving state deterministic instead of racing a
+    // normally sub-millisecond IndexedDB commit.
+    await holdGroupWrites(page);
+
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveAttribute("aria-busy", "true");
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeVisible();
+    await page.mouse.click(4, 4);
+    await expect(dialog).toBeVisible();
+
+    await releaseGroupWrites(page);
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("status")).toContainText("group entries synced");
+    await expect(page.getByText("Committed together", { exact: true }).first()).toBeVisible();
+  });
+
   test("a remote Stop is merged but remote grouping metadata blocks the fixed-set save", async ({ page, request, server }) => {
     const runningIDs = [crypto.randomUUID(), crypto.randomUUID()];
     const base = Date.now() - HOUR;
@@ -566,9 +624,81 @@ test.describe("task grouping", () => {
     await expect(retry).toBeEnabled();
     await expect(page.getByRole("link", { name: "Sync details" })).toHaveAttribute("href", "#/settings");
     rejecting = false;
-    await retry.click();
+    await holdGroupWrites(page);
+    await retry.evaluate((button: HTMLButtonElement) => {
+      button.click();
+      button.click();
+    });
+    await expect(retry).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Dismiss" })).toBeDisabled();
+    await releaseGroupWrites(page);
     await expect(page.getByRole("status")).toContainText("2/2 group entries synced");
     expect(retriedIDs).toEqual([rejectedID]);
+  });
+
+  test("Retry turns a superseded rejected member into a conflict without overwriting it", async ({
+    page,
+    request,
+    server,
+  }) => {
+    const base = dayNine();
+    const memberIDs = [crypto.randomUUID(), crypto.randomUUID()];
+    await seedServer(server.url, {
+      entries: [
+        { id: memberIDs[0], description: "Superseded group", startedAt: base, stoppedAt: base + HOUR },
+        { id: memberIDs[1], description: "Superseded group", startedAt: base + 2 * HOUR, stoppedAt: base + 3 * HOUR },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const rejectedID = memberIDs[0];
+    let rejectGroupEdit = true;
+    const retriedIDs: string[] = [];
+    await page.route("**/api/sync", async (route) => {
+      const bodyText = route.request().postData() ?? "";
+      const body = JSON.parse(bodyText) as { changes?: { time_entries?: Array<{ id: string; description: string }> } };
+      const rows = body.changes?.time_entries ?? [];
+      if (
+        rejectGroupEdit &&
+        rows.some((row) => row.description === "Rejected superseded") &&
+        (rows.length > 1 || rows[0]?.id === rejectedID)
+      ) {
+        await route.fulfill({ status: 400, body: "refused for superseded retry test" });
+        return;
+      }
+      if (!rejectGroupEdit && rows.some((row) => row.description === "Rejected superseded")) {
+        retriedIDs.push(...rows.map((row) => row.id));
+      }
+      await route.continue();
+    });
+
+    await page.getByRole("button", { name: /Edit group Superseded group, 2 entries/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Edit task group" });
+    await dialog.getByLabel("Description").fill("Rejected superseded");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("1 rejected", { timeout: 15_000 });
+
+    // Edit the quarantined member through the ordinary editor. It is the older
+    // (second rendered) row, so this produces a newer local/server version after
+    // the exact rejected marker the toast retained.
+    await page.locator(".group-row").filter({ hasText: "Rejected superseded" }).click();
+    const rejectedMember = page.locator(".item.member").nth(1);
+    await rejectedMember.locator(".desc").click();
+    await page.locator("#ed-desc").fill("Newer individual edit");
+    const newerPush = pushBarrier(page, "Newer individual edit");
+    await page.getByRole("button", { name: "Save" }).click();
+    await newerPush;
+
+    rejectGroupEdit = false;
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByRole("status")).toContainText("1 changed elsewhere");
+    await expect(page.getByRole("button", { name: "Review entries" })).toBeVisible();
+    expect(retriedIDs).toEqual([]);
+    const serverEntries = (await (await request.get(server.url + "/api/entries")).json()) as Array<{
+      id: string;
+      description: string;
+    }>;
+    expect(serverEntries.find((entry) => entry.id === rejectedID)?.description).toBe("Newer individual edit");
   });
 
   test("the group row fits a 360px screen", async ({ page, server }) => {

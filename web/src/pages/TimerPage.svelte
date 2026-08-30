@@ -31,10 +31,12 @@
     type TaskGroupSnapshot,
   } from "../lib/tasks";
   import {
+    disposeTrackedLocalMutation,
     observeLocalMutation,
     summarizeMutationMembers,
     type MutationProgress,
   } from "../lib/mutation-progress";
+  import { sameStoredRow } from "../lib/db";
   import type { GroupEditSaveResult } from "../lib/group-edit";
   import type { TrackedLocalMutationReceipt } from "../lib/mutation-progress";
   import { syncState } from "../lib/sync.svelte";
@@ -49,7 +51,7 @@
   import RowMenu from "../lib/components/RowMenu.svelte";
   import TagChips from "../lib/components/TagChips.svelte";
   import TagSelect from "../lib/components/TagSelect.svelte";
-  import type { TimeEntry } from "../lib/types";
+  import type { SyncedRow, TimeEntry } from "../lib/types";
 
   let description = $state("");
   let selectedProjectID = $state<string | null>(null);
@@ -65,10 +67,13 @@
     patch: GroupEntryPatch;
     receipt: TrackedLocalMutationReceipt;
     progress: MutationProgress;
+    expectedRows: SyncedRow[];
   }
 
   let groupMutationResult = $state<GroupMutationResult | null>(null);
+  let retryingGroupMutation = $state(false);
   let stopMutationObserver: (() => void) | null = null;
+  let componentActive = true;
   // Expansion is keyed by day as well: an agent task carries the same name every
   // day, and one shared key would unfold it in every card at once.
   let expanded = $state(new Set<string>());
@@ -230,15 +235,24 @@
     snapshot: TaskGroupSnapshot,
     result: GroupEditSaveResult,
     baseMembers: MutationProgress["members"] = [],
+    baseExpectedRows: SyncedRow[] = [],
   ): void {
+    if (!componentActive) {
+      disposeTrackedLocalMutation(result.receipt);
+      return;
+    }
     stopMutationObserver?.();
     const retriedIDs = new Set(result.receipt.markers.map((marker) => marker.id));
     const retained = baseMembers.filter((member) => !retriedIDs.has(member.marker.id));
+    const expectedRows = [
+      ...baseExpectedRows.filter((row) => !retriedIDs.has(row.id)),
+      ...result.receipt.rows,
+    ];
     const initial = summarizeMutationMembers([
       ...retained,
       ...result.receipt.markers.map((marker) => ({ marker, status: "pending" as const })),
     ]);
-    groupMutationResult = { snapshot, patch: result.patch, receipt: result.receipt, progress: initial };
+    groupMutationResult = { snapshot, patch: result.patch, receipt: result.receipt, progress: initial, expectedRows };
     stopMutationObserver = observeLocalMutation(result.receipt, (progress) => {
       if (groupMutationResult?.receipt.trackingID !== result.receipt.trackingID) return;
       groupMutationResult = {
@@ -259,16 +273,49 @@
 
   async function retryGroupMutation(): Promise<void> {
     const current = groupMutationResult;
-    if (!current) return;
-    const rejectedIDs = current.progress.members
-      .filter((member) => member.status === "rejected")
-      .map((member) => member.marker.id);
-    if (rejectedIDs.length === 0 || current.progress.pending > 0) return;
+    if (!current || retryingGroupMutation || current.progress.pending > 0) return;
+    retryingGroupMutation = true;
+    const operationID = current.receipt.trackingID;
     try {
-      const receipt = await updateEntries(rejectedIDs, current.patch);
-      watchMutation(current.snapshot, { receipt, patch: current.patch }, current.progress.members);
+      const retryableIDs: string[] = [];
+      const checkedMembers = current.progress.members.map((member) => {
+        if (member.status !== "rejected") return member;
+        const expected = current.expectedRows.find((row) => row.id === member.marker.id);
+        const latest = appState.entries.find((entry) => entry.id === member.marker.id);
+        if (
+          expected &&
+          latest &&
+          latest.updated_at === member.marker.updated_at &&
+          sameStoredRow(expected, latest)
+        ) {
+          retryableIDs.push(member.marker.id);
+          return member;
+        }
+        // The rejected version was superseded after quarantine. Treat it like
+        // any other LWW winner: Review may focus it, but Retry must not overwrite it.
+        return { ...member, status: "conflict" as const };
+      });
+      if (groupMutationResult?.receipt.trackingID !== operationID) return;
+      groupMutationResult = {
+        ...groupMutationResult,
+        progress: summarizeMutationMembers(checkedMembers),
+      };
+      if (retryableIDs.length === 0) return;
+      const receipt = await updateEntries(retryableIDs, current.patch);
+      if (!componentActive || groupMutationResult?.receipt.trackingID !== operationID) {
+        disposeTrackedLocalMutation(receipt);
+        return;
+      }
+      watchMutation(
+        current.snapshot,
+        { receipt, patch: current.patch },
+        checkedMembers,
+        current.expectedRows,
+      );
     } catch (error) {
       console.error("group edit retry failed", error);
+    } finally {
+      retryingGroupMutation = false;
     }
   }
 
@@ -278,7 +325,11 @@
     groupMutationResult = null;
   }
 
-  $effect(() => () => stopMutationObserver?.());
+  $effect(() => () => {
+    componentActive = false;
+    stopMutationObserver?.();
+    stopMutationObserver = null;
+  });
 
 </script>
 
@@ -547,8 +598,8 @@
 {/if}
 
 {#if groupMutationResult}
-  <div class="toast group-sync-result" aria-live="polite">
-    <span role="status">
+  <div class="toast group-sync-result">
+    <span role="status" aria-live="polite">
       {t("{done}/{total} group entries synced", {
         done: groupMutationResult.progress.accepted,
         total: groupMutationResult.progress.total,
@@ -566,12 +617,12 @@
     </span>
     {#if groupMutationResult.progress.rejected > 0}
       <a href="#/settings">{t("Sync details")}</a>
-      <button type="button" disabled={groupMutationResult.progress.pending > 0} onclick={() => void retryGroupMutation()}>{t("Retry")}</button>
+      <button type="button" disabled={groupMutationResult.progress.pending > 0 || retryingGroupMutation} onclick={() => void retryGroupMutation()}>{t("Retry")}</button>
     {/if}
     {#if groupMutationResult.progress.conflict > 0}
       <button type="button" onclick={() => void focusEditedMembers(groupMutationResult!.snapshot)}>{t("Review entries")}</button>
     {/if}
-    <button type="button" onclick={dismissGroupMutation}>{t("Dismiss")}</button>
+    <button type="button" disabled={retryingGroupMutation} onclick={dismissGroupMutation}>{t("Dismiss")}</button>
   </div>
 {/if}
 

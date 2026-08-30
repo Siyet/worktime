@@ -80,6 +80,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unset VERSION
           npm ci --no-fund --no-audit --prefix web
           npm run build --prefix web
           go vet ./...
@@ -117,6 +118,7 @@ jobs:
           BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "BUILT_AT=$BUILT_AT" >> "$GITHUB_ENV"
           mkdir -p dist
+          VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web
           ldflags="-s -w -X github.com/Siyet/worktime/internal/buildinfo.Version=$VERSION -X github.com/Siyet/worktime/internal/buildinfo.Revision=$SOURCE_SHA -X github.com/Siyet/worktime/internal/buildinfo.BuiltAt=$BUILT_AT -X github.com/Siyet/worktime/internal/buildinfo.Packaging=native"
           for architecture in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath \

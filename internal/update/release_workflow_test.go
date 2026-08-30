@@ -72,6 +72,56 @@ func TestReleaseWorkflowDoesNotUseRunnerContextInJobEnvironment(t *testing.T) {
 	}
 }
 
+func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
+	workflow := releaseWorkflow(t)
+	validationStart := strings.Index(workflow, "      - name: Run full validation gates")
+	artifactStart := strings.Index(workflow, "      - name: Build native artifacts and multi-platform image")
+	if validationStart < 0 || artifactStart <= validationStart {
+		t.Fatal("release workflow does not have the expected validation and artifact steps")
+	}
+	validation := workflow[validationStart:artifactStart]
+	unsetVersion := strings.Index(validation, "          unset VERSION\n")
+	firstBuild := strings.Index(validation, "          npm ci --no-fund --no-audit --prefix web\n")
+	if unsetVersion < 0 || firstBuild < 0 || unsetVersion >= firstBuild {
+		t.Fatal("release input VERSION must be unset before validation installs or builds anything")
+	}
+	validationRemainder := validation[unsetVersion+len("          unset VERSION\n"):]
+	if strings.Contains(validationRemainder, "VERSION") {
+		t.Fatal("release input VERSION must not be referenced or reassigned after validation isolation")
+	}
+	for _, command := range []string{
+		"          npm run build --prefix web\n",
+		"          make build\n",
+		"          (cd web && npx playwright test)\n",
+	} {
+		commandIndex := strings.Index(validation, command)
+		if commandIndex <= unsetVersion {
+			t.Fatalf("validation command must run after VERSION is unset: %q", strings.TrimSpace(command))
+		}
+	}
+
+	artifactEnd := strings.Index(workflow[artifactStart:], "      - name: Enforce manifest generation and create signed manifest")
+	if artifactEnd < 0 {
+		t.Fatal("release workflow does not have the expected post-artifact step")
+	}
+	artifact := workflow[artifactStart : artifactStart+artifactEnd]
+	for _, required := range []string{
+		`VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`,
+		"buildinfo.Version=$VERSION",
+		`--build-arg "VERSION=$VERSION"`,
+		`--tag "$IMAGE:$VERSION"`,
+	} {
+		if !strings.Contains(artifact, required) {
+			t.Fatalf("release artifact build lost version propagation %q", required)
+		}
+	}
+	releaseWebBuild := strings.Index(artifact, `VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`)
+	nativeBuildLoop := strings.Index(artifact, "          for architecture in amd64 arm64; do\n")
+	if releaseWebBuild < 0 || nativeBuildLoop < 0 || releaseWebBuild >= nativeBuildLoop {
+		t.Fatal("release frontend must be rebuilt with the release version before native binaries embed it")
+	}
+}
+
 func TestReleaseCleanupDisarmsOnlyAfterLateVerification(t *testing.T) {
 	workflow := releaseWorkflow(t)
 	published := strings.Index(workflow, `gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false`)

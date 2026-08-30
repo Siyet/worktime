@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { updateEntry } from "../state/app.svelte";
   import { t } from "../i18n";
   import TagChips from "./TagChips.svelte";
@@ -52,13 +52,24 @@
   async function saveMenu(): Promise<void> {
     if (saving) return;
     if (tagsEqual(draftTags, tags)) {
-      cancelMenu();
+      cancelMenu(true);
       return;
     }
     saving = true;
     try {
       await updateEntry(entryID, { tags: [...draftTags] });
       open = false;
+      await tick();
+      const replacementTrigger = [...document.querySelectorAll<HTMLButtonElement>("[data-entry-tags-id]")].find(
+        (candidate) => candidate.dataset.entryTagsId === entryID,
+      );
+      // Saving changes the grouping key, so the invoking button is normally
+      // destroyed. Focus its freshly rendered replacement, never the stale ref.
+      if (replacementTrigger?.isConnected) {
+        replacementTrigger.focus();
+      } else {
+        document.querySelector<HTMLInputElement>("form.card.row input[role=combobox]")?.focus();
+      }
     } catch {
       // Keep the picker open after a storage failure, but discard a draft that
       // was never persisted. External changes remain the source of truth and a
@@ -96,6 +107,7 @@
     aria-haspopup="dialog"
     aria-expanded={open}
     aria-controls={menuID}
+    data-entry-tags-id={entryID}
     disabled={saving}
     onclick={() => (open ? cancelMenu() : openMenu())}
   >
@@ -111,7 +123,7 @@
     <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")}>
       <TagPicker selected={draftTags} onchange={change} />
       <span class="menu-actions">
-        <button type="button" onclick={() => cancelMenu()} disabled={saving}>{t("Cancel")}</button>
+        <button type="button" onclick={() => cancelMenu(true)} disabled={saving}>{t("Cancel")}</button>
         <button type="button" class="primary" onclick={() => void saveMenu()} disabled={saving}>{t("Save")}</button>
       </span>
     </span>

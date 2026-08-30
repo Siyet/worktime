@@ -221,8 +221,16 @@ test.describe("entry editing", () => {
     await expect(startInput).toBeFocused();
 
     await trigger.click();
-    const tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    let tagsMenu = page.getByRole("dialog", { name: "Tags" });
+    await tagsMenu.getByRole("button", { name: "analysis", exact: true }).click();
+    await tagsMenu.getByRole("button", { name: "Cancel" }).click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(trigger).toBeFocused();
+
+    await trigger.click();
+    tagsMenu = page.getByRole("dialog", { name: "Tags" });
     await expect(tagsMenu.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await expect(tagsMenu.getByRole("button", { name: "analysis", exact: true })).toHaveAttribute("aria-pressed", "false");
 
     // The draft is local until Save, so changing grouping metadata cannot
     // remount the row halfway through a multi-select interaction.
@@ -238,12 +246,21 @@ test.describe("entry editing", () => {
     await tagsMenu.getByLabel("Tags").fill("focus");
     await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
     await expect(tagsMenu).toBeVisible();
+    const focusOption = tagsMenu.getByRole("button", { name: "focus", exact: true });
+    await expect(focusOption).toHaveAttribute("aria-pressed", "true");
+    await focusOption.click();
+    await expect(focusOption).toHaveCount(0);
+    await tagsMenu.getByLabel("Tags").fill("focus");
+    await tagsMenu.getByRole("button", { name: "Create tag focus" }).click();
+    await expect(tagsMenu.getByRole("button", { name: "focus", exact: true })).toHaveAttribute("aria-pressed", "true");
 
     const focusCreated = pushBarrier(page, '"focus","review"');
     await tagsMenu.getByRole("button", { name: "Save" }).click();
     await focusCreated;
     await expect(tagsMenu).toHaveCount(0);
-    await expect(row.getByRole("button", { name: "Edit tags" })).toBeVisible();
+    const savedTrigger = row.getByRole("button", { name: "Edit tags" });
+    await expect(savedTrigger).toBeVisible();
+    await expect(savedTrigger).toBeFocused();
 
     const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
     const synced = (await pull.json()).changes.time_entries.find(

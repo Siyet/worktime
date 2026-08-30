@@ -402,7 +402,9 @@ test.describe("entry editing", () => {
     const pushed = pushBarrier(page, activeID);
     await page.keyboard.press("Enter");
     await pushed;
-    await expect(projectTrigger).toHaveText("Active project");
+    const replacementTrigger = entryRow(page, "move project").getByRole("combobox", { name: "Edit project" });
+    await expect(replacementTrigger).toHaveText("Active project");
+    await expect(replacementTrigger).toBeFocused();
 
     const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
     const synced = (await pull.json()).changes.time_entries.find(
@@ -415,6 +417,126 @@ test.describe("entry editing", () => {
       stopped_at: todayAt(10, 0),
       tags: [],
     });
+  });
+
+  test("project pointer selection focuses the exact replacement row after regrouping", async ({ page, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Focus destination" }],
+      entries: [
+        { description: "first project row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) },
+        { description: "second project row", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0) },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const first = entryRow(page, "first project row");
+    const second = entryRow(page, "second project row");
+    await first.getByRole("combobox", { name: "Edit project" }).click();
+    const pushed = pushBarrier(page, activeID);
+    await first.getByRole("option", { name: "Focus destination" }).click();
+    await pushed;
+
+    await expect(entryRow(page, "first project row").getByRole("combobox", { name: "Edit project" })).toBeFocused();
+    await expect(second.getByRole("combobox", { name: "Edit project" })).not.toBeFocused();
+  });
+
+  test("project quick editing survives a local write failure without an unhandled error", async ({ page, request, server }) => {
+    const activeID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [{ id: activeID, name: "Retry project" }],
+      entries: [{ description: "retry project row", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+    await page.evaluate(() => {
+      const faultWindow = window as typeof window & { failNextProjectEntryPut: boolean };
+      faultWindow.failNextProjectEntryPut = false;
+      const originalPut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (faultWindow.failNextProjectEntryPut && this.name === "time_entries") {
+          faultWindow.failNextProjectEntryPut = false;
+          throw new Error("injected project IndexedDB write failure");
+        }
+        return key === undefined ? originalPut.call(this, value) : originalPut.call(this, value, key);
+      };
+    });
+
+    const row = entryRow(page, "retry project row");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.click();
+    await page.evaluate(() => {
+      (window as typeof window & { failNextProjectEntryPut: boolean }).failNextProjectEntryPut = true;
+    });
+    const retryOption = row.getByRole("option", { name: "Retry project" });
+    await retryOption.click();
+    await expect(retryOption).toBeVisible();
+    await expect(row.getByRole("option", { name: "No project" })).toHaveClass(/active/);
+    expect(pageErrors).toEqual([]);
+
+    const pushed = pushBarrier(page, activeID);
+    await retryOption.click();
+    await pushed;
+    const replacement = entryRow(page, "retry project row").getByRole("combobox", { name: "Edit project" });
+    await expect(replacement).toHaveText("Retry project");
+    await expect(replacement).toBeFocused();
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "retry project row",
+    );
+    expect(synced.project_id).toBe(activeID);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("project active descendant remains valid when sync removes its option", async ({ page, request, server }) => {
+    const currentID = crypto.randomUUID();
+    const removedID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [
+        { id: currentID, name: "Current project" },
+        { id: removedID, name: "Removed remotely" },
+      ],
+      entries: [{ description: "live project options", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0), projectID: currentID }],
+    });
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(server.url + "/#/");
+
+    const row = entryRow(page, "live project options");
+    const trigger = row.getByRole("combobox", { name: "Edit project" });
+    await trigger.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const removedOption = row.getByRole("option", { name: "Removed remotely" });
+    await expect(removedOption).toHaveClass(/active/);
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const remoteProject = (await pull.json()).changes.projects.find((project: { id: string }) => project.id === removedID);
+    await request.post(server.url + "/api/sync", {
+      data: {
+        since: 0,
+        changes: {
+          projects: [{
+            id: remoteProject.id,
+            name: remoteProject.name,
+            color: remoteProject.color,
+            archived: remoteProject.archived,
+            created_at: remoteProject.created_at,
+            updated_at: remoteProject.updated_at + 10_000,
+            deleted_at: remoteProject.updated_at + 10_000,
+          }],
+        },
+      },
+    });
+    await triggerSync(page);
+
+    await expect(removedOption).toHaveCount(0);
+    const activeDescendant = await trigger.getAttribute("aria-activedescendant");
+    expect(activeDescendant).not.toBeNull();
+    await expect(page.locator(`[id="${activeDescendant}"]`)).toBeVisible();
+    expect(pageErrors).toEqual([]);
   });
 
   test("clicking the modal backdrop closes the editor without breaking its own controls", async ({ page, server }) => {

@@ -1,7 +1,7 @@
 // IndexedDB layer: the local source of truth. The UI reads and writes only this
 // database; the sync engine reconciles it with the server in the background.
 import { openDB, type IDBPDatabase } from "idb";
-import type { SyncedRow, TableName } from "./types";
+import type { SyncedRow, TableName, TimeEntry } from "./types";
 
 export const TABLES: TableName[] = ["projects", "time_entries", "time_off"];
 
@@ -13,15 +13,48 @@ export interface DirtyMarker {
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
+interface LegacyPausedTimeEntry extends TimeEntry {
+  paused_ms?: number;
+}
+
+// Mirrors SQLite migration 009 exactly. Finished rows keep their start and move
+// their stop back, clamped at the start; running rows move their start forward.
+// Metadata and tombstones are intentionally untouched.
+export function compactLegacyPausedEntry(entry: LegacyPausedTimeEntry): TimeEntry {
+  const pausedMs = entry.paused_ms;
+  const compacted = { ...entry };
+  delete compacted.paused_ms;
+  if (typeof pausedMs !== "number" || !Number.isFinite(pausedMs) || pausedMs <= 0) return compacted;
+  if (entry.stopped_at === null) {
+    compacted.started_at = entry.started_at + pausedMs;
+  } else {
+    compacted.stopped_at = Math.max(entry.started_at, entry.stopped_at - pausedMs);
+  }
+  return compacted;
+}
+
 function db(): Promise<IDBPDatabase> {
-  dbPromise ??= openDB("worktime", 1, {
-    upgrade(database) {
-      for (const table of TABLES) {
-        database.createObjectStore(table, { keyPath: "id" });
+  dbPromise ??= openDB("worktime", 2, {
+    async upgrade(database, oldVersion, _newVersion, transaction) {
+      if (oldVersion < 1) {
+        for (const table of TABLES) {
+          database.createObjectStore(table, { keyPath: "id" });
+        }
+        database.createObjectStore("meta");
+        // Dirty markers queue local changes for push; key is `${table}:${id}`.
+        database.createObjectStore("dirty");
       }
-      database.createObjectStore("meta");
-      // Dirty markers queue local changes for push; key is `${table}:${id}`.
-      database.createObjectStore("dirty");
+      if (oldVersion < 2) {
+        const entries = transaction.objectStore("time_entries");
+        let cursor = await entries.openCursor();
+        while (cursor) {
+          const legacy = cursor.value as LegacyPausedTimeEntry;
+          if (Object.hasOwn(legacy, "paused_ms")) {
+            await cursor.update(compactLegacyPausedEntry(legacy));
+          }
+          cursor = await cursor.continue();
+        }
+      }
     },
     // Another tab is deleting the database, which only happens on logout or when a
     // different account signs in. Holding the connection would block that delete; and

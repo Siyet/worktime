@@ -338,25 +338,14 @@ func (s *Store) StopAgentSession(ctx context.Context, userID, sessionID, reason 
 	if signal.At < session.LastHeartbeatAt || signal.At-session.LastHeartbeatAt > policy.IdleMs {
 		effectiveEnd = trailingEnd(session.LastHeartbeatAt, signal.At, session.LastKind, policy)
 	}
-	discardable, err := technicalEntryStillOwned(ctx, transaction, userID, session)
-	if err != nil {
-		return AgentSession{}, err
-	}
-	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, effectiveEnd, now)
+	seq, closed, err := closeAgentEntryWithTechnicalCleanup(
+		ctx, transaction, userID, session, effectiveEnd, now,
+	)
 	if err != nil {
 		return AgentSession{}, err
 	}
 	if closed {
 		session.EntryServerSeq = &seq
-		if discardable {
-			seq, discarded, err := discardZeroMinuteTechnicalEntry(ctx, transaction, userID, session, seq, now)
-			if err != nil {
-				return AgentSession{}, err
-			}
-			if discarded {
-				session.EntryServerSeq = &seq
-			}
-		}
 	}
 	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ?, entry_server_seq = ?, updated_at = ?
@@ -434,28 +423,14 @@ func (s *Store) ReconcileAgentSessions(ctx context.Context, now, graceMs int64) 
 			EntryUserEdited: session.entryUserEdited,
 			TaskKey:         session.taskKey, TaskTitle: session.taskTitle,
 		}
-		discardable, err := technicalEntryStillOwned(ctx, transaction, session.userID, agentSession)
-		if err != nil {
-			return 0, err
-		}
-		seq, closed, err := closeAgentEntry(ctx, transaction, session.userID, session.timeEntryID, endedAt, now)
+		seq, closed, err := closeAgentEntryWithTechnicalCleanup(
+			ctx, transaction, session.userID, agentSession, endedAt, now,
+		)
 		if err != nil {
 			return 0, err
 		}
 		if closed {
 			session.entryServerSeq = &seq
-			agentSession.EntryServerSeq = &seq
-			if discardable {
-				seq, discarded, err := discardZeroMinuteTechnicalEntry(
-					ctx, transaction, session.userID, agentSession, seq, now,
-				)
-				if err != nil {
-					return 0, err
-				}
-				if discarded {
-					session.entryServerSeq = &seq
-				}
-			}
 		}
 		_, err = transaction.ExecContext(ctx, `
 			UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ?,
@@ -682,7 +657,9 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		}
 		workedUntil := mark + billable
 		if idle := at - workedUntil; idle > 0 {
-			if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, workedUntil, now); err != nil {
+			if _, _, err := closeAgentEntryWithTechnicalCleanup(
+				ctx, transaction, userID, *session, workedUntil, now,
+			); err != nil {
 				return err
 			}
 			current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
@@ -862,6 +839,41 @@ func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, en
 		return 0, false, err
 	}
 	return seq, affected > 0, nil
+}
+
+// closeAgentEntryWithTechnicalCleanup is the single close path for an entry the
+// lifecycle currently owns. The cleanup predicate is intentionally evaluated
+// before closeAgentEntry advances server_seq: that marker, together with the
+// technical name and durable edit flags, proves the user has not touched the row.
+// This applies equally to final closes and to the segment just closed by an idle
+// split, so a sub-30-second technical fragment cannot survive merely because the
+// same agent session later resumed.
+func closeAgentEntryWithTechnicalCleanup(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	session AgentSession,
+	stoppedAt, now int64,
+) (int64, bool, error) {
+	discardable, err := technicalEntryStillOwned(ctx, transaction, userID, session)
+	if err != nil {
+		return 0, false, err
+	}
+	seq, closed, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, stoppedAt, now)
+	if err != nil || !closed || !discardable {
+		return seq, closed, err
+	}
+	session.EntryServerSeq = &seq
+	tombstoneSeq, discarded, err := discardZeroMinuteTechnicalEntry(
+		ctx, transaction, userID, session, seq, now,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if discarded {
+		seq = tombstoneSeq
+	}
+	return seq, true, nil
 }
 
 // technicalEntryStillOwned is evaluated before closeAgentEntry changes the row's

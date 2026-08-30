@@ -50,7 +50,8 @@ missing".
 emit one heartbeat and then stop before `set_agent_task` has a chance to name
 it. That is real activity as far as the lifecycle is concerned, so the first
 heartbeat correctly opens a row, but a duration below 30 seconds rounds to
-`0m` in the feed. Stop and reconciliation soft-delete only that exact class:
+`0m` in the feed. Idle splitting, stop and reconciliation soft-delete only
+that exact class:
 the task is still unset, the automatic description is unchanged, the agent
 still owns the row, and its billable duration is below 30 seconds. The
 tombstone gets its own `server_seq`, so every device removes a row it may have
@@ -75,11 +76,23 @@ segments in the PWA and reports. Trailing idle is trimmed on stop and by
 reconciliation. Auto-compaction sends a heartbeat (`PreCompact`), not a stop,
 so it does not create a false pause.
 
+A project edit accepted through normal sync also updates the session's current
+project in the same transaction. That includes clearing the project. A stale LWW
+loser, an older segment, and a row owned by another user cannot change it, so the
+next segment after an idle gap inherits exactly the last accepted project of the
+current entry.
+
 Migration 009 removes the old `paused_ms` column. Historical rows store only the
 total paused duration, not individual pause boundaries, so the migration
 preserves their duration by compressing the interval: it moves the stop backward
 for finished rows and the start forward for running rows. Every changed row gets
 a fresh sync cursor so existing browsers receive the compacted boundary.
+
+Browsers can be offline while that server migration runs. IndexedDB schema
+version 2 therefore applies the same clamped boundary compaction atomically when
+a v1 database is first opened, then removes the legacy property from each row.
+Dirty markers, tombstones, IDs, and sync metadata remain unchanged, and the
+schema version prevents a later reopen from compacting an interval twice.
 
 **Long tool calls.** `PreToolUse` sends a heartbeat with `activity=tool_start`.
 Without it a twenty minute `Bash` or `Task` is indistinguishable from an empty

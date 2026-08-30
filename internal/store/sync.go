@@ -127,6 +127,10 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 				return SyncResponse{}, err
 			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
+		} else if err := propagateAcceptedEntryProject(
+			ctx, transaction, userID, entry.ID, entry.ProjectID, entry.UpdatedAt,
+		); err != nil {
+			return SyncResponse{}, err
 		}
 		nextSeq++
 	}
@@ -226,6 +230,32 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		return SyncResponse{}, err
 	}
 	return response, nil
+}
+
+// propagateAcceptedEntryProject makes a project-only PWA edit durable for the
+// current agent session. It runs only after the LWW upsert reports a write and in
+// the same transaction, so a refused stale row cannot change future segments and
+// a failed sync cannot leave the entry and session disagreeing. The ownership
+// join is server-owned on both sides; a pushed agent_session_id is ignored, and a
+// row from another user can never select or update the session.
+func propagateAcceptedEntryProject(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID, entryID string,
+	projectID *string,
+	updatedAt int64,
+) error {
+	_, err := transaction.ExecContext(ctx, `
+		UPDATE agent_sessions
+		SET project_id = ?, updated_at = MAX(updated_at, ?)
+		WHERE user_id = ? AND time_entry_id = ?
+		  AND EXISTS (
+			SELECT 1 FROM time_entries
+			WHERE id = ? AND user_id = agent_sessions.user_id
+			  AND agent_session_id = agent_sessions.id
+		  )`,
+		projectID, updatedAt, userID, entryID, entryID)
+	return err
 }
 
 // refusedIDs holds the ids of pushed rows the last-write-wins guard left untouched,

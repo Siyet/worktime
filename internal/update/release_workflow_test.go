@@ -85,8 +85,9 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 	if unsetVersion < 0 || firstBuild < 0 || unsetVersion >= firstBuild {
 		t.Fatal("release input VERSION must be unset before validation installs or builds anything")
 	}
-	if strings.Contains(validation[unsetVersion+len("          unset VERSION\n"):], "$VERSION") {
-		t.Fatal("release input VERSION must not be referenced after validation isolation")
+	validationRemainder := validation[unsetVersion+len("          unset VERSION\n"):]
+	if strings.Contains(validationRemainder, "VERSION") {
+		t.Fatal("release input VERSION must not be referenced or reassigned after validation isolation")
 	}
 	for _, command := range []string{
 		"          npm run build --prefix web\n",
@@ -105,6 +106,7 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 	}
 	artifact := workflow[artifactStart : artifactStart+artifactEnd]
 	for _, required := range []string{
+		`VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`,
 		"buildinfo.Version=$VERSION",
 		`--build-arg "VERSION=$VERSION"`,
 		`--tag "$IMAGE:$VERSION"`,
@@ -112,6 +114,11 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 		if !strings.Contains(artifact, required) {
 			t.Fatalf("release artifact build lost version propagation %q", required)
 		}
+	}
+	releaseWebBuild := strings.Index(artifact, `VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`)
+	nativeBuildLoop := strings.Index(artifact, "          for architecture in amd64 arm64; do\n")
+	if releaseWebBuild < 0 || nativeBuildLoop < 0 || releaseWebBuild >= nativeBuildLoop {
+		t.Fatal("release frontend must be rebuilt with the release version before native binaries embed it")
 	}
 }
 

@@ -273,6 +273,8 @@ test.describe("reports v3", () => {
       ],
     });
 
+    await page.goto(server.url + "/#/settings");
+    await page.getByLabel("Language").selectOption("ru");
     await page.goto(server.url + `/#/reports/print?from=${isoDate(0)}&to=${isoDate(0)}`);
     await expect(page.getByRole("heading", { name: "По тегам" })).toBeVisible();
     await expect(page.getByText("без тега")).toBeVisible();
@@ -289,7 +291,7 @@ test.describe("reports v3", () => {
     await expect(page.locator("tr.sumrow")).toHaveCount(1);
   });
 
-  test("printable report route renders Russian report with real data", async ({ page, server }) => {
+  test("printable report follows the selected language", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
     await seedServer(server.url, {
       projects: [{ id: projectID, name: "Printable" }],
@@ -299,11 +301,30 @@ test.describe("reports v3", () => {
       timeOff: [{ kind: "dayoff", dateFrom: isoDate(-2), dateTo: isoDate(-2) }],
     });
 
-    await page.goto(server.url + `/#/reports/print?from=${isoDate(-6)}&to=${isoDate(0)}`);
-    await expect(page.getByText("отчёт по времени")).toBeVisible();
+    const printPath = `/#/reports/print?from=${isoDate(-6)}&to=${isoDate(0)}`;
+
+    await page.goto(server.url + "/#/settings");
+    await page.getByLabel("Language").selectOption("en");
+    await page.goto(server.url + printPath);
+    await expect(page.getByText("time report")).toBeVisible();
     await expect(page.getByText("printed work")).toBeVisible();
     await expect(page.getByText("Printable").first()).toBeVisible();
-    await expect(page.getByText(/дей-офф/).first()).toBeVisible();
-    await expect(page.getByText(/Среднее считается/)).toBeVisible();
+    await expect(page.getByText("Day off").first()).toBeVisible();
+    await expect(page.getByText(/Average is total tracked time/)).toBeVisible();
+    await expect(page.getByText("Печать / PDF")).toHaveCount(0);
+
+    for (const localized of [
+      { locale: "ru", title: "отчёт по времени", print: "Печать / PDF" },
+      { locale: "es", title: "informe de tiempo", print: "Imprimir / PDF" },
+      { locale: "de", title: "Zeitbericht", print: "Drucken / PDF" },
+      { locale: "fr", title: "rapport de temps", print: "Imprimer / PDF" },
+      { locale: "zh", title: "工时报告", print: "打印 / PDF" },
+    ]) {
+      await page.goto(server.url + "/#/settings");
+      await page.locator("#language").selectOption(localized.locale);
+      await page.goto(server.url + printPath);
+      await expect(page.getByText(localized.title)).toBeVisible();
+      await expect(page.getByRole("button", { name: localized.print })).toBeVisible();
+    }
   });
 });

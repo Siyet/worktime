@@ -134,7 +134,7 @@ The Entries column is a count, not a total. An entry with two tags is one entry 
 
 PRINT DISPLAY ROUNDING
 
-fmtRu rounds each group independently, so displayed values can drift from the displayed Итого and percentages can sum to 99 or 102. Both printed tables run their values through apportion() (largest-remainder allocation against the displayed total) so displayed minutes sum exactly to Итого and displayed percentages sum exactly to 100. Without this, adding the Итого row would merely make the existing drift visible.
+fmtDuration rounds each group independently, so displayed values can drift from the displayed Total and percentages can sum to 99 or 102. Both printed tables run their values through apportion() (largest-remainder allocation against the displayed total) so displayed minutes sum exactly to Total and displayed percentages sum exactly to 100. Without this, adding the Total row would merely make the existing drift visible.
 
 ## Печатный отчёт
 
@@ -148,7 +148,7 @@ Three additions, all conditional on the range containing at least one tagged ent
 2. A new "По тегам" figure between "По проектам" and "Детализация", structurally identical to "По проектам" but with no dot column and a single-ink bar. "без тега" is italic, hatched and always last: three redundant cues, and if background graphics are switched off in the print dialog the label and the ordering still carry it.
 3. An "Итого" row on BOTH tables. This is the highest-value line on the sheet: it is what lets a reader add the column up and check that the tag breakdown and the project breakdown reconcile against the same number, without doing arithmetic.
 
-Because the Итого row invites exactly that arithmetic, the displayed values must actually sum to it. fmtRu rounds each group independently, so 15 project groups can drift several minutes from the total and three equal groups render as 17%+17%+17%. Both tables therefore run their values through apportion() (largest-remainder) before display: displayed group minutes sum exactly to the displayed Итого, and displayed percentages sum exactly to 100.
+Because the Total row invites exactly that arithmetic, the displayed values must actually sum to it. fmtDuration rounds each group independently, so 15 project groups can drift several minutes from the total and three equal groups render as 17%+17%+17%. Both tables therefore run their values through apportion() (largest-remainder) before display: displayed group minutes sum exactly to the displayed Total, and displayed percentages sum exactly to 100.
 
 The detail list stays grouped by project and each row shows the entry's full billable minutes, so the detail rows reconcile against "По проектам". The tag table shows split shares. The note states the split rule, so both reconciliation paths on the sheet are labelled rather than left to be discovered as a discrepancy.
 
@@ -181,14 +181,14 @@ MARKUP
                 ></div>
               </div>
             </td>
-            <td class="num">{fmtRu(row.minutes)}</td>
+            <td class="num">{fmtDuration(row.minutes)}</td>
             <td class="num">{row.pct}%</td>
           </tr>
         {/each}
         <tr class="sumrow">
           <td>Итого</td>
           <td></td>
-          <td class="num">{fmtRu(totalMinutes)}</td>
+          <td class="num">{fmtDuration(totalMinutes)}</td>
           <td class="num">100%</td>
         </tr>
       </tbody>
@@ -199,7 +199,7 @@ MARKUP
 <!-- same sumrow added to the existing "По проектам" tbody -->
 <tr class="sumrow">
   <td>Итого</td><td></td>
-  <td class="num">{fmtRu(totalMinutes)}</td>
+  <td class="num">{fmtDuration(totalMinutes)}</td>
   <td class="num">100%</td>
 </tr>
 
@@ -211,7 +211,7 @@ MARKUP
   </td>
   <td class="num">{dayShort(entry.date)}</td>
   <td class="num">{startTime(entry.startedAt)}</td>
-  <td class="num">{fmtRu(minutesOf(entry))}</td>
+  <td class="num">{fmtDuration(minutesOf(entry))}</td>
 </tr>
 
 <!-- .note gains one sentence, only when the tag figure is present -->
@@ -1551,4 +1551,3 @@ tr.sumrow td {
   </p>
 {/if}
 ```
-

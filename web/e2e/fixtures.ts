@@ -146,6 +146,7 @@ export function pushBarrier(
 }
 
 interface SeedEntry {
+  id?: string;
   description: string;
   startedAt: number;
   stoppedAt: number | null;
@@ -174,7 +175,7 @@ export async function seedServer(
       deleted_at: null,
     })),
     time_entries: (data.entries ?? []).map((entry) => ({
-      id: crypto.randomUUID(),
+      id: entry.id ?? crypto.randomUUID(),
       project_id: entry.projectID ?? null,
       description: entry.description,
       tags: entry.tags ?? [],

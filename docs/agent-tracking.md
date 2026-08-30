@@ -154,6 +154,18 @@ different data - but the Timer page groups them into one line with a count badge
 that unfolds back into individual rows repeating the task name. Their technical
 identifiers remain available in each row's full editor.
 
+The group's separate edit button opens one dialog for its description, project
+and tags; dates, times and session identifiers remain per-entry. Membership is
+captured when the dialog opens, and the local write is all-or-none. A Stop or
+boundary correction arriving while it is open is preserved, while a concurrent
+change to grouping metadata asks the user to reopen instead of overwriting it.
+Server delivery can still settle individual rows through LWW or validation, so
+the UI reports the exact accepted/rejected/conflicted count and retries rejected
+members only. A project accepted for each currently owned agent row reaches that
+row's session in the same sync transaction. A genuinely different description
+sets the existing exact user-named guard; a no-op keeps normalised spelling
+variants byte-for-byte and does not invent user intent.
+
 ## Filing the session under a project
 
 The hook sends no project, so an agent session starts under none, and the report

@@ -1827,6 +1827,110 @@ func TestSyncAcceptedCurrentEntryProjectCarriesToAgentSession(t *testing.T) {
 	}
 }
 
+func TestSyncBulkGroupMetadataCarriesToEveryCurrentAgentSession(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-bulk-group@test.local")
+	ctx := t.Context()
+
+	projectID := uuid.NewString()
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{Projects: []Project{{
+		ID: projectID, Name: "WorkTime", Color: "#123456", CreatedAt: 1, UpdatedAt: 1,
+	}}}}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	sessionIDs := []string{uuid.NewString(), uuid.NewString()}
+	entries := make([]TimeEntry, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+		if _, err := testStore.SetAgentTask(ctx, user.ID,
+			AgentTaskSelector{SessionID: sessionID}, "GH-8", "Edit a whole task group in one dialog"); err != nil {
+			t.Fatalf("set task for %s: %v", sessionID, err)
+		}
+		entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+		if err != nil {
+			t.Fatalf("get entry for %s: %v", sessionID, err)
+		}
+		entry.Description = "Shared manual correction"
+		entry.ProjectID = &projectID
+		entry.Tags = TagList{"development", "review"}
+		entry.UpdatedAt++
+		entries = append(entries, entry)
+	}
+
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: entries}}); err != nil {
+		t.Fatalf("push bulk group edit: %v", err)
+	}
+	for _, sessionID := range sessionIDs {
+		session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+		if err != nil {
+			t.Fatalf("get session %s: %v", sessionID, err)
+		}
+		if session.ProjectID == nil || *session.ProjectID != projectID || !session.EntryUserEdited || !session.EntryUserNamed {
+			t.Fatalf("bulk edit was not adopted by session %s: %+v", sessionID, session)
+		}
+
+		lastActive := agentBaseMs + agentZeroMinuteMs
+		testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
+		resumed := testHeartbeat(t, testStore, user.ID, sessionID, lastActive+testIdleMs+1)
+		next, err := testStore.GetTimeEntry(ctx, user.ID, *resumed.TimeEntryID)
+		if err != nil {
+			t.Fatalf("get resumed entry for %s: %v", sessionID, err)
+		}
+		if next.ProjectID == nil || *next.ProjectID != projectID {
+			t.Fatalf("resumed entry for %s did not inherit project: %+v", sessionID, next)
+		}
+	}
+}
+
+func TestSyncAgentUserNamedUsesExactAutomaticDescription(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-user-named-exact@test.local")
+	ctx := t.Context()
+	sessionID := uuid.NewString()
+	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	if _, err := testStore.SetAgentTask(ctx, user.ID,
+		AgentTaskSelector{SessionID: sessionID}, "GH-8", "Grouped edit"); err != nil {
+		t.Fatalf("set task: %v", err)
+	}
+
+	entry, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get entry: %v", err)
+	}
+	entry.Tags = TagList{"review"}
+	entry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{entry}}}); err != nil {
+		t.Fatalf("push exact automatic description: %v", err)
+	}
+	afterExact, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get exact session: %v", err)
+	}
+	if afterExact.EntryUserNamed || !afterExact.EntryUserEdited {
+		t.Fatalf("exact automatic description ownership = %+v", afterExact)
+	}
+
+	entry, err = testStore.GetTimeEntry(ctx, user.ID, entry.ID)
+	if err != nil {
+		t.Fatalf("get entry after exact edit: %v", err)
+	}
+	// This remains in the same client-side task group after case/space
+	// normalisation, but ownership is intentionally exact on the server.
+	entry.Description = "gh-8  grouped edit"
+	entry.UpdatedAt++
+	if _, err := testStore.Sync(ctx, user.ID, SyncRequest{Changes: SyncChanges{TimeEntries: []TimeEntry{entry}}}); err != nil {
+		t.Fatalf("push normalised variant: %v", err)
+	}
+	afterVariant, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
+	if err != nil {
+		t.Fatalf("get variant session: %v", err)
+	}
+	if !afterVariant.EntryUserNamed {
+		t.Fatalf("non-exact normalised variant did not become user-named: %+v", afterVariant)
+	}
+}
+
 func TestAcceptedAgentEntryEditsSurviveImmediateCloseResumeAndSecondShortStop(t *testing.T) {
 	tests := []struct {
 		name      string

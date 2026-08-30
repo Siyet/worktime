@@ -1,7 +1,12 @@
 // Application state: runes-based stores backed by IndexedDB. Every mutation
 // writes to the local database first, then pokes the sync engine.
-import { getAllRows, getRow, saveLocalRow } from "../db";
+import { getAllRows, getRow, saveLocalRow, saveLocalRows, type LocalMutationReceipt } from "../db";
 import { maxTagLength } from "../limits";
+import {
+  disposeTrackedLocalMutation,
+  trackLocalMutation,
+  type TrackedLocalMutationReceipt,
+} from "../mutation-progress";
 import { requestSync, SYNC_MERGED_EVENT } from "../sync.svelte";
 import type { Project, TimeEntry, TimeOff, TimeOffKind } from "../types";
 import { uuidv7 } from "../uuid";
@@ -102,6 +107,43 @@ export async function updateEntry(entryID: string, patch: Partial<TimeEntry>): P
   await saveLocalRow("time_entries", persistable(updated));
   upsertInto(appState.entries, updated);
   requestSync();
+}
+
+export type GroupEntryPatch = Partial<Pick<TimeEntry, "description" | "project_id" | "tags">>;
+
+// updateEntries is one local-first user action: every member is resolved again at
+// save time, patched over its latest row, and committed with all dirty markers in one
+// IndexedDB transaction. appState changes only after that transaction succeeds.
+export async function updateEntries(entryIDs: readonly string[], patch: GroupEntryPatch): Promise<TrackedLocalMutationReceipt> {
+  if (Object.keys(patch).length === 0) return trackLocalMutation({ markers: [], rows: [] });
+  const ids = [...new Set(entryIDs)];
+  const entries = ids.map((id) => appState.entries.find((candidate) => candidate.id === id));
+  if (entries.some((entry) => entry === undefined)) {
+    throw new Error("group member is no longer available");
+  }
+  const updated = entries.map((entry) => {
+    const current = entry!;
+    const next: TimeEntry = { ...current, ...patch, id: current.id, updated_at: nextUpdatedAt(current) };
+    if (patch.tags !== undefined) next.tags = sortTags(patch.tags);
+    return next;
+  });
+  const stored = updated.map(persistable);
+  // Track before the IndexedDB commit becomes visible. A sync already in flight
+  // can read a just-committed marker before this async function resumes.
+  const prepared: LocalMutationReceipt = {
+    markers: stored.map((entry) => ({ table: "time_entries", id: entry.id, updated_at: entry.updated_at })),
+    rows: stored,
+  };
+  const tracked = trackLocalMutation(prepared);
+  try {
+    await saveLocalRows("time_entries", stored);
+  } catch (error) {
+    disposeTrackedLocalMutation(tracked);
+    throw error;
+  }
+  for (const entry of updated) upsertInto(appState.entries, entry);
+  requestSync();
+  return tracked;
 }
 
 export async function deleteEntry(entryID: string): Promise<void> {

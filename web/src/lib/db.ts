@@ -11,6 +11,17 @@ export interface DirtyMarker {
   updated_at: number;
 }
 
+export interface LocalMutationReceipt {
+  markers: DirtyMarker[];
+  rows: SyncedRow[];
+}
+
+export const rejectedMetaKey = "rejected";
+
+export function rejectionKey(marker: DirtyMarker): string {
+  return `${marker.table}:${marker.id}@${marker.updated_at}`;
+}
+
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
 interface LegacyPausedTimeEntry extends TimeEntry {
@@ -81,12 +92,41 @@ export async function getRow<Row extends SyncedRow>(table: TableName, id: string
 
 // saveLocalRow persists a user-made change and queues it for sync.
 export async function saveLocalRow(table: TableName, row: SyncedRow): Promise<void> {
+  await saveLocalRows(table, [row]);
+}
+
+// saveLocalRows is the local transaction boundary for one user action. A group
+// edit must never leave three rows changed and two untouched because one put
+// failed: the rows and every matching dirty marker commit together or not at all.
+export async function saveLocalRows(table: TableName, rows: SyncedRow[]): Promise<LocalMutationReceipt> {
+  if (rows.length === 0) return { markers: [], rows: [] };
   const database = await db();
   const transaction = database.transaction([table, "dirty"], "readwrite");
-  await transaction.objectStore(table).put(row);
-  const marker: DirtyMarker = { table, id: row.id, updated_at: row.updated_at };
-  await transaction.objectStore("dirty").put(marker, `${table}:${row.id}`);
-  await transaction.done;
+  const markers: DirtyMarker[] = [];
+  try {
+    for (const row of rows) {
+      await transaction.objectStore(table).put(row);
+      const marker: DirtyMarker = { table, id: row.id, updated_at: row.updated_at };
+      await transaction.objectStore("dirty").put(marker, `${table}:${row.id}`);
+      markers.push(marker);
+    }
+    await transaction.done;
+  } catch (error) {
+    // A synchronous structured-clone failure can happen after earlier requests
+    // were queued. Explicitly abort so those requests cannot commit by themselves.
+    try {
+      transaction.abort();
+    } catch {
+      // The transaction may already have aborted; the original error is clearer.
+    }
+    try {
+      await transaction.done;
+    } catch {
+      // Consume the transaction's AbortError; callers need the put/clone error.
+    }
+    throw error;
+  }
+  return { markers, rows: [...rows] };
 }
 
 // readRows fetches the rows behind a set of dirty markers in one transaction. Opening
@@ -148,7 +188,7 @@ export async function mergeServerRows(
 
 // sameStoredRow compares two versions of a row by content. server_seq is excluded: it
 // moves on every write and says nothing about what the UI would render.
-function sameStoredRow(local: SyncedRow, incoming: SyncedRow): boolean {
+export function sameStoredRow(local: SyncedRow, incoming: SyncedRow): boolean {
   const fields = new Set([...Object.keys(local), ...Object.keys(incoming)]);
   fields.delete("server_seq");
   for (const field of fields) {

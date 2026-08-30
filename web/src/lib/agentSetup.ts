@@ -192,8 +192,10 @@ Append this block to \`${file}\`, creating the file if it is missing. If a block
     <!-- worktime:begin -->
     - WorkTime: call the MCP tool set_agent_task(task_key, task_title) as soon as the
       task number is known, looking the title up in whatever tracker connection is
-      available. WorkTime never reads a tracker itself. Until it is called, the work is
-      filed under a technical tag like "${tag}".
+      available. WorkTime never reads a tracker itself. Preserve the tracker's native
+      visible key: a repository-scoped issue is exactly "#N", never "owner/repo#N";
+      project-scoped keys such as "AIM2-123" stay unchanged. Until it is called, the
+      work is filed under a technical tag like "${tag}".
     - If asked to book this work to a project, call update_time_entry(project: "<name>")
       with no entry_id - it edits the running session and takes a project name from
       list_projects, never an id.

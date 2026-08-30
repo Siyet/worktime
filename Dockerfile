@@ -1,4 +1,4 @@
-FROM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /app/web
 ARG VERSION=dev
 ENV VITE_WORKTIME_VERSION=${VERSION}
@@ -7,11 +7,11 @@ RUN npm ci --no-fund --no-audit
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILT_AT=unknown

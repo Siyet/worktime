@@ -75,11 +75,11 @@ func TestReleaseWorkflowDoesNotUseRunnerContextInJobEnvironment(t *testing.T) {
 func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 	workflow := releaseWorkflow(t)
 	validationStart := strings.Index(workflow, "      - name: Run full validation gates")
-	artifactStart := strings.Index(workflow, "      - name: Build native artifacts and multi-platform image")
-	if validationStart < 0 || artifactStart <= validationStart {
-		t.Fatal("release workflow does not have the expected validation and artifact steps")
+	nativeStart := strings.Index(workflow, "      - name: Build and verify native artifacts")
+	if validationStart < 0 || nativeStart <= validationStart {
+		t.Fatal("release workflow does not have the expected validation and native artifact steps")
 	}
-	validation := workflow[validationStart:artifactStart]
+	validation := workflow[validationStart:nativeStart]
 	unsetVersion := strings.Index(validation, "          unset VERSION\n")
 	firstBuild := strings.Index(validation, "          npm ci --no-fund --no-audit --prefix web\n")
 	if unsetVersion < 0 || firstBuild < 0 || unsetVersion >= firstBuild {
@@ -100,25 +100,77 @@ func TestReleaseVersionIsIsolatedFromValidationBuild(t *testing.T) {
 		}
 	}
 
-	artifactEnd := strings.Index(workflow[artifactStart:], "      - name: Enforce manifest generation and create signed manifest")
-	if artifactEnd < 0 {
-		t.Fatal("release workflow does not have the expected post-artifact step")
+	nativeEnd := strings.Index(workflow[nativeStart:], "      - name: Refuse an existing container image tag")
+	if nativeEnd < 0 {
+		t.Fatal("release workflow does not have the expected post-native step")
 	}
-	artifact := workflow[artifactStart : artifactStart+artifactEnd]
+	native := workflow[nativeStart : nativeStart+nativeEnd]
 	for _, required := range []string{
 		`VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`,
 		"buildinfo.Version=$VERSION",
+	} {
+		if !strings.Contains(native, required) {
+			t.Fatalf("native release build lost version propagation %q", required)
+		}
+	}
+	releaseWebBuild := strings.Index(native, `VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`)
+	nativeBuildLoop := strings.Index(native, "          for architecture in amd64 arm64; do\n")
+	if releaseWebBuild < 0 || nativeBuildLoop < 0 || releaseWebBuild >= nativeBuildLoop {
+		t.Fatal("release frontend must be rebuilt with the release version before native binaries embed it")
+	}
+
+	imageStart := strings.Index(workflow, "      - name: Build and push multi-platform image")
+	if imageStart < 0 {
+		t.Fatal("release workflow does not have a separate image build step")
+	}
+	imageEnd := strings.Index(workflow[imageStart:], "      - name: Sign multi-platform image")
+	if imageEnd < 0 {
+		t.Fatal("release workflow does not have separate image build and signing steps")
+	}
+	image := workflow[imageStart : imageStart+imageEnd]
+	for _, required := range []string{
 		`--build-arg "VERSION=$VERSION"`,
 		`--tag "$IMAGE:$VERSION"`,
 	} {
-		if !strings.Contains(artifact, required) {
-			t.Fatalf("release artifact build lost version propagation %q", required)
+		if !strings.Contains(image, required) {
+			t.Fatalf("container release build lost version propagation %q", required)
 		}
 	}
-	releaseWebBuild := strings.Index(artifact, `VITE_WORKTIME_VERSION="$VERSION" npm run build --prefix web`)
-	nativeBuildLoop := strings.Index(artifact, "          for architecture in amd64 arm64; do\n")
-	if releaseWebBuild < 0 || nativeBuildLoop < 0 || releaseWebBuild >= nativeBuildLoop {
-		t.Fatal("release frontend must be rebuilt with the release version before native binaries embed it")
+}
+
+func TestReleaseImageBuildIsBoundedObservableAndRetrySafe(t *testing.T) {
+	workflow := releaseWorkflow(t)
+	guardStart := strings.Index(workflow, "      - name: Refuse an existing container image tag")
+	imageStart := strings.Index(workflow, "      - name: Build and push multi-platform image")
+	signStart := strings.Index(workflow, "      - name: Sign multi-platform image")
+	manifestStart := strings.Index(workflow, "      - name: Enforce manifest generation and create signed manifest")
+	if guardStart < 0 || imageStart <= guardStart || signStart <= imageStart || manifestStart <= signStart {
+		t.Fatalf("container guard/build/sign order is unsafe: guard=%d image=%d sign=%d manifest=%d", guardStart, imageStart, signStart, manifestStart)
+	}
+	guard := workflow[guardStart:imageStart]
+	if !strings.Contains(guard, "          go run ./cmd/ghcr-tag-check\n") {
+		t.Fatal("container retry guard must use the status-aware authenticated GHCR checker")
+	}
+	for _, forbidden := range []string{"imagetools inspect", "grep -Eq", "manifest unknown", "credential"} {
+		if strings.Contains(guard, forbidden) {
+			t.Fatalf("container retry guard must not classify text or depend on a credential helper: %q", forbidden)
+		}
+	}
+	image := workflow[imageStart:signStart]
+	for _, required := range []string{
+		"        timeout-minutes: 30\n",
+		"docker buildx build --progress=plain",
+		`--platform linux/amd64,linux/arm64`,
+		`--push --metadata-file dist/image-metadata.json`,
+		`echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"`,
+	} {
+		if !strings.Contains(image, required) {
+			t.Fatalf("bounded observable image build is missing %q", required)
+		}
+	}
+	sign := workflow[signStart:manifestStart]
+	if !strings.Contains(sign, `cosign sign --yes "$IMAGE@$IMAGE_DIGEST"`) {
+		t.Fatal("image digest must be signed only after the bounded image build succeeds")
 	}
 }
 

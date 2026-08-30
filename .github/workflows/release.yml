@@ -111,7 +111,8 @@ jobs:
       # v4.1.2
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
 
-      - name: Build native artifacts and multi-platform image
+      - name: Build and verify native artifacts
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
@@ -130,7 +131,19 @@ jobs:
             rm -rf "$check_dir"
           done
 
-          docker buildx build \
+      - name: Refuse an existing container image tag
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/ghcr-tag-check
+
+      - name: Build and push multi-platform image
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build --progress=plain \
             --platform linux/amd64,linux/arm64 \
             --build-arg "VERSION=$VERSION" \
             --build-arg "REVISION=$SOURCE_SHA" \
@@ -139,6 +152,12 @@ jobs:
             --push --metadata-file dist/image-metadata.json .
           IMAGE_DIGEST="$(node -e 'const m=require("./dist/image-metadata.json"); const d=m["containerimage.digest"]; if(!/^sha256:[0-9a-f]{64}$/.test(d)) process.exit(1); process.stdout.write(d)')"
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Sign multi-platform image
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
           cosign sign --yes "$IMAGE@$IMAGE_DIGEST"
 
       - name: Enforce manifest generation and create signed manifest

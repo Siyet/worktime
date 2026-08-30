@@ -70,15 +70,13 @@ origin_queue_dir() {
     printf '%s' "$path"
 }
 
-QUEUE_DIR=$(origin_queue_dir)
-ORIGIN_FILE="$QUEUE_DIR/.origin"
-# Both layouts shipped before v2 are adopted by exact request URL below.
-LEGACY_QUEUE_DIR="$QUEUE_ROOT/$(printf '%s' "$BASE_URL" | tr -c 'A-Za-z0-9' '_')"
-LOCK_DIR="$QUEUE_DIR/.lock"
-SPOOL_LOCK_DIR="$QUEUE_DIR/.spool-lock"
-QUEUE_READY=0
-OWNS_QUEUE_LOCK=0
-OWNS_SPOOL_LOCK=0
+now_ms() {
+    ms=$(date +%s%3N 2>/dev/null || true)
+    case "$ms" in
+        ''|*[!0-9]*) printf '%s000' "$(date +%s)" ;;
+        *) printf '%s' "$ms" ;;
+    esac
+}
 
 INPUT=$(cat 2>/dev/null || true)
 
@@ -114,6 +112,22 @@ case "$SESSION_ID" in
     *[!0-9a-fA-F-]*|'') exit 0 ;;
 esac
 
+# One immutable timestamp belongs to the incoming event. Capture it before URL
+# hashing, queue locks, git inspection, backlog flushes or network calls: none of
+# that hook overhead is agent activity, and a delayed flush must not inflate the
+# watermark or reorder two processes by eventual lock acquisition time.
+EVENT_AT=$(now_ms)
+
+QUEUE_DIR=$(origin_queue_dir)
+ORIGIN_FILE="$QUEUE_DIR/.origin"
+# Both layouts shipped before v2 are adopted by exact request URL below.
+LEGACY_QUEUE_DIR="$QUEUE_ROOT/$(printf '%s' "$BASE_URL" | tr -c 'A-Za-z0-9' '_')"
+LOCK_DIR="$QUEUE_DIR/.lock"
+SPOOL_LOCK_DIR="$QUEUE_DIR/.spool-lock"
+QUEUE_READY=0
+OWNS_QUEUE_LOCK=0
+OWNS_SPOOL_LOCK=0
+
 # Debug records deliberately contain no URL, token or request body. The full
 # session UUID was already part of the old event log and is the correlation key
 # needed to investigate missing time.
@@ -123,14 +137,6 @@ log_record() {
             "$(now_ms)" "$SESSION_ID" "$EVENT" "$1" "$2" >> "$WORKTIME_HOOK_LOG" 2>/dev/null || true
         chmod 600 "$WORKTIME_HOOK_LOG" 2>/dev/null || true
     }
-}
-
-now_ms() {
-    ms=$(date +%s%3N 2>/dev/null || true)
-    case "$ms" in
-        ''|*[!0-9]*) printf '%s000' "$(date +%s)" ;;
-        *) printf '%s' "$ms" ;;
-    esac
 }
 
 # CWD_JSON is JSON-ready, CWD_PATH is the raw path for git. CLAUDE_PROJECT_DIR
@@ -421,7 +427,7 @@ spool_request() {
         log_record queue_drop cap
         return 1
     fi
-    spool="$QUEUE_DIR/$(now_ms)-$$.req"
+    spool="$QUEUE_DIR/$EVENT_AT-$$.req"
     # Written aside and moved into place: a reader that catches the file between
     # creation and its first line would see an empty queue and let the live event
     # overtake the backlog, which is the one thing the queue exists to prevent.
@@ -510,16 +516,16 @@ case "$EVENT" in
         # "Claude Code #ab12cd34".
         AGENT_SOURCE=$(json_escape "${WORKTIME_AGENT_SOURCE:-claude-code}")
         deliver "$SESSION_URL/start" \
-            "{\"started_at\":$(now_ms),\"source\":\"$AGENT_SOURCE\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
+            "{\"started_at\":$EVENT_AT,\"source\":\"$AGENT_SOURCE\",\"cwd\":\"$CWD_JSON\",\"git_branch\":\"$BRANCH\"$TZ_FIELD}"
         ;;
     heartbeat)
-        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms)$TZ_FIELD}"
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$EVENT_AT$TZ_FIELD}"
         ;;
     tool_start)
         # PreToolUse, i.e. *before* the tool runs. Without it a twenty minute Bash
         # or Task call is indistinguishable from an empty chair: every other hook
         # fires only once the gap has already happened.
-        deliver "$SESSION_URL/heartbeat" "{\"at\":$(now_ms),\"activity\":\"tool_start\"$TZ_FIELD}"
+        deliver "$SESSION_URL/heartbeat" "{\"at\":$EVENT_AT,\"activity\":\"tool_start\"$TZ_FIELD}"
         ;;
     stop)
         # SessionEnd fires with reason=resume when the session is handed over to a
@@ -527,7 +533,7 @@ case "$EVENT" in
         # that is still working, and the next heartbeat would have to revive it.
         if [ "$REASON" != "resume" ]; then
             [ -n "$REASON" ] || REASON=other
-            deliver "$SESSION_URL/stop" "{\"ended_at\":$(now_ms),\"reason\":\"$REASON\"$TZ_FIELD}"
+            deliver "$SESSION_URL/stop" "{\"ended_at\":$EVENT_AT,\"reason\":\"$REASON\"$TZ_FIELD}"
         fi
         ;;
 esac

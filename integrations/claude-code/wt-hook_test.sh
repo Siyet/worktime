@@ -15,6 +15,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 FAILURES=0
 
+REAL_DATE=$(command -v date)
+REAL_SHA256SUM=$(command -v sha256sum 2>/dev/null || true)
+export REAL_DATE REAL_SHA256SUM
+
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/curl" <<'STUB'
 #!/bin/sh
@@ -40,12 +44,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -z "${WT_STUB_DELAY:-}" ] || sleep "$WT_STUB_DELAY"
+[ -z "${WT_STUB_TIME_MARKER:-}" ] || : > "$WT_STUB_TIME_MARKER"
 [ -z "${WT_STUB_ARGV_LOG:-}" ] || printf '%s\n' "$argv" >> "$WT_STUB_ARGV_LOG"
 [ -z "${WT_STUB_CONFIG_LOG:-}" ] || printf '%s\n' "$config" >> "$WT_STUB_CONFIG_LOG"
 printf '%s\t%s\n' "$url" "$body" >> "$WT_STUB_LOG"
 printf '%s' "${WT_STUB_CODE:-200}"
 STUB
 chmod +x "$WORK/bin/curl"
+
+cat > "$WORK/bin/date" <<'STUB'
+#!/bin/sh
+if [ "$1" = "+%s%3N" ] && [ -n "${WT_STUB_FIXED_MS:-}" ]; then
+    printf '%s' "$WT_STUB_FIXED_MS"
+elif [ "$1" = "+%s%3N" ] && [ -n "${WT_STUB_TIME_MARKER:-}" ]; then
+    if [ -e "$WT_STUB_TIME_MARKER" ]; then
+        printf '%s' "$WT_STUB_LATE_MS"
+    else
+        printf '%s' "$WT_STUB_EARLY_MS"
+    fi
+else
+    exec "$REAL_DATE" "$@"
+fi
+STUB
+chmod +x "$WORK/bin/date"
 
 PATH="$WORK/bin:$PATH"
 export PATH
@@ -164,6 +185,84 @@ check "nothing is left in the queue" "$(find "$WORK/queue" -name '*.req' | wc -l
 # pause and then drops the spooled proof that it was work.
 check "the backlog is delivered before the live event" \
     "$(head -n 1 "$WT_STUB_LOG" | cut -f2)" "$spooled_first"
+
+# --- event time is captured before a delayed backlog flush ---------------------
+reset_log event_time_setup
+rm -rf "$WORK/event-time" "$WORK/event-time-marker"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/event-time"
+event_time_dir=$(find "$WORK/event-time/v2" -name .origin -type f | head -n 1 | sed 's|/.origin$||')
+printf '%s\n%s' "http://worktime.test/api/agent/sessions/$SESSION/heartbeat" '{"at":7}' \
+    > "$event_time_dir/000-backlog.req"
+event_early=1700000000100
+event_late=1700000000900
+reset_log event_time
+printf '%s' "{\"session_id\":\"$SESSION\"}" | env \
+    WORKTIME_QUEUE_DIR="$WORK/event-time" WT_STUB_CODE=000 WT_STUB_DELAY=0.2 \
+    WT_STUB_TIME_MARKER="$WORK/event-time-marker" \
+    WT_STUB_EARLY_MS="$event_early" WT_STUB_LATE_MS="$event_late" \
+    sh "$HOOK" heartbeat
+timed_req=$(find "$event_time_dir" -name "$event_early-*.req" | head -n 1)
+check "a delayed flush cannot restamp the current spool filename" \
+    "$(find "$event_time_dir" -name "$event_early-*.req" | wc -l | tr -d ' ')" 1
+check "a delayed flush cannot move the heartbeat watermark" \
+    "$(grep -c "\"at\":$event_early" "$timed_req" || true)" 1
+check "the post-flush clock value never enters the retained request" \
+    "$(grep -c "$event_late" "$timed_req" || true)" 0
+
+# An earlier hook can spend longer hashing/preparing its queue than a later
+# process. Creation order is then reversed, but replay order must still follow
+# the immutable event timestamps in the filename.
+reset_log event_order_setup
+rm -rf "$WORK/event-order" "$WORK/hash-delay-bin" "$WORK/hash-started"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/event-order"
+event_order_dir=$(find "$WORK/event-order/v2" -name .origin -type f | head -n 1 | sed 's|/.origin$||')
+printf '%s\n%s' "http://worktime.test/api/agent/sessions/$SESSION/heartbeat" '{"at":8}' \
+    > "$event_order_dir/000-backlog.req"
+mkdir -p "$WORK/hash-delay-bin"
+cat > "$WORK/hash-delay-bin/sha256sum" <<'STUB'
+#!/bin/sh
+hash_input=$(cat)
+: > "$WT_STUB_HASH_MARKER"
+sleep "$WT_STUB_HASH_DELAY"
+if [ -n "$REAL_SHA256SUM" ]; then
+    printf '%s' "$hash_input" | "$REAL_SHA256SUM"
+else
+    printf '%s' "$hash_input" | shasum -a 256
+fi
+STUB
+chmod +x "$WORK/hash-delay-bin/sha256sum"
+order_early=1700000001100
+order_late=1700000001200
+printf '%s' "{\"session_id\":\"$SESSION\"}" | env \
+    PATH="$WORK/hash-delay-bin:$PATH" WORKTIME_QUEUE_DIR="$WORK/event-order" WT_STUB_CODE=000 \
+    WT_STUB_FIXED_MS="$order_early" WT_STUB_HASH_MARKER="$WORK/hash-started" WT_STUB_HASH_DELAY=2 \
+    sh "$HOOK" heartbeat &
+early_process=$!
+while [ ! -e "$WORK/hash-started" ]; do sleep 0.01; done
+printf '%s' "{\"session_id\":\"$SESSION\"}" | env \
+    WORKTIME_QUEUE_DIR="$WORK/event-order" WT_STUB_CODE=000 WT_STUB_FIXED_MS="$order_late" \
+    sh "$HOOK" heartbeat
+check "the later event is physically spooled while the earlier hook is delayed" \
+    "$(find "$event_order_dir" -name "$order_late-*.req" | wc -l | tr -d ' ')" 1
+check "the delayed earlier event has not been spooled yet" \
+    "$(find "$event_order_dir" -name "$order_early-*.req" | wc -l | tr -d ' ')" 0
+wait "$early_process"
+event_order=$(find "$event_order_dir" \( -name "$order_early-*.req" -o -name "$order_late-*.req" \) \
+    | sort | sed 's|.*/||; s/-.*//')
+check "lexical replay order follows event time, not spool creation time" "$event_order" \
+    "$(printf '%s\n%s' "$order_early" "$order_late")"
+
+# PID suffixes keep two processes that capture the same millisecond distinct.
+same_ms=1700000001300
+printf '%s' "{\"session_id\":\"$SESSION\"}" | env \
+    WORKTIME_QUEUE_DIR="$WORK/event-order" WT_STUB_CODE=000 WT_STUB_FIXED_MS="$same_ms" \
+    sh "$HOOK" heartbeat &
+printf '%s' "{\"session_id\":\"$SESSION\"}" | env \
+    WORKTIME_QUEUE_DIR="$WORK/event-order" WT_STUB_CODE=000 WT_STUB_FIXED_MS="$same_ms" \
+    sh "$HOOK" heartbeat &
+wait
+check "same-millisecond concurrent events keep distinct spool files" \
+    "$(find "$event_order_dir" -name "$same_ms-*.req" | wc -l | tr -d ' ')" 2
 
 # --- a stop replays the spooled start first -------------------------------------
 # stop on a session the server has never seen is a 404, which the hook classifies as

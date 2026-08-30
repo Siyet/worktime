@@ -17,6 +17,8 @@
   } from "../lib/report";
   import DailyChart, { type ChartDay } from "../lib/components/DailyChart.svelte";
   import Logo from "../lib/components/Logo.svelte";
+  import { t } from "../lib/i18n";
+  import { formattingLocale, hourCycle } from "../lib/settings.svelte";
 
   // The route carries the report parameters:
   // #/reports/print?from=...&to=...&projects=...&tags=...&print=1
@@ -39,7 +41,7 @@
   const entryKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
 
   function projectName(key: string): string {
-    return projects.find((project) => project.id === key)?.name ?? "Без проекта";
+    return projects.find((project) => project.id === key)?.name ?? t("No project");
   }
 
   function projectColor(key: string): string {
@@ -64,7 +66,7 @@
   const effectiveMinutes = $derived(overlapOnce ? splitOverlapMinutes(rangeAllEntries) : null);
   const minutesOf = (entry: ReportEntry) => effectiveMinutes?.get(entry.id) ?? entry.minutes;
 
-  // The same aggregation the Reports page renders. "без тега" sorts last there too:
+  // The same aggregation the Reports page renders. The untagged bucket sorts last there too:
   // italic, hatched, ordered - three cues that survive greyscale and disabled
   // background graphics.
   const summary = $derived(summariseReport(entries, days, off, minutesOf));
@@ -78,7 +80,7 @@
   const byProject = $derived(summary.byProject);
   const byTag = $derived(summary.byTag);
 
-  // The Итого row invites the reader to add the column up, so the displayed
+  // The total row invites the reader to add the column up, so the displayed
   // values must actually sum to it: largest-remainder allocation instead of
   // rounding each group independently (which drifts minutes and renders three
   // equal groups as 17%+17%+17%).
@@ -127,70 +129,45 @@
     }));
   });
 
-  // --- Russian formatting ---
-
-  const MONTHS_GEN = [
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-  ];
-  const MONTHS_NOM = [
-    "январь",
-    "февраль",
-    "март",
-    "апрель",
-    "май",
-    "июнь",
-    "июль",
-    "август",
-    "сентябрь",
-    "октябрь",
-    "ноябрь",
-    "декабрь",
-  ];
+  // --- Locale-aware print formatting ---
 
   const pad2 = (value: number) => String(value).padStart(2, "0");
   // Round once before divmod: overlap shares are fractional, and rounding the
-  // remainder independently would render 59.5 as "0ч 60м".
-  const fmtRu = (minutes: number) => {
+  // remainder independently would render 59.5 as "0h 60m".
+  const fmtDuration = (minutes: number) => {
     const total = Math.round(minutes);
-    return `${Math.floor(total / 60)}ч ${pad2(total % 60)}м`;
+    return t("{h}h {m}m", { h: Math.floor(total / 60), m: pad2(total % 60) });
   };
-  const fmtHoursRu = (minutes: number) => (minutes / 60).toFixed(1) + " ч";
-  const dayShort = (dayISO: string) => `${Number(dayISO.slice(8))}.${dayISO.slice(5, 7)}`;
-  const monthIndex = (dayISO: string) => Number(dayISO.slice(5, 7)) - 1;
+  const fmtHours = (minutes: number) => t("{h} h", { h: (minutes / 60).toFixed(1) });
+  const isoDate = (dayISO: string) => new Date(`${dayISO}T12:00:00`);
+  const rangeFormatter = $derived.by(
+    () => new Intl.DateTimeFormat(formattingLocale(), { year: "numeric", month: "short", day: "numeric" }),
+  );
+  const monthFormatter = $derived.by(
+    () => new Intl.DateTimeFormat(formattingLocale(), { year: "numeric", month: "long" }),
+  );
+  const shortDayFormatter = $derived.by(
+    () => new Intl.DateTimeFormat(formattingLocale(), { month: "numeric", day: "numeric" }),
+  );
 
-  function ruRange(fromISO: string, toISO: string): string {
-    const fromDay = Number(fromISO.slice(8));
-    const toDay = Number(toISO.slice(8));
-    if (fromISO.slice(0, 7) === toISO.slice(0, 7)) {
-      const range = fromDay === toDay ? String(fromDay) : `${fromDay}–${toDay}`;
-      return `${range} ${MONTHS_GEN[monthIndex(fromISO)]}`;
-    }
-    return `${fromDay} ${MONTHS_GEN[monthIndex(fromISO)]} – ${toDay} ${MONTHS_GEN[monthIndex(toISO)]}`;
+  function dateRange(fromISO: string, toISO: string): string {
+    const from = isoDate(fromISO);
+    const to = isoDate(toISO);
+    return typeof rangeFormatter.formatRange === "function"
+      ? rangeFormatter.formatRange(from, to)
+      : `${rangeFormatter.format(from)} – ${rangeFormatter.format(to)}`;
   }
 
   const titlePeriod = $derived(
     dateFrom.slice(0, 7) === dateTo.slice(0, 7)
-      ? `${MONTHS_NOM[monthIndex(dateFrom)]} ${dateFrom.slice(0, 4)}`
-      : `${ruRange(dateFrom, dateTo)} ${dateTo.slice(0, 4)}`,
+      ? monthFormatter.format(isoDate(dateFrom))
+      : dateRange(dateFrom, dateTo),
   );
-  const generatedOn = $derived.by(() => {
-    const today = new Date();
-    return `${pad2(today.getDate())}.${pad2(today.getMonth() + 1)}.${today.getFullYear()}`;
-  });
-  const projectsLabel = $derived(projectFilter ? `проектов: ${projectFilter.size}` : "все проекты");
+  const generatedOn = $derived(rangeFormatter.format(new Date()));
+  const projectsLabel = $derived(projectFilter ? t("{n} projects", { n: projectFilter.size }) : t("all projects"));
 
-  const KIND_RU: Record<string, string> = { vacation: "отпуск", sick: "больничный", dayoff: "дей-офф" };
+  const kindLabel = (kind: string) =>
+    kind === "vacation" ? t("Vacation") : kind === "sick" ? t("Sick leave") : t("Day off");
 
   const absences = $derived.by(() => {
     const overlapping = appState.timeOff
@@ -199,7 +176,7 @@
     return overlapping.map((timeOff) => {
       const clippedFrom = timeOff.date_from > dateFrom ? timeOff.date_from : dateFrom;
       const clippedTo = timeOff.date_to < dateTo ? timeOff.date_to : dateTo;
-      return `${KIND_RU[timeOff.kind]} ${ruRange(clippedFrom, clippedTo)}`;
+      return `${kindLabel(timeOff.kind)} ${dateRange(clippedFrom, clippedTo)}`;
     });
   });
 
@@ -228,76 +205,81 @@
   });
 
   function startTime(startedAt: number): string {
-    const started = new Date(startedAt);
-    return `${started.getHours()}:${pad2(started.getMinutes())}`;
+    return new Date(startedAt).toLocaleTimeString(formattingLocale(), {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: hourCycle(),
+    });
   }
+
+  const dayShort = (dayISO: string) => shortDayFormatter.format(isoDate(dayISO));
 </script>
 
 <div class="print-root">
   <div class="actions">
-    <button onclick={() => (window.location.hash = "/reports")}>← Назад</button>
-    <button class="print-button" onclick={() => window.print()}>Печать / PDF</button>
+    <button onclick={() => (window.location.hash = "/reports")}>← {t("Back")}</button>
+    <button class="print-button" onclick={() => window.print()}>{t("Print / PDF")}</button>
   </div>
 
   <doc-page margin="0">
-    <div slot="footer" class="foot">WT · отчёт · {ruRange(dateFrom, dateTo)} {dateTo.slice(0, 4)}</div>
+    <div slot="footer" class="foot">WT · {t("Report")} · {dateRange(dateFrom, dateTo)}</div>
     <div class="sheet">
-      <h1><Logo size={22} />WT · <span>отчёт по времени</span> · {titlePeriod}</h1>
+      <h1><Logo size={22} />WT · <span>{t("time report")}</span> · {titlePeriod}</h1>
       <div class="sub">
-        Период: {ruRange(dateFrom, dateTo)} {dateTo.slice(0, 4)} · {projectsLabel} · сформировано {generatedOn}
+        {t("Period")}: {dateRange(dateFrom, dateTo)} · {projectsLabel} · {t("generated")} {generatedOn}
       </div>
 
       <div class="stats">
-        <div class="stat"><b>{fmtHoursRu(totalMinutes)}</b><i>всего за период</i></div>
+        <div class="stat"><b>{fmtHours(totalMinutes)}</b><i>{t("total for period")}</i></div>
         <div class="stat hi">
-          <b>{workDays.length ? fmtHoursRu(avgMinutes) : "—"}</b>
-          <i>в среднем на рабочий день ({workDays.length} дн.)</i>
+          <b>{workDays.length ? fmtHours(avgMinutes) : "—"}</b>
+          <i>{t("average per work day ({n}d)", { n: workDays.length })}</i>
         </div>
         <div class="stat">
-          <b>{peakDay ? fmtHoursRu(minutesByDay.get(peakDay) ?? 0) : "—"}</b>
-          <i>максимум за день{peakDay ? ` · ${dayShort(peakDay)}` : ""}</i>
+          <b>{peakDay ? fmtHours(minutesByDay.get(peakDay) ?? 0) : "—"}</b>
+          <i>{t("maximum per day")}{peakDay ? ` · ${dayShort(peakDay)}` : ""}</i>
         </div>
         <div class="stat">
-          <b>{fmtHoursRu(weekendMinutes)}</b>
-          <i>в выходные{totalMinutes ? ` (${Math.round((weekendMinutes / totalMinutes) * 100)}%)` : ""}</i>
+          <b>{fmtHours(weekendMinutes)}</b>
+          <i>{t("on weekends")}{totalMinutes ? ` (${Math.round((weekendMinutes / totalMinutes) * 100)}%)` : ""}</i>
         </div>
         <div class="stat">
-          <b>{offCounts.vacation + offCounts.sick + offCounts.dayoff} дн.</b>
-          <i>отсутствия: {offCounts.vacation} отпуск · {offCounts.sick} больничный · {offCounts.dayoff} дей-офф</i>
+          <b>{offCounts.vacation + offCounts.sick + offCounts.dayoff} {t("days")}</b>
+          <i>{t("time off ({v} vac · {s} sick · {d} dayoff)", { v: offCounts.vacation, s: offCounts.sick, d: offCounts.dayoff })}</i>
         </div>
       </div>
 
       <div class="figure">
-        <h2>Часы по дням</h2>
+        <h2>{t("Daily hours")}</h2>
         {#if chartTooWide}
-          <p class="toowide">Период слишком велик для графика по дням; цифры ниже охватывают его целиком.</p>
+          <p class="toowide">{t("The period is too long for a daily chart; the totals below cover it in full.")}</p>
         {:else}
           <DailyChart
             days={chartDays}
             {off}
             {avgMinutes}
-            avgCaption="среднее {(avgMinutes / 60).toFixed(1)}ч / раб. день"
-            hourUnit="ч"
+            avgCaption={t("avg {h}h / work day", { h: (avgMinutes / 60).toFixed(1) })}
+            hourUnit={t("h")}
             interactive={false}
           />
         {/if}
         <div class="legend">
-          <span><span class="sw" style="background: #e8a33d"></span>часы за день</span>
-          <span><span class="sw" style="background: rgba(96,125,190,0.35)"></span>выходной</span>
-          <span><span class="sw" style="background: rgba(64,190,196,0.4)"></span>отпуск</span>
-          <span><span class="sw sick-sw"></span>больничный</span>
-          <span><span class="sw" style="background: rgba(181,125,232,0.45)"></span>дей-офф</span>
+          <span><span class="sw" style="background: #e8a33d"></span>{t("tracked hours")}</span>
+          <span><span class="sw" style="background: rgba(96,125,190,0.35)"></span>{t("weekend")}</span>
+          <span><span class="sw" style="background: rgba(64,190,196,0.4)"></span>{t("vacation")}</span>
+          <span><span class="sw sick-sw"></span>{t("Sick leave")}</span>
+          <span><span class="sw" style="background: rgba(181,125,232,0.45)"></span>{t("Day off")}</span>
         </div>
       </div>
 
       <div class="figure">
-        <h2>По проектам</h2>
+        <h2>{t("By project")}</h2>
         <table>
           <thead>
             <tr>
-              <th style="width: 8rem">Проект</th>
-              <th aria-label="Доля"></th>
-              <th class="num" style="width: 5rem">Время</th>
+              <th style="width: 8rem">{t("Project")}</th>
+              <th aria-label={t("Share")}></th>
+              <th class="num" style="width: 5rem">{t("Time")}</th>
               <th class="num" style="width: 2.6rem">%</th>
             </tr>
           </thead>
@@ -310,17 +292,17 @@
                     <div style="width: {row.pct}%; background: {projectColor(row.key)}"></div>
                   </div>
                 </td>
-                <td class="num">{fmtRu(row.minutes)}</td>
+                <td class="num">{fmtDuration(row.minutes)}</td>
                 <td class="num">{row.pct}%</td>
               </tr>
             {:else}
-              <tr><td colspan="4" class="empty">Нет данных за период</td></tr>
+              <tr><td colspan="4" class="empty">{t("No data")}</td></tr>
             {/each}
             {#if byProjectDisplay.length > 0}
               <tr class="sumrow">
-                <td>Итого</td>
+                <td>{t("Total")}</td>
                 <td></td>
-                <td class="num">{fmtRu(totalMinutes)}</td>
+                <td class="num">{fmtDuration(totalMinutes)}</td>
                 <td class="num">100%</td>
               </tr>
             {/if}
@@ -330,13 +312,13 @@
 
       {#if byTagDisplay.length > 0}
         <div class="figure">
-          <h2>По тегам</h2>
+          <h2>{t("By tag")}</h2>
           <table>
             <thead>
               <tr>
-                <th style="width: 8rem">Тег</th>
-                <th aria-label="Доля"></th>
-                <th class="num" style="width: 5rem">Время</th>
+                <th style="width: 8rem">{t("Tag")}</th>
+                <th aria-label={t("Share")}></th>
+                <th class="num" style="width: 5rem">{t("Time")}</th>
                 <th class="num" style="width: 2.6rem">%</th>
               </tr>
             </thead>
@@ -344,7 +326,7 @@
               {#each byTagDisplay as row (row.key)}
                 <tr>
                   <td class:untagged-label={row.key === UNTAGGED_KEY}>
-                    {row.key === UNTAGGED_KEY ? "без тега" : row.key}
+                    {row.key === UNTAGGED_KEY ? t("untagged") : row.key}
                   </td>
                   <td>
                     <!-- Single ink for every bar: length is the only channel
@@ -353,14 +335,14 @@
                       <div class={row.key === UNTAGGED_KEY ? "hatch" : "ink"} style="width: {row.pct}%"></div>
                     </div>
                   </td>
-                  <td class="num">{fmtRu(row.minutes)}</td>
+                  <td class="num">{fmtDuration(row.minutes)}</td>
                   <td class="num">{row.pct}%</td>
                 </tr>
               {/each}
               <tr class="sumrow">
-                <td>Итого</td>
+                <td>{t("Total")}</td>
                 <td></td>
-                <td class="num">{fmtRu(totalMinutes)}</td>
+                <td class="num">{fmtDuration(totalMinutes)}</td>
                 <td class="num">100%</td>
               </tr>
             </tbody>
@@ -368,53 +350,51 @@
         </div>
       {/if}
 
-      <h2>Детализация</h2>
+      <h2>{t("Detail")}</h2>
       <table>
         <thead>
           <tr>
-            <th>Описание</th>
-            <th style="width: 5.5rem">Дата</th>
-            <th style="width: 4.5rem">Начало</th>
-            <th class="num" style="width: 4.5rem">Время</th>
+            <th>{t("Description")}</th>
+            <th style="width: 5.5rem">{t("Date")}</th>
+            <th style="width: 4.5rem">{t("Start")}</th>
+            <th class="num" style="width: 4.5rem">{t("Time")}</th>
           </tr>
         </thead>
         <tbody>
           {#each byProject as [key, minutes] (key)}
             <tr class="group">
               <td colspan="3"><span class="dot" style="background: {projectColor(key)}"></span>{projectName(key)}</td>
-              <td class="num">{fmtRu(minutes)}</td>
+              <td class="num">{fmtDuration(minutes)}</td>
             </tr>
             {#each entriesByProject.get(key) ?? [] as entry (entry.id)}
               <tr class="entry">
                 <td>
-                  {entry.description || "(без описания)"}
+                  {entry.description || t("(no description)")}
                   {#if entry.tags.length > 0}<span class="tagtrail">{entry.tags.join(" · ")}</span>{/if}
                 </td>
                 <td class="num">{dayShort(entry.date)}</td>
                 <td class="num">{startTime(entry.startedAt)}</td>
-                <td class="num">{fmtRu(minutesOf(entry))}</td>
+                <td class="num">{fmtDuration(minutesOf(entry))}</td>
               </tr>
             {/each}
           {:else}
-            <tr><td colspan="4" class="empty">Нет записей за период</td></tr>
+            <tr><td colspan="4" class="empty">{t("No entries in range")}</td></tr>
           {/each}
         </tbody>
       </table>
 
       <div class="note">
-        Среднее считается по всем затреканным часам, делённым на количество рабочих дней в периоде (без выходных,
-        отпуска, дей-оффов и больничных).
+        {t("Average is total tracked time divided by work days in the period, excluding weekends and time off.")}
         {#if overlapOnce}
-          Пересекающиеся записи учтены один раз: одновременная работа делит затраченное время поровну.
+          {t("Overlapping entries are counted once; concurrent work splits elapsed time equally.")}
         {/if}
         {#if byTagDisplay.length > 0}
-          Запись с несколькими тегами делит своё время между ними поровну, поэтому суммы по тегам и по проектам
-          совпадают с общим итогом; в детализации записи показаны целиком.
+          {t("Entries with multiple tags split their time equally between tags, so tag and project totals match; details show complete entries.")}
         {/if}
         {#if absences.length > 0}
-          Отсутствия в периоде: {absences.join(", ")}.
+          {t("Time off in period: {items}.", { items: absences.join(", ") })}
         {:else}
-          Отсутствий в периоде нет.
+          {t("No time off in period.")}
         {/if}
       </div>
     </div>

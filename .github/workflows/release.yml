@@ -33,7 +33,6 @@ jobs:
       GENERATION: ${{ inputs.generation }}
       SOURCE_SHA: ${{ github.sha }}
       IMAGE: ghcr.io/siyet/worktime
-      RELEASE_ID_FILE: ${{ runner.temp }}/worktime-release-id
       GOTOOLCHAIN: local
     steps:
       # v6. Every external action is pinned to a full commit revision.
@@ -211,11 +210,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          release_id_file="$RUNNER_TEMP/worktime-release-id"
           cleanup_armed=true
           cleanup() {
             status=$?
-            if test "$cleanup_armed" = true && test -s "$RELEASE_ID_FILE"; then
-              release_id="$(cat "$RELEASE_ID_FILE")"
+            if test "$cleanup_armed" = true && test -s "$release_id_file"; then
+              release_id="$(cat "$release_id_file")"
               release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" 2>/dev/null || true)"
               if test -n "$release_json" && \
                  test "$(node -e 'const r=JSON.parse(process.argv[1]); process.stdout.write(String(String(r.id)===process.argv[2] && r.immutable===false && r.tag_name===process.env.VERSION && r.target_commitish===process.env.SOURCE_SHA))' "$release_json" "$release_id")" = true; then
@@ -235,7 +235,7 @@ jobs:
             -f "name=WorkTime $VERSION" -F draft=true -F prerelease=false \
             -F generate_release_notes=true)"
           node -e 'const r=JSON.parse(process.argv[1]); if(!r.draft||r.tag_name!==process.env.VERSION||r.target_commitish!==process.env.SOURCE_SHA) process.exit(1); process.stdout.write(String(r.id))' \
-            "$release_json" > "$RELEASE_ID_FILE"
+            "$release_json" > "$release_id_file"
 
           gh release upload "$VERSION" \
             dist/worktime-linux-amd64 \
@@ -255,7 +255,7 @@ jobs:
           "$RUNNER_TEMP/downloaded/worktime-linux-amd64" --version | grep -Fqx "worktime $VERSION (revision $SOURCE_SHA, built $BUILT_AT)"
           "$RUNNER_TEMP/downloaded/worktime-linux-arm64" --version | grep -Fqx "worktime $VERSION (revision $SOURCE_SHA, built $BUILT_AT)"
 
-          release_id="$(cat "$RELEASE_ID_FILE")"
+          release_id="$(cat "$release_id_file")"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false >/dev/null
 
           gh release verify "$VERSION"

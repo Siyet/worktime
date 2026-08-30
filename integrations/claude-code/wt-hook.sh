@@ -17,28 +17,68 @@
 # Design constraints (do not "fix" these):
 #   - Always exits 0: a tracking failure must never block the agent.
 #   - curl runs with a hard 3s timeout.
-#   - Failed calls are spooled to $WORKTIME_QUEUE_DIR (default ~/.worktime/queue)
-#     with their original timestamps and flushed on the next event, so worktime
-#     being unreachable loses nothing. The server is idempotent, replays are safe.
+#   - Transient failures are spooled to $WORKTIME_QUEUE_DIR (default
+#     ~/.worktime/queue) with original timestamps and flushed on the next event.
+#     The FIFO is bounded at 1000 files; a cap/write drop is visible in the
+#     optional log. The server is idempotent, replays are safe.
 
 set -u
+# Queue files contain hook payloads (including cwd and git branch). Apply the
+# private mask before the first possible log, directory or temporary-file write;
+# chmod after creation would still leave a world-readable race window.
+umask 077
 
 EVENT="${1:-heartbeat}"
 BASE_URL="${WORKTIME_URL:-}"
 TOKEN="${WORKTIME_TOKEN:-}"
 QUEUE_ROOT="${WORKTIME_QUEUE_DIR:-$HOME/.worktime/queue}"
 FLUSH_LIMIT=20
+QUEUE_LIMIT=1000
 
 [ -n "$BASE_URL" ] && [ -n "$TOKEN" ] || exit 0
 
-# One queue per instance. A spooled request may only ever be replayed against the
-# server it was addressed to - the token in this process belongs to one instance,
-# and handing it to another would both leak it and get the event dropped, since a
-# 401 counts as a permanent rejection. Keeping them in separate directories also
-# means a dead instance's backlog cannot fill up the shared cap, and a working
-# instance never has to read anyone else's files to find out it has none of its own.
-QUEUE_DIR="$QUEUE_ROOT/$(printf '%s' "$BASE_URL" | tr -c 'A-Za-z0-9' '_')"
+# The v1 directory replaced every punctuation character with `_`, so distinct
+# origins such as http://host:8080 and http://host/8080 collided. v2 hashes the
+# exact URL. sha256sum is present on GNU/Linux and Git Bash; macOS ships shasum.
+# The dependency-free fallback hex-encodes every byte losslessly and splits the
+# path into 64-character components, well below filesystem name limits.
+origin_queue_dir() {
+    digest=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        digest=$(printf '%s' "$BASE_URL" | sha256sum 2>/dev/null | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        digest=$(printf '%s' "$BASE_URL" | shasum -a 256 2>/dev/null | awk '{print $1}')
+    fi
+    case "$digest" in
+        *[!0-9a-fA-F]*|'') digest="" ;;
+    esac
+    if [ "${#digest}" -eq 64 ]; then
+        printf '%s/v2/sha256/%s' "$QUEUE_ROOT" "$digest"
+        return
+    fi
+
+    encoded=$(printf '%s' "$BASE_URL" | od -An -tx1 2>/dev/null | tr -d ' \n')
+    case "$encoded" in
+        *[!0-9a-fA-F]*|'') printf '%s/v2/unavailable' "$QUEUE_ROOT"; return ;;
+    esac
+    path="$QUEUE_ROOT/v2/hex"
+    while [ -n "$encoded" ]; do
+        component=$(printf '%.64s' "$encoded")
+        path="$path/$component"
+        encoded=${encoded#"$component"}
+    done
+    printf '%s' "$path"
+}
+
+QUEUE_DIR=$(origin_queue_dir)
+ORIGIN_FILE="$QUEUE_DIR/.origin"
+# Both layouts shipped before v2 are adopted by exact request URL below.
+LEGACY_QUEUE_DIR="$QUEUE_ROOT/$(printf '%s' "$BASE_URL" | tr -c 'A-Za-z0-9' '_')"
 LOCK_DIR="$QUEUE_DIR/.lock"
+SPOOL_LOCK_DIR="$QUEUE_DIR/.spool-lock"
+QUEUE_READY=0
+OWNS_QUEUE_LOCK=0
+OWNS_SPOOL_LOCK=0
 
 INPUT=$(cat 2>/dev/null || true)
 
@@ -62,10 +102,28 @@ json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+# Diagnostic values are useful only as small correlation labels. Keeping a
+# conservative alphabet prevents a hook payload from forging another log line.
+sanitize_log_value() {
+    value=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._:-' '_')
+    printf '%.64s' "$value"
+}
+
 SESSION_ID=$(json_string session_id)
 case "$SESSION_ID" in
     *[!0-9a-fA-F-]*|'') exit 0 ;;
 esac
+
+# Debug records deliberately contain no URL, token or request body. The full
+# session UUID was already part of the old event log and is the correlation key
+# needed to investigate missing time.
+log_record() {
+    [ -z "${WORKTIME_HOOK_LOG:-}" ] || {
+        printf '%s session=%s event=%s state=%s detail=%s\n' \
+            "$(now_ms)" "$SESSION_ID" "$EVENT" "$1" "$2" >> "$WORKTIME_HOOK_LOG" 2>/dev/null || true
+        chmod 600 "$WORKTIME_HOOK_LOG" 2>/dev/null || true
+    }
+}
 
 now_ms() {
     ms=$(date +%s%3N 2>/dev/null || true)
@@ -112,7 +170,8 @@ tz_offset_min() {
     esac
 }
 
-# send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry)
+# send URL BODY -> 0 delivered, 1 rejected (permanent, drop), 2 unreachable (retry).
+# SEND_CODE is kept only for a body-free diagnostic record.
 #
 # The token goes to curl through a config on stdin rather than as an argument: argv is
 # world-readable through ps and /proc/<pid>/cmdline, and this runs on every tool call.
@@ -123,6 +182,7 @@ send() {
         --config - \
         -H "Content-Type: application/json" \
         -d "$2" 2>/dev/null) || code=000
+    SEND_CODE=$code
     case "$code" in
         2*) return 0 ;;
         000|408|429|5*) return 2 ;;
@@ -130,42 +190,192 @@ send() {
     esac
 }
 
+# Creates and binds the v2 queue to this exact origin. Noclobber makes the
+# binding an atomic claim when several hooks start together. A mismatched
+# binding is a fail-closed security error: do not send, delete or inspect files
+# in a directory that belongs to another origin.
+ensure_queue() {
+    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 1
+    chmod 700 "$QUEUE_DIR" 2>/dev/null || true
+    if [ ! -e "$ORIGIN_FILE" ]; then
+        (set -C; printf '%s\n' "$BASE_URL" > "$ORIGIN_FILE") 2>/dev/null || true
+    fi
+    owner=$(cat "$ORIGIN_FILE" 2>/dev/null || true)
+    if [ "$owner" != "$BASE_URL" ]; then
+        log_record binding_mismatch fail_closed
+        return 2
+    fi
+    chmod 600 "$ORIGIN_FILE" 2>/dev/null || true
+    QUEUE_READY=1
+    return 0
+}
+
 # The queue is shared by every hook process of every session, and hooks run
 # concurrently, so an unlocked flush sends the same file twice. mkdir is atomic
 # everywhere, which makes it the lock. A hook killed mid-flush would leave the
 # lock behind forever and silently freeze the queue, hence both the trap and the
 # age-based takeover.
+cleanup_owned_locks() {
+    if [ "$OWNS_QUEUE_LOCK" -eq 1 ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+        OWNS_QUEUE_LOCK=0
+    fi
+    if [ "$OWNS_SPOOL_LOCK" -eq 1 ]; then
+        rmdir "$SPOOL_LOCK_DIR" 2>/dev/null || true
+        OWNS_SPOOL_LOCK=0
+    fi
+}
+
+install_lock_trap() {
+    trap 'cleanup_owned_locks; exit 0' EXIT INT TERM
+}
+
+refresh_lock_trap() {
+    if [ "$OWNS_QUEUE_LOCK" -eq 1 ] || [ "$OWNS_SPOOL_LOCK" -eq 1 ]; then
+        install_lock_trap
+    else
+        trap - EXIT INT TERM
+    fi
+}
+
 lock_queue() {
-    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 1
+    [ "$QUEUE_READY" -eq 1 ] || return 1
     if [ -d "$LOCK_DIR" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
         rmdir "$LOCK_DIR" 2>/dev/null || true
     fi
     mkdir "$LOCK_DIR" 2>/dev/null || return 1
-    trap 'rmdir "$LOCK_DIR" 2>/dev/null; exit 0' EXIT INT TERM
+    OWNS_QUEUE_LOCK=1
+    install_lock_trap
     return 0
 }
 
 unlock_queue() {
-    trap - EXIT INT TERM
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    if [ "$OWNS_QUEUE_LOCK" -eq 1 ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+        OWNS_QUEUE_LOCK=0
+    fi
+    refresh_lock_trap
 }
 
-# Requests spooled by a version that kept one flat queue for the machine. They are
-# claimed by whichever instance they were addressed to; anything else is left where
-# it is, for the hook that owns it. The prefix is stripped rather than matched with
-# `case`, whose pattern side would read a `?` in the URL as a wildcard.
-adopt_legacy_queue() {
-    for spooled in "$QUEUE_ROOT"/*.req; do
-        [ -f "$spooled" ] || continue
-        url=$(head -n 1 "$spooled" 2>/dev/null)
-        [ "${url#"$BASE_URL"/}" != "$url" ] || continue
-        mv "$spooled" "$QUEUE_DIR/" 2>/dev/null || true
+# Spooling is independent of flushing because records appear through an atomic
+# rename, but the cap check and that rename must be serialized with other
+# writers or two simultaneous hooks can both observe 999 and grow past 1000.
+lock_spool() {
+    [ "$QUEUE_READY" -eq 1 ] || return 1
+    if [ -d "$SPOOL_LOCK_DIR" ] && [ -n "$(find "$SPOOL_LOCK_DIR" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+        rmdir "$SPOOL_LOCK_DIR" 2>/dev/null || true
+    fi
+    attempts=0
+    while ! mkdir "$SPOOL_LOCK_DIR" 2>/dev/null; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 100 ] || return 1
+        sleep 0.01
     done
+    OWNS_SPOOL_LOCK=1
+    install_lock_trap
+    return 0
+}
+
+unlock_spool() {
+    if [ "$OWNS_SPOOL_LOCK" -eq 1 ]; then
+        rmdir "$SPOOL_LOCK_DIR" 2>/dev/null || true
+        OWNS_SPOOL_LOCK=0
+    fi
+    refresh_lock_trap
+}
+
+# Moves one exact-origin legacy request without overwriting a request already
+# carrying the same old filename. Keeping the timestamp prefix preserves FIFO
+# order even when two old layouts happened to use the same process id.
+adopt_legacy_request() {
+    spooled=$1
+    legacy_request_belongs "$spooled" || return 0
+    name=${spooled##*/}
+    target="$QUEUE_DIR/$name"
+    suffix=0
+    while [ -e "$target" ]; do
+        suffix=$((suffix + 1))
+        target="$QUEUE_DIR/${name%.req}-legacy-$suffix.req"
+    done
+    chmod 600 "$spooled" 2>/dev/null || true
+    if mv "$spooled" "$target" 2>/dev/null; then
+        chmod 600 "$target" 2>/dev/null || true
+        log_record legacy_adopted accepted
+    else
+        log_record queue_drop legacy_move
+    fi
+}
+
+legacy_request_belongs() {
+    [ -f "$1" ] || return 1
+    legacy_url=$(head -n 1 "$1" 2>/dev/null)
+    [ "${legacy_url#"$BASE_URL"/}" != "$legacy_url" ]
+}
+
+legacy_queue_pending() {
+    for legacy_pending_file in "$QUEUE_ROOT"/*.req; do
+        legacy_request_belongs "$legacy_pending_file" && return 0
+    done
+    if [ -d "$LEGACY_QUEUE_DIR" ]; then
+        for legacy_pending_file in "$LEGACY_QUEUE_DIR"/*.req; do
+            legacy_request_belongs "$legacy_pending_file" && return 0
+        done
+    fi
+    return 1
+}
+
+# Requests may exist in the original flat root or the shipped v1 lossy origin
+# directory. A collided v1 directory can contain several origins; only requests
+# whose first-line URL begins with this exact BASE_URL plus `/` are claimed.
+adopt_legacy_queue() {
+    lock_spool || {
+        log_record queue_drop legacy_lock
+        return 1
+    }
+    for spooled in "$QUEUE_ROOT"/*.req; do
+        adopt_legacy_request "$spooled"
+    done
+    if [ "$LEGACY_QUEUE_DIR" != "$QUEUE_DIR" ] && [ -d "$LEGACY_QUEUE_DIR" ]; then
+        for spooled in "$LEGACY_QUEUE_DIR"/*.req; do
+            adopt_legacy_request "$spooled"
+        done
+    fi
+    unlock_spool
+    return 0
+}
+
+prepare_queue() {
+    ensure_queue
+    status=$?
+    [ "$status" -ne 2 ] || return 2
+    if [ "$status" -ne 0 ]; then
+        if legacy_queue_pending; then
+            log_record queue_drop legacy_unavailable
+            return 3
+        fi
+        return 1
+    fi
+    if ! lock_queue; then
+        if legacy_queue_pending; then
+            log_record queue_drop legacy_lock
+            return 3
+        fi
+        return 0
+    fi
+    if ! adopt_legacy_queue; then
+        unlock_queue
+        if legacy_queue_pending; then
+            log_record queue_drop legacy_lock
+            return 3
+        fi
+        return 0
+    fi
+    unlock_queue
+    return 0
 }
 
 flush_queue() {
-    [ -d "$QUEUE_ROOT" ] || return 0
-    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
+    [ "$QUEUE_READY" -eq 1 ] || return 0
     lock_queue || return 0
     adopt_legacy_queue
     flushed=0
@@ -176,8 +386,18 @@ flush_queue() {
         body=$(tail -n +2 "$spooled")
         send "$url" "$body"
         case $? in
-            2) break ;;             # still unreachable, keep the rest in order
-            *) rm -f "$spooled" ;;  # delivered, or permanently rejected
+            0)
+                rm -f "$spooled"
+                log_record flush_delivered "http_$SEND_CODE"
+                ;;
+            1)
+                rm -f "$spooled"
+                log_record flush_rejected "http_$SEND_CODE"
+                ;;
+            2)
+                log_record flush_retry "http_$SEND_CODE"
+                break
+                ;;
         esac
         flushed=$((flushed + 1))
     done
@@ -185,17 +405,37 @@ flush_queue() {
 }
 
 spool_request() {
-    mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
+    [ "$QUEUE_READY" -eq 1 ] || {
+        log_record queue_drop unavailable
+        return 1
+    }
+    lock_spool || {
+        log_record queue_drop spool_lock
+        return 1
+    }
     # Cap the queue so a long outage cannot fill the disk. Only spooled requests
     # count; the lock directory must not push the queue over the cap.
     count=$(find "$QUEUE_DIR" -maxdepth 1 -name '*.req' 2>/dev/null | wc -l)
-    [ "$count" -lt 1000 ] || return 0
+    if [ "$count" -ge "$QUEUE_LIMIT" ]; then
+        unlock_spool
+        log_record queue_drop cap
+        return 1
+    fi
     spool="$QUEUE_DIR/$(now_ms)-$$.req"
     # Written aside and moved into place: a reader that catches the file between
     # creation and its first line would see an empty queue and let the live event
     # overtake the backlog, which is the one thing the queue exists to prevent.
-    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool.tmp" 2>/dev/null &&
-        mv "$spool.tmp" "$spool" 2>/dev/null || rm -f "$spool.tmp" 2>/dev/null || true
+    if { printf '%s\n' "$1"; printf '%s' "$2"; } > "$spool.tmp" 2>/dev/null &&
+        mv "$spool.tmp" "$spool" 2>/dev/null; then
+        chmod 600 "$spool" 2>/dev/null || true
+        unlock_spool
+        log_record queued transient
+        return 0
+    fi
+    rm -f "$spool.tmp" 2>/dev/null || true
+    unlock_spool
+    log_record queue_drop write
+    return 1
 }
 
 queue_pending() {
@@ -215,17 +455,30 @@ deliver() {
         return 0
     fi
     send "$1" "$2"
-    [ $? -eq 2 ] || return 0    # delivered, or rejected for good - nothing to retry
-    spool_request "$1" "$2"
+    case $? in
+        0) log_record delivered "http_$SEND_CODE" ;;
+        1) log_record rejected "http_$SEND_CODE" ;;
+        2) spool_request "$1" "$2" || true ;;
+    esac
+    return 0
 }
 
 SESSION_URL="$BASE_URL/api/agent/sessions/$SESSION_ID"
 REASON=$(json_string reason)
-SOURCE=$(json_string source)
+HOOK_NAME=$(sanitize_log_value "$(json_string hook_event_name)")
+HOOK_SOURCE=$(sanitize_log_value "$(json_string source)")
+HOOK_REASON=$(sanitize_log_value "$REASON")
+log_record seen "name_${HOOK_NAME:-none}_source_${HOOK_SOURCE:-none}_reason_${HOOK_REASON:-none}"
 
-[ -z "${WORKTIME_HOOK_LOG:-}" ] || printf '%s %s %s %s %s\n' \
-    "$(now_ms)" "$EVENT" "$(json_string hook_event_name)" \
-    "$SOURCE$REASON" "$SESSION_ID" >> "$WORKTIME_HOOK_LOG" 2>/dev/null || true
+# Adopt old flat/v1 requests before deciding whether this event may go live.
+# A binding mismatch is the one queue failure that also blocks live delivery:
+# sending from a directory claimed by another origin could expose its requests
+# to this origin's token. Ordinary unwritable storage still allows a live call.
+prepare_queue
+prepare_status=$?
+case "$prepare_status" in
+    2|3) exit 0 ;;
+esac
 
 # The backlog goes out before the current event. Delivering the live one first defeats
 # the queue twice over: the server ignores any signal at or before its watermark, so a
@@ -234,10 +487,10 @@ SOURCE=$(json_string source)
 # session whose start is still spooled hits a session that does not exist yet, which is
 # a 404 - permanent, dropped, never retried.
 #
-# SessionStart is the exception: it is the one synchronous hook (5 second budget), and
-# nothing can be queued for a session that has not started. It flushes afterwards.
-# Draining an empty queue costs nothing, and an unreachable server stops the drain on
-# the first attempt.
+# SessionStart is the exception: it is the one synchronous hook (5 second budget), so
+# it flushes afterwards. prepare_queue has already adopted legacy requests; if any
+# exist, deliver() spools this start behind them instead of letting it overtake.
+# Draining an empty queue costs nothing, and an unreachable server stops on the first.
 [ "$EVENT" = "start" ] || flush_queue
 
 # tz_offset_min rides along on every event. A session first seen from a heartbeat -

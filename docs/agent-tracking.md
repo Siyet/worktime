@@ -19,7 +19,11 @@ Three independent layers; each one is a fallback for the previous:
    heartbeat. This is the only layer that survives `SIGKILL`/OOM/network loss.
 3. **Offline queue in the hook script.** If worktime is unreachable, the hook
    spools the request (with its original timestamp) to `~/.worktime/queue` and
-   flushes the queue on the next event. A tracking failure never blocks the
+   flushes the queue on the next event. Accepted queue records retain FIFO order,
+   but new storage is deliberately capped at 1000 retained records per WorkTime
+   origin: a further event is dropped and reported in `WORKTIME_HOOK_LOG` rather
+   than filling the machine's disk. A larger backlog adopted from both old queue
+   layouts is preserved, not truncated. A tracking failure never blocks the
    agent: the script always exits 0 and curl has a hard 3s timeout.
 
 **The entry waits for activity.** A start says a process exists, which is not
@@ -253,8 +257,13 @@ By hand:
    an unreachable `/mcp` looks exactly like a working setup until you notice
    nothing is ever named.
 
-Set `WORKTIME_HOOK_LOG=~/wt-hook.log` to record every event the hook sees; it
-is the fastest way to tell whether a hook fires at all.
+Set `WORKTIME_HOOK_LOG=~/wt-hook.log` to record every event and delivery outcome
+the hook sees; it is the fastest way to tell whether a hook fires at all. The
+log records only a timestamp, session id, event, state and HTTP status class -
+never the token, origin or request body. The hook applies `umask 077` before its
+first write, so new log and queue files are owner-only. Queue requests may
+contain the working directory and Git branch and should still be treated as
+private data.
 
 `WORKTIME_AGENT_SOURCE` names the client in the `start` signal (default
 `claude-code`). Codex delivers the same payload shape on the same events, so the
@@ -326,12 +335,35 @@ OpenTelemetry is an optional independent check, not another source of truth for
 WorkTime. Enable Claude Code telemetry and export metrics as described in the
 [Claude Code monitoring guide](https://code.claude.com/docs/en/monitoring-usage),
 then compare the weekly sum of WorkTime agent-entry billable durations with
-`claude_code.active_time.total` for the same user and period. That duration
-metric is the useful accuracy check; `claude_code.session.count` only checks
-that session starts are present. Investigate a difference above roughly 5% by
-session id and the hook log before changing idle thresholds. WorkTime does not
-ingest or require an OTel collector, so tracking continues unchanged when
-telemetry is disabled.
+the **increase** in the cumulative `claude_code.active_time.total` counter for
+the same user and period. Sum its `type=user` and `type=cli` series exactly once;
+do not sum duplicated exporter replicas. That duration metric is the useful
+accuracy check; `claude_code.session.count` only checks that session starts are
+present. Investigate a difference above roughly 5% by session id and the hook
+log before changing idle thresholds. WorkTime does not ingest or require an OTel
+collector, so tracking continues unchanged when telemetry is disabled.
+
+The 5% figure is an operational acceptance target, not a result established by
+the deterministic test suite. A real comparison needs a complete production
+week. Record the evidence in an issue or release note with this reproducible
+template before declaring that target met:
+
+```text
+Period (UTC): <inclusive start> .. <exclusive end>
+User / WorkTime instance: <pseudonymous identifier>
+WorkTime agent billable seconds: <sum only rows with agent_session_id, clipping every interval to [start,end)>
+OTel counter start: <sum type=user + type=cli once, excluding duplicate replicas>
+OTel counter end: <same series/aggregation at exclusive end>
+claude_code.active_time.total delta seconds: <end - start, with counter resets handled by the backend>
+Absolute difference seconds: abs(WorkTime - OTel)
+Relative difference: abs(WorkTime - OTel) / OTel * 100
+Concurrent sessions: <confirm both sides use additive per-session semantics>
+Known exclusions / outages / queue_drop records: <details>
+Result: PASS only when OTel > 0, periods match, and difference <= 5%
+```
+
+Lifecycle, crash and queue behavior are covered in CI; no synthetic run is
+presented as a substitute for that weekly production observation.
 
 A signal older than the last billed moment (a spooled heartbeat delivered after
 the stop) only refreshes metadata: it can neither revive the session nor open a
@@ -371,13 +403,35 @@ end, so during real work they are seconds apart.
   the timer cannot stay open longer than the grace period after the last real
   activity.
 - **worktime down or unreachable**: events queue on disk with their original
-  timestamps and replay later; the server rebuilds the same timeline. The queue
-  is flushed under a directory lock, so parallel hook processes never send the
-  same spooled request twice.
+  timestamps and replay later; the server rebuilds the same timeline for events
+  accepted into the spool. Each exact `WORKTIME_URL` has a cryptographically
+  named directory plus an exact `.origin` binding, so another instance's files
+  are never sent with this instance's token. The old flat and lossy per-instance
+  layouts are adopted by exact request origin without deleting collided foreign
+  records. The queue is flushed under a directory lock, so parallel hook
+  processes never send the same spooled request twice. At 1000 retained records,
+  or when local storage is unwritable, later events cannot be recovered and the
+  hook logs `queue_drop` when logging is enabled.
 - **User edits in the PWA**: see "Ownership of the entry" above.
-- **`/clear`, compaction, fork**: Claude Code issues a new `session_id`, which
-  is a new session and a new entry by design. They only converge in the UI,
-  once both are attached to the same task.
+- **Compaction and session replacement**: `PreCompact` is a heartbeat. A
+  following same-id `SessionStart(compact)` is an idempotent continuation and
+  neither closes nor duplicates the row. Only when the client actually supplies
+  a different `session_id` (for example some `/clear` or fork flows) is it a new
+  session and a new row by design. Rows converge in the UI once attached to the
+  same task.
+
+## Acceptance evidence
+
+| Behaviour | Automated evidence | Status |
+|---|---|---|
+| Idempotent start/heartbeat/stop, monotonic queued signals, revive rules | Store and API agent suites | Verified in CI |
+| First-activity materialisation, idle/tool segmentation, one row per pause | Store tests and browser agent-tracking suite | Verified in CI |
+| Lost stop (`kill -9` equivalent) closes at the exact watermark | Periodic reconcile browser regression | Verified in CI |
+| Server-down orphan closes on the first restart pass, before the long periodic tick | Restart-with-same-DB browser regression | Verified in CI |
+| Shipped shell, real curl, minted Bearer and live embedded binary agree on the protocol | Black-box browser fixture | Verified in CI on POSIX runners |
+| Queue ordering, concurrency, origin collision/isolation, legacy adoption, cap and POSIX privacy | `make test-hook` | Verified in CI |
+| Status line is read-only, one line, one-second timeout and uncached assets match the binary | API/status-line/hook asset suites | Verified in CI |
+| One real production week differs from OTel active time by at most 5% | Operational template above | **Pending real-world evidence** |
 
 ## Subagents
 

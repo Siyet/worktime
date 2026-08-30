@@ -254,23 +254,61 @@ func TestAgentHookAssetsAreServedFromTheBinary(t *testing.T) {
 	}
 
 	settings := getBody(t, testServer.URL+"/api/agent/hook-settings.json")
+	type hookCommand struct {
+		Type    string `json:"type"`
+		Command string `json:"command"`
+		Timeout int    `json:"timeout,omitempty"`
+		Async   bool   `json:"async,omitempty"`
+	}
+	type hookGroup struct {
+		Matcher string        `json:"matcher,omitempty"`
+		Hooks   []hookCommand `json:"hooks"`
+	}
 	var parsed struct {
-		Hooks      map[string]json.RawMessage `json:"hooks"`
+		Hooks      map[string][]hookGroup `json:"hooks"`
 		StatusLine struct {
+			Type            string `json:"type"`
 			Command         string `json:"command"`
+			Padding         int    `json:"padding"`
 			RefreshInterval int    `json:"refreshInterval"`
 		} `json:"statusLine"`
 	}
 	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
 		t.Fatalf("hook settings are not JSON: %v", err)
 	}
-	for _, event := range []string{"SessionStart", "PreToolUse", "SessionEnd"} {
-		if _, ok := parsed.Hooks[event]; !ok {
-			t.Fatalf("hook settings are missing %s", event)
-		}
+	expectedHooks := map[string][]hookGroup{
+		"SessionStart": {{
+			Matcher: "startup|resume|clear|compact|fork",
+			Hooks:   []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" start`, Timeout: 5}},
+		}},
+		"UserPromptSubmit": {{
+			Hooks: []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" heartbeat`, Async: true}},
+		}},
+		"PreToolUse": {{
+			Matcher: "*",
+			Hooks:   []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" tool_start`, Async: true}},
+		}},
+		"PostToolUse": {{
+			Matcher: "*",
+			Hooks:   []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" heartbeat`, Async: true}},
+		}},
+		"Stop": {{
+			Hooks: []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" heartbeat`, Async: true}},
+		}},
+		"PreCompact": {{
+			Hooks: []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" heartbeat`, Async: true}},
+		}},
+		"SessionEnd": {{
+			Hooks: []hookCommand{{Type: "command", Command: `"$HOME/.worktime/wt-hook.sh" stop`, Timeout: 30}},
+		}},
 	}
-	if !strings.Contains(parsed.StatusLine.Command, "wt-statusline.sh") || parsed.StatusLine.RefreshInterval <= 0 {
-		t.Fatalf("hook settings have no refreshing WorkTime status line: %+v", parsed.StatusLine)
+	if !reflect.DeepEqual(parsed.Hooks, expectedHooks) {
+		t.Fatalf("hook settings mapping drifted:\n got: %#v\nwant: %#v", parsed.Hooks, expectedHooks)
+	}
+	if parsed.StatusLine.Type != "command" ||
+		parsed.StatusLine.Command != `"$HOME/.worktime/wt-statusline.sh"` ||
+		parsed.StatusLine.Padding != 1 || parsed.StatusLine.RefreshInterval != 5 {
+		t.Fatalf("hook settings status line drifted: %+v", parsed.StatusLine)
 	}
 }
 

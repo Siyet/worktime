@@ -494,6 +494,46 @@ func TestAgentStartReplayIsIdempotent(t *testing.T) {
 	}
 }
 
+// Claude Code sends PreCompact as a heartbeat and may then emit SessionStart
+// with matcher=compact. Both signals retain the same session id during an
+// in-place compaction, so they must advance one session rather than inventing a
+// boundary. A genuinely new id is a different client session and therefore owns
+// a different row.
+func TestAgentCompactSignalsKeepSameIDAndSeparateNewID(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-compact@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	preCompact := testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+60_000)
+	if preCompact.Status != agentStatusActive || *preCompact.TimeEntryID != *started.TimeEntryID ||
+		preCompact.LastHeartbeatAt != agentBaseMs+60_000 {
+		t.Fatalf("PreCompact heartbeat split the session: %+v", preCompact)
+	}
+
+	compactStart, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: agentBaseMs + 61_000, Source: "claude-code",
+	}, testPolicy)
+	if err != nil {
+		t.Fatalf("compact start replay: %v", err)
+	}
+	if compactStart.Status != agentStatusActive || *compactStart.TimeEntryID != *started.TimeEntryID ||
+		compactStart.LastHeartbeatAt != agentBaseMs+61_000 {
+		t.Fatalf("same-id compact start created a boundary: %+v", compactStart)
+	}
+
+	newSessionID := uuid.NewString()
+	startTestAgentSession(t, testStore, user.ID, newSessionID, agentBaseMs+62_000)
+	newSession := testHeartbeat(t, testStore, user.ID, newSessionID, agentBaseMs+62_000)
+	if newSession.TimeEntryID == nil || *newSession.TimeEntryID == *started.TimeEntryID {
+		t.Fatalf("a genuinely new session id reused the compacted row: %+v", newSession)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 2 {
+		t.Fatalf("expected one row per actual session id, got %d", count)
+	}
+}
+
 func TestAgentHeartbeatWatermarkMonotonic(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-hb@test.local")

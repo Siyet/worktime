@@ -2,6 +2,7 @@
 // database, so tests are fully isolated and can run in parallel.
 import { test as base } from "@playwright/test";
 import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -48,15 +49,24 @@ export interface WorktimeServer {
   env: Record<string, string>;
 }
 
+export interface RestartableWorktimeServer extends WorktimeServer {
+  /** Stops the current process while preserving its SQLite database. */
+  stop(): Promise<void>;
+  /** Starts a new binary process against the preserved database. */
+  restart(env: Record<string, string>): Promise<void>;
+}
+
 interface ServerOptions {
   devAuth: boolean;
   /** Extra environment for the server process (agent thresholds, for example). */
   env?: Record<string, string>;
+  /** Existing directory to reuse for a restart test. */
+  dataDir?: string;
 }
 
 async function launchServer(options: ServerOptions): Promise<{ server: WorktimeServer; child: ChildProcess; dataDir: string }> {
   const port = await findFreePort();
-  const dataDir = mkdtempSync(path.join(tmpdir(), "wt-e2e-"));
+  const dataDir = options.dataDir ?? mkdtempSync(path.join(tmpdir(), "wt-e2e-"));
   const env: Record<string, string> = {
     WORKTIME_ADDR: `127.0.0.1:${port}`,
     WORKTIME_DB: path.join(dataDir, "e2e.db"),
@@ -72,6 +82,13 @@ async function launchServer(options: ServerOptions): Promise<{ server: WorktimeS
   return { server: { url, env }, child, dataDir };
 }
 
+async function stopServer(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, "exit");
+  child.kill();
+  await exited;
+}
+
 interface Fixtures {
   /** Running server with dev auth enabled and an empty database. */
   server: WorktimeServer;
@@ -85,6 +102,8 @@ interface Fixtures {
    * with that grace period no running row survives long enough to be clicked.
    */
   agentServerStale: WorktimeServer;
+  /** Server whose process can restart against the same database. */
+  agentServerRestart: RestartableWorktimeServer;
 }
 
 export const test = base.extend<Fixtures>({
@@ -117,6 +136,34 @@ export const test = base.extend<Fixtures>({
     await use(server);
     child.kill();
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 3 });
+  },
+  agentServerRestart: async ({}, use) => {
+    const initial = await launchServer({
+      devAuth: true,
+      env: { WORKTIME_AGENT_GRACE: "1h", WORKTIME_AGENT_RECONCILE: "1h" },
+    });
+    let child = initial.child;
+    let current = initial.server;
+    const controller: RestartableWorktimeServer = {
+      get url() {
+        return current.url;
+      },
+      get env() {
+        return current.env;
+      },
+      async stop() {
+        await stopServer(child);
+      },
+      async restart(env) {
+        await stopServer(child);
+        const restarted = await launchServer({ devAuth: true, env, dataDir: initial.dataDir });
+        child = restarted.child;
+        current = restarted.server;
+      },
+    };
+    await use(controller);
+    await stopServer(child);
+    rmSync(initial.dataDir, { recursive: true, force: true, maxRetries: 3 });
   },
 });
 

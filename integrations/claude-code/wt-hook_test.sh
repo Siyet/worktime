@@ -65,10 +65,15 @@ check() {
     fi
 }
 
-run_hook() {
-    # run_hook EVENT PAYLOAD
-    printf '%s' "$2" | WORKTIME_QUEUE_DIR="$WORK/queue" sh "$HOOK" "$1"
+stat_mode() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || true
 }
+
+run_hook() (
+    # run_hook EVENT PAYLOAD [QUEUE_DIR]
+    queue_dir=${3:-$WORK/queue}
+    printf '%s' "$2" | WORKTIME_QUEUE_DIR="$queue_dir" sh "$HOOK" "$1"
+)
 
 reset_log() {
     WT_STUB_LOG="$WORK/calls-$1.log"
@@ -224,6 +229,7 @@ case "$(cut -f2 "$WT_STUB_LOG")" in
     *) result="unexpected: $(cut -f2 "$WT_STUB_LOG")" ;;
 esac
 check "WORKTIME_AGENT_SOURCE names the client" "$result" codex
+WORKTIME_AGENT_SOURCE=claude-code
 
 # --- one queue per instance -----------------------------------------------------
 # The token in this process belongs to one instance. Replaying someone else's request
@@ -251,15 +257,218 @@ check "the foreign request is left where its own hook will find it" \
 
 # A foreign backlog at the cap must not stop this instance from spooling: the two
 # queues are separate directories, so the cap is per instance.
+foreign_index=1
+while [ "$foreign_index" -lt 1000 ]; do
+    printf '%s\n%s' "http://other-instance.test/api/agent/sessions/$SESSION/heartbeat" "{\"at\":$foreign_index}" \
+        > "$WORK/queue/foreign-$foreign_index.req"
+    foreign_index=$((foreign_index + 1))
+done
 reset_log foreigncap
 WT_STUB_CODE=000
 run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
 WT_STUB_CODE=200
 check "this instance spools into its own directory" \
     "$(find "$WORK/queue" -mindepth 2 -name '*.req' | wc -l | tr -d ' ')" 1
+check "a foreign cap-sized backlog remains untouched" \
+    "$(find "$WORK/queue" -maxdepth 1 -name '*foreign*.req' | wc -l | tr -d ' ')" 1000
 check "no half-written spool file is left behind" \
     "$(find "$WORK/queue" -name '*.tmp' | wc -l | tr -d ' ')" 0
 rm -rf "$WORK/queue"
+
+# --- v2 origin binding separates colliding v1 directories ----------------------
+reset_log collision_one
+rm -rf "$WORK/queue"
+COLLISION_ONE='http://host:8080'
+COLLISION_TWO='http://host/8080'
+legacy_one=$(printf '%s' "$COLLISION_ONE" | tr -c 'A-Za-z0-9' '_')
+legacy_two=$(printf '%s' "$COLLISION_TWO" | tr -c 'A-Za-z0-9' '_')
+check "the regression origins really collide under the v1 mapping" "$legacy_one" "$legacy_two"
+mkdir -p "$WORK/queue/$legacy_one"
+printf '%s\n%s' "$COLLISION_ONE/api/agent/sessions/$SESSION/heartbeat" '{"at":1}' \
+    > "$WORK/queue/$legacy_one/001-one.req"
+printf '%s\n%s' "$COLLISION_TWO/api/agent/sessions/$SESSION/heartbeat" '{"at":2}' \
+    > "$WORK/queue/$legacy_one/002-two.req"
+
+WORKTIME_URL="$COLLISION_ONE" WORKTIME_TOKEN=wt_one run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "the first origin adopts its own collided legacy request" \
+    "$(grep -c '\"at\":1}' "$WT_STUB_LOG" || true)" 1
+check "the first origin never replays the second origin with its token" \
+    "$(grep -c "$COLLISION_TWO" "$WT_STUB_LOG" || true)" 0
+check "the second origin's collided request is not deleted" \
+    "$(find "$WORK/queue/$legacy_one" -name '002-two.req' | wc -l | tr -d ' ')" 1
+
+reset_log collision_two
+WORKTIME_URL="$COLLISION_TWO" WORKTIME_TOKEN=wt_two run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "the second origin later adopts and delivers its own request" \
+    "$(grep -c "$COLLISION_TWO.*\"at\":2" "$WT_STUB_LOG" || true)" 1
+bindings=$(find "$WORK/queue/v2" -name .origin -type f -exec cat {} \; 2>/dev/null | sort)
+check "the colliding v1 origins have distinct exact v2 bindings" "$bindings" \
+    "$(printf '%s\n%s' "$COLLISION_ONE" "$COLLISION_TWO" | sort)"
+
+# If another process holds the adoption lock, a live event must not overtake an
+# exact-origin legacy record. The later call drains the old record first.
+WORKTIME_URL=http://worktime.test
+WORKTIME_TOKEN=wt_test
+WORKTIME_HOOK_LOG=
+reset_log adoption_busy
+rm -rf "$WORK/adoption-busy"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/adoption-busy"
+busy_dir=$(find "$WORK/adoption-busy/v2" -name .origin -type f | head -n 1 | sed 's|/.origin$||')
+mkdir "$busy_dir/.lock"
+WT_STUB_CODE=000 run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/adoption-busy"
+WT_STUB_CODE=200
+check "spooling never releases another process's queue lock" \
+    "$(find "$busy_dir" -maxdepth 1 -name '.lock' -type d | wc -l | tr -d ' ')" 1
+printf '%s\n%s' "http://worktime.test/api/agent/sessions/$SESSION/heartbeat" '{"at":17}' \
+    > "$WORK/adoption-busy/017-legacy.req"
+reset_log adoption_blocked
+WORKTIME_HOOK_LOG="$WORK/adoption-busy.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/adoption-busy"
+check "a busy adoption lock prevents the live event overtaking legacy work" \
+    "$(wc -l < "$WT_STUB_LOG" | tr -d ' ')" 0
+check "a deferred legacy record is not deleted" \
+    "$(find "$WORK/adoption-busy" -maxdepth 1 -name '017-legacy.req' | wc -l | tr -d ' ')" 1
+check "the deferred event is explicit in the log" \
+    "$(grep -c 'state=queue_drop detail=legacy_lock' "$WORK/adoption-busy.log" || true)" 1
+rmdir "$busy_dir/.lock"
+reset_log adoption_recovered
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/adoption-busy"
+check "the legacy record is delivered before work resumes" \
+    "$(head -n 1 "$WT_STUB_LOG" | cut -f2)" '{"at":17}'
+
+# A tampered or cryptographically colliding v2 binding fails closed. Neither a
+# queued file nor a live event may be sent or deleted with the wrong token.
+bound_dir=$(find "$WORK/queue/v2" -name .origin -type f -exec grep -lFx "$COLLISION_ONE" {} \; | head -n 1 | sed 's|/.origin$||')
+printf '%s' "$COLLISION_TWO" > "$bound_dir/.origin"
+printf '%s\n%s' "$COLLISION_ONE/api/agent/sessions/$SESSION/heartbeat" '{"at":3}' > "$bound_dir/003-bound.req"
+reset_log binding_mismatch
+WORKTIME_HOOK_LOG="$WORK/binding.log" \
+WORKTIME_URL="$COLLISION_ONE" WORKTIME_TOKEN=wt_one run_hook heartbeat "{\"session_id\":\"$SESSION\"}"
+check "a mismatched v2 binding sends nothing" "$(wc -l < "$WT_STUB_LOG" | tr -d ' ')" 0
+check "a mismatched v2 binding deletes nothing" "$(find "$bound_dir" -name '003-bound.req' | wc -l | tr -d ' ')" 1
+check "a mismatched v2 binding is observable" "$(grep -c 'state=binding_mismatch' "$WORK/binding.log" || true)" 1
+WORKTIME_URL=http://worktime.test
+WORKTIME_TOKEN=wt_test
+WORKTIME_HOOK_LOG=
+
+# A broken hash utility must not collapse every instance into one directory.
+# The fallback encodes every URL byte and keeps every path component below the
+# common 255-byte filesystem limit.
+mkdir -p "$WORK/bad-hash-bin"
+printf '#!/bin/sh\nprintf %s\\n not-a-hash\n' > "$WORK/bad-hash-bin/sha256sum"
+chmod +x "$WORK/bad-hash-bin/sha256sum"
+saved_path=$PATH
+PATH="$WORK/bad-hash-bin:$PATH" run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/fallback"
+PATH=$saved_path
+fallback_origin=$(find "$WORK/fallback/v2/hex" -name .origin -type f | head -n 1)
+check "an invalid hash result uses the lossless fallback" "$(cat "$fallback_origin")" "http://worktime.test"
+fallback_components_ok=1
+relative_fallback=${fallback_origin#"$WORK/fallback/v2/hex/"}
+old_ifs=$IFS
+IFS=/
+for component in $relative_fallback; do
+    [ "${#component}" -le 64 ] || fallback_components_ok=0
+done
+IFS=$old_ifs
+check "fallback queue components are at most 64 characters" "$fallback_components_ok" 1
+
+# --- queue and log files are private, outcomes are honest -----------------------
+reset_log private
+rm -rf "$WORK/private-queue" "$WORK/private.log"
+WT_STUB_CODE=000
+WORKTIME_HOOK_LOG="$WORK/private.log" \
+    run_hook start "{\"session_id\":\"$SESSION\",\"cwd\":\"/secret/project\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}" "$WORK/private-queue"
+WT_STUB_CODE=200
+private_req=$(find "$WORK/private-queue" -name '*.req' | head -n 1)
+private_dir=${private_req%/*}
+check "a new queue request is mode 600" "$(stat_mode "$private_req")" 600
+check "an origin queue directory is mode 700" "$(stat_mode "$private_dir")" 700
+check "an origin binding is mode 600" "$(stat_mode "$private_dir/.origin")" 600
+check "the hook log is mode 600" "$(stat_mode "$WORK/private.log")" 600
+check "the log records transient queueing" "$(grep -c 'state=queued' "$WORK/private.log" || true)" 1
+check "the log keeps sanitized hook provenance" \
+    "$(grep -c 'state=seen detail=name_SessionStart_source_startup_reason_none' "$WORK/private.log" || true)" 1
+check "the token is absent from the hook log" "$(grep -c 'wt_test' "$WORK/private.log" || true)" 0
+check "request bodies are absent from the hook log" "$(grep -c '/secret/project' "$WORK/private.log" || true)" 0
+check "origins are absent from the hook log" "$(grep -c 'worktime.test' "$WORK/private.log" || true)" 0
+
+for transient in 408 429 503; do
+    reset_log "transient-$transient"
+    rm -rf "$WORK/transient-$transient"
+    WT_STUB_CODE=$transient \
+        run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/transient-$transient"
+    check "HTTP $transient is retained for retry" \
+        "$(find "$WORK/transient-$transient" -name '*.req' | wc -l | tr -d ' ')" 1
+done
+WT_STUB_CODE=200
+
+reset_log permanent
+rm -rf "$WORK/permanent" "$WORK/permanent.log"
+WT_STUB_CODE=401 WORKTIME_HOOK_LOG="$WORK/permanent.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/permanent"
+WT_STUB_CODE=200
+check "a permanent 4xx is not queued forever" "$(find "$WORK/permanent" -name '*.req' | wc -l | tr -d ' ')" 0
+check "a permanent rejection is visible" "$(grep -c 'state=rejected.*http_401' "$WORK/permanent.log" || true)" 1
+
+# Queue creation can succeed while the final atomic rename still fails. Stub
+# only mv so the regression reaches that distinct write outcome.
+reset_log write_failure
+rm -rf "$WORK/write-failure" "$WORK/write-failure.log" "$WORK/bad-mv-bin"
+run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/write-failure"
+mkdir -p "$WORK/bad-mv-bin"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/bad-mv-bin/mv"
+chmod +x "$WORK/bad-mv-bin/mv"
+saved_path=$PATH
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/write-failure.log" PATH="$WORK/bad-mv-bin:$PATH" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/write-failure"
+PATH=$saved_path
+WT_STUB_CODE=200
+check "an atomic rename failure is reported as a write drop" \
+    "$(grep -c 'state=queue_drop detail=write' "$WORK/write-failure.log" || true)" 1
+check "a failed atomic rename leaves no partial request" \
+    "$(find "$WORK/write-failure" -name '*.tmp' -o -name '*.req' | wc -l | tr -d ' ')" 0
+
+# The FIFO is intentionally bounded. Older accepted requests stay in order; the
+# next event is dropped visibly once 1000 files are retained.
+reset_log cap
+rm -rf "$WORK/cap" "$WORK/cap.log"
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/cap.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/cap"
+cap_dir=$(find "$WORK/cap/v2" -name .origin -type f | head -n 1 | sed 's|/.origin$||')
+cap_index=1
+while [ "$cap_index" -lt 1000 ]; do
+    printf '%s\n%s' "http://worktime.test/api/agent/sessions/$SESSION/heartbeat" "{\"at\":$cap_index}" \
+        > "$cap_dir/1000000000000-$cap_index.req"
+    cap_index=$((cap_index + 1))
+done
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/cap.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/cap"
+WT_STUB_CODE=200
+check "the queue stays at its 1000-file bound" "$(find "$cap_dir" -name '*.req' | wc -l | tr -d ' ')" 1000
+check "a cap drop is explicit in the log" "$(grep -c 'state=queue_drop detail=cap' "$WORK/cap.log" || true)" 1
+rm -f "$(find "$cap_dir" -name '*.req' | head -n 1)"
+: > "$WORK/cap.log"
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/cap.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/cap" &
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/cap.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" "$WORK/cap" &
+wait
+WT_STUB_CODE=200
+check "concurrent writers cannot exceed the queue bound" \
+    "$(find "$cap_dir" -name '*.req' | wc -l | tr -d ' ')" 1000
+check "exactly one of two writers is dropped at 999" \
+    "$(grep -c 'state=queue_drop detail=cap' "$WORK/cap.log" || true)" 1
+check "the spool lock is released" "$(find "$cap_dir" -name '.spool-lock' | wc -l | tr -d ' ')" 0
+
+# Failure to create local storage is non-fatal and visible; a tracking hook may
+# never block the editor even when both the server and its queue are unavailable.
+reset_log unavailable
+rm -f "$WORK/unavailable.log"
+WT_STUB_CODE=000 WORKTIME_HOOK_LOG="$WORK/unavailable.log" \
+    run_hook heartbeat "{\"session_id\":\"$SESSION\"}" /dev/null
+WT_STUB_CODE=200
+check "unavailable queue storage is explicit in the log" \
+    "$(grep -c 'state=queue_drop detail=unavailable' "$WORK/unavailable.log" || true)" 1
 
 # --- the tool_start signal and the timezone -------------------------------------
 reset_log toolstart

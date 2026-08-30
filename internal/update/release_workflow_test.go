@@ -359,6 +359,7 @@ func TestReleaseAttestationWaitBoundsHungGH(t *testing.T) {
 	}
 	directory := t.TempDir()
 	writeExecutable(t, filepath.Join(directory, "gh"), `#!/bin/sh
+printf 'started' > "$GH_STARTED_MARKER"
 trap '' TERM
 while :; do sleep 10; done
 `)
@@ -367,6 +368,7 @@ while :; do sleep 10; done
 		t.Fatal(err)
 	}
 	marker := filepath.Join(directory, "cleanup-state")
+	startedMarker := filepath.Join(directory, "gh-started")
 	harness := filepath.Join(directory, "workflow-harness")
 	writeExecutable(t, harness, `#!/usr/bin/env bash
 set -euo pipefail
@@ -377,7 +379,7 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
-bash "$ATTESTATION_HELPER" 2 1
+bash "$ATTESTATION_HELPER" 4 1
 cleanup_armed=false
 `)
 	command := exec.Command("bash", harness)
@@ -388,14 +390,18 @@ cleanup_armed=false
 		"GITHUB_REPOSITORY=Siyet/worktime",
 		"ATTESTATION_HELPER="+helper,
 		"CLEANUP_MARKER="+marker,
+		"GH_STARTED_MARKER="+startedMarker,
 	)
 	started := time.Now()
 	if command.Run() == nil {
 		t.Fatal("hung gh unexpectedly succeeded")
 	}
 	elapsed := time.Since(started)
-	if elapsed < time.Second || elapsed > 5*time.Second {
-		t.Fatalf("hung gh bounded in %s, want 1s..5s", elapsed)
+	if elapsed < 2*time.Second || elapsed > 6*time.Second {
+		t.Fatalf("hung gh bounded in %s, want 2s..6s", elapsed)
+	}
+	if started, err := os.ReadFile(startedMarker); err != nil || string(started) != "started" {
+		t.Fatalf("fake gh did not enter the timeout path: marker=%q err=%v", started, err)
 	}
 	cleanupState, err := os.ReadFile(marker)
 	if err != nil {

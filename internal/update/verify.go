@@ -266,5 +266,5 @@ func writeTUFRootAtomic(path string, data []byte) error {
 		_ = os.Remove(temporaryPath)
 		return err
 	}
-	return syncDirectory(filepath.Dir(path))
+	return syncTUFCacheDirectory(filepath.Dir(path))
 }

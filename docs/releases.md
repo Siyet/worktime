@@ -96,8 +96,12 @@ the last verified display status across a restart while replay and downgrade rem
 blocked. Persisted discovery is display-only: `apply_ready` remains false until the
 current server process completes a fresh manifest and Sigstore verification, and
 automatic policy cannot bypass that gate. The embedded Sigstore TUF root
-rotates into a cache below the database directory; an expired or unverifiable root
-fails closed and never turns GitHub REST metadata into update authority.
+rotates into a cache below the database directory. Each versioned cached root is
+replay-validated from that embedded anchor on every process start before it can
+become the next trust root. An unexpired signed metadata cache supports offline
+verification without network access; a missing, expired, corrupt, or unverifiable
+cache must refresh successfully or fail closed. GitHub REST metadata never becomes
+update authority.
 
 ## Native update transaction
 

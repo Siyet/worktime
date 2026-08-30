@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -18,9 +19,10 @@ import (
 const maxRegistryResponseBytes = 1 << 20
 
 var (
-	versionTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	digestRE   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	revisionRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	versionTag             = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	digestRE               = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	revisionRE             = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	ghcrBlobRedirectPathRE = regexp.MustCompile(`^/ghcr[1-9][0-9]*/blobs/(sha256:[0-9a-f]{64})$`)
 )
 
 type TagResolution struct {
@@ -31,6 +33,47 @@ type TagResolution struct {
 type GHCRChecker struct {
 	Client *http.Client
 	Origin string
+}
+
+// CheckGHCRBlobRedirect accepts the one cross-host redirect GHCR uses for blob
+// delivery. The signed query is a capability, so redirects are deliberately
+// constrained and registry credentials are removed before following it.
+func CheckGHCRBlobRedirect(request *http.Request, via []*http.Request) error {
+	if len(via) != 1 {
+		return errors.New("registry blob redirect must have exactly one hop")
+	}
+	source := via[0].URL
+	target := request.URL
+	if source.Scheme != "https" || source.Hostname() != "ghcr.io" || (source.Port() != "" && source.Port() != "443") {
+		return errors.New("registry blob redirect has an invalid source")
+	}
+	sourceDigest, ok := blobDigestFromPath(source.Path, "/v2/")
+	if !ok {
+		return errors.New("registry blob redirect source is not a digest-addressed blob")
+	}
+	if target.Scheme != "https" || target.Hostname() != "pkg-containers.githubusercontent.com" || (target.Port() != "" && target.Port() != "443") || target.User != nil || target.Fragment != "" {
+		return errors.New("registry blob redirect has an invalid target")
+	}
+	targetMatch := ghcrBlobRedirectPathRE.FindStringSubmatch(target.Path)
+	if len(targetMatch) != 2 || targetMatch[1] != sourceDigest {
+		return errors.New("registry blob redirect target does not match the requested digest")
+	}
+	request.Header.Del("Authorization")
+	request.Header.Del("Proxy-Authorization")
+	return nil
+}
+
+func blobDigestFromPath(value, prefix string) (string, bool) {
+	if !strings.HasPrefix(value, prefix) {
+		return "", false
+	}
+	marker := "/blobs/"
+	index := strings.LastIndex(value, marker)
+	if index < len(prefix) || strings.Contains(value[index+len(marker):], "/") {
+		return "", false
+	}
+	digest := value[index+len(marker):]
+	return digest, digestRE.MatchString(digest)
 }
 
 func (c GHCRChecker) ResolveTag(ctx context.Context, actor, token, repository, tag string) (TagResolution, error) {
@@ -131,7 +174,7 @@ func (c GHCRChecker) fetchToken(ctx context.Context, origin *url.URL, actor, tok
 	req.SetBasicAuth(actor, token)
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request registry token: %w", err)
+		return "", fmt.Errorf("request registry token: %w", sanitizeTransportError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -274,7 +317,7 @@ func (c GHCRChecker) fetchManifest(ctx context.Context, origin *url.URL, token, 
 	}, ", "))
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("request registry manifest: %w", err)
+		return nil, "", 0, fmt.Errorf("request registry manifest: %w", sanitizeTransportError(err))
 	}
 	defer resp.Body.Close()
 	body, err := readRegistryBody(resp.Body)
@@ -294,7 +337,7 @@ func (c GHCRChecker) fetchBlob(ctx context.Context, origin *url.URL, token, repo
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request registry blob: %w", err)
+		return nil, fmt.Errorf("request registry blob: %w", sanitizeTransportError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -339,4 +382,29 @@ func readRegistryBody(reader io.Reader) ([]byte, error) {
 		return nil, errors.New("response exceeds size limit")
 	}
 	return data, nil
+}
+
+func sanitizeTransportError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	location := "<redacted>"
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		if parsed, parseErr := url.Parse(urlError.URL); parseErr == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" {
+			parsed.User = nil
+			parsed.RawQuery = ""
+			parsed.ForceQuery = false
+			parsed.Fragment = ""
+			location = parsed.String()
+		}
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return fmt.Errorf("HTTP transport timeout for %s", location)
+	}
+	return fmt.Errorf("HTTP transport failed for %s", location)
 }

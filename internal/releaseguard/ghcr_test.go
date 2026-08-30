@@ -1,13 +1,17 @@
 package releaseguard
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +99,7 @@ func TestGHCRCheckerFailsClosedOnDNSAndTLSFailures(t *testing.T) {
 			})},
 		}
 		_, err := checker.ResolveTag(context.Background(), testActor, testToken, testRepository, testTag)
-		if err == nil || !strings.Contains(err.Error(), "no such host") {
+		if err == nil || !strings.Contains(err.Error(), "HTTP transport failed") {
 			t.Fatalf("expected DNS failure, got %v", err)
 		}
 	})
@@ -105,10 +109,131 @@ func TestGHCRCheckerFailsClosedOnDNSAndTLSFailures(t *testing.T) {
 		defer server.Close()
 		checker := GHCRChecker{Client: &http.Client{Timeout: time.Second}, Origin: server.URL}
 		_, err := checker.ResolveTag(context.Background(), testActor, testToken, testRepository, testTag)
-		if err == nil || !strings.Contains(err.Error(), "certificate") {
+		if err == nil || !strings.Contains(err.Error(), "HTTP transport failed") {
 			t.Fatalf("expected TLS certificate failure, got %v", err)
 		}
 	})
+}
+
+func TestGHCRBlobRedirectAllowsOnlyDigestMatchedGitHubContainerDelivery(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      []byte
+		wantError string
+	}{
+		{name: "valid blob", body: []byte("verified image config")},
+		{name: "digest mismatch", body: []byte("substituted image config"), wantError: "digest mismatch"},
+		{name: "response cap", body: bytes.Repeat([]byte("x"), maxRegistryResponseBytes+1), wantError: "response exceeds size limit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expectedBody := []byte("verified image config")
+			digest := testDigest(expectedBody)
+			origin, err := url.Parse("https://ghcr.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			client := &http.Client{
+				CheckRedirect: CheckGHCRBlobRedirect,
+				Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					requests++
+					switch request.URL.Hostname() {
+					case "ghcr.io":
+						if got := request.Header.Get("Authorization"); got != "Bearer registry-token" {
+							t.Fatalf("registry request authorization = %q", got)
+						}
+						return redirectResponse(request, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/"+digest+"?sig=secret&hmac=capability"), nil
+					case "pkg-containers.githubusercontent.com":
+						if got := request.Header.Get("Authorization"); got != "" {
+							t.Fatalf("cross-host blob request leaked authorization %q", got)
+						}
+						return responseWithBody(request, http.StatusOK, tt.body), nil
+					default:
+						t.Fatalf("unexpected redirect host %q", request.URL.Host)
+						return nil, nil
+					}
+				}),
+			}
+			checker := GHCRChecker{Client: client, Origin: origin.String()}
+			body, err := checker.fetchBlob(context.Background(), origin, "registry-token", testRepository, digest)
+			if tt.wantError == "" {
+				if err != nil || !bytes.Equal(body, expectedBody) {
+					t.Fatalf("fetch redirected blob: body=%q err=%v", body, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
+			}
+			if requests != 2 {
+				t.Fatalf("redirected blob request count = %d, want 2", requests)
+			}
+		})
+	}
+}
+
+func TestGHCRBlobRedirectRejectsUnsafeTargetsAndExtraHops(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	source, err := http.NewRequest(http.MethodGet, "https://ghcr.io/v2/"+testRepository+"/blobs/"+digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		target string
+		via    []*http.Request
+	}{
+		{name: "HTTP downgrade", target: "http://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
+		{name: "arbitrary host", target: "https://example.com/ghcr1/blobs/" + digest, via: []*http.Request{source}},
+		{name: "wrong path", target: "https://pkg-containers.githubusercontent.com/files/" + digest, via: []*http.Request{source}},
+		{name: "wrong digest", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:" + strings.Repeat("b", 64), via: []*http.Request{source}},
+		{name: "multiple hops", target: "https://pkg-containers.githubusercontent.com/ghcr1/blobs/" + digest, via: []*http.Request{source, source}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, requestErr := http.NewRequest(http.MethodGet, tt.target, nil)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			target.Header.Set("Authorization", "Bearer must-not-leak")
+			if err := CheckGHCRBlobRedirect(target, tt.via); err == nil {
+				t.Fatal("expected unsafe redirect to be rejected")
+			}
+		})
+	}
+}
+
+func TestGHCRBlobRedirectStripsCrossHostCredentials(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	source, err := http.NewRequest(http.MethodGet, "https://ghcr.io/v2/"+testRepository+"/blobs/"+digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := http.NewRequest(http.MethodGet, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/"+digest+"?sig=secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.Header.Set("Authorization", "Bearer registry-token")
+	target.Header.Set("Proxy-Authorization", "Basic proxy-token")
+	if err := CheckGHCRBlobRedirect(target, []*http.Request{source}); err != nil {
+		t.Fatalf("accept real-shape GitHub container redirect: %v", err)
+	}
+	if target.Header.Get("Authorization") != "" || target.Header.Get("Proxy-Authorization") != "" {
+		t.Fatalf("cross-host credentials were not stripped: %#v", target.Header)
+	}
+}
+
+func TestTransportErrorsNeverExposeCapabilityURLs(t *testing.T) {
+	secretURL := "https://user:password@pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:" + strings.Repeat("a", 64) + "?sig=secret&hmac=capability#private"
+	err := sanitizeTransportError(&url.Error{Op: "Get", URL: secretURL, Err: errors.New("redirect failed for " + secretURL)})
+	message := err.Error()
+	for _, forbidden := range []string{"user:password@", "password", "sig=", "secret", "hmac=", "capability", "?", "#private"} {
+		if strings.Contains(message, forbidden) {
+			t.Fatalf("sanitized transport error leaked %q: %s", forbidden, message)
+		}
+	}
+	if !strings.Contains(message, "https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:") {
+		t.Fatalf("sanitized transport error lost its safe endpoint context: %s", message)
+	}
 }
 
 func TestGHCRCheckerVerifiesReusableImageMetadataAndStableDigest(t *testing.T) {
@@ -297,6 +422,24 @@ func newReusableRegistryServer(t *testing.T, versionLabel, revisionLabel string,
 func testDigest(data []byte) string {
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func redirectResponse(request *http.Request, location string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusTemporaryRedirect,
+		Header:     http.Header{"Location": []string{location}},
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    request,
+	}
+}
+
+func responseWithBody(request *http.Request, status int, body []byte) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    request,
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

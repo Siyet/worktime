@@ -28,10 +28,8 @@ func run(ctx context.Context) error {
 	checker := releaseguard.GHCRChecker{
 		Origin: "https://ghcr.io",
 		Client: &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return errors.New("registry redirects are not allowed")
-			},
+			Timeout:       30 * time.Second,
+			CheckRedirect: releaseguard.CheckGHCRBlobRedirect,
 		},
 	}
 	repository := strings.TrimPrefix(image, imagePrefix)

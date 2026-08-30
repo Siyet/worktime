@@ -96,8 +96,12 @@ the last verified display status across a restart while replay and downgrade rem
 blocked. Persisted discovery is display-only: `apply_ready` remains false until the
 current server process completes a fresh manifest and Sigstore verification, and
 automatic policy cannot bypass that gate. The embedded Sigstore TUF root
-rotates into a cache below the database directory; an expired or unverifiable root
-fails closed and never turns GitHub REST metadata into update authority.
+rotates into a cache below the database directory. Each versioned cached root is
+replay-validated from that embedded anchor on every process start before it can
+become the next trust root. An unexpired signed metadata cache supports offline
+verification without network access; a missing, expired, corrupt, or unverifiable
+cache must refresh successfully or fail closed. GitHub REST metadata never becomes
+update authority.
 
 ## Native update transaction
 
@@ -147,8 +151,14 @@ prerequisite stops the run; there is no personal access token or GitHub App fall
 All third-party Actions are pinned by full revision. The job receives only
 `contents: write`, `packages: write`, and `id-token: write`. It creates one draft,
 uploads and downloads every asset, compares the bytes, verifies the Sigstore
-identity, and smoke-tests both Linux binaries before publishing. After publication
-it verifies the immutable release and every asset. Cleanup stays armed until those
+identity, and smoke-tests both Linux binaries before publishing. GitHub creates its
+own release attestation asynchronously after immutable publication, so the workflow
+uses a monotonic five-minute deadline and a per-call process timeout while accepting
+only the two exact one-line not-yet-available responses for this version/revision;
+any other output fails immediately. The GitHub CLI may collapse some upstream API
+failures into an absence response, so absence is retried but never accepted as
+success. It then verifies the immutable release and every asset against that GitHub
+attestation. Cleanup stays armed until those
 late checks finish. On failure it may delete the exact draft or public mutable
 release created by that run only when the release ID, version tag, target revision,
 and source revision match the run and the API explicitly reports

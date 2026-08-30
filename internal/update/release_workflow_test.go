@@ -53,10 +53,22 @@ func TestReleaseWorkflowDoesNotUseRunnerContextInJobEnvironment(t *testing.T) {
 	if strings.Contains(workflow[jobs:steps], "${{ runner.") {
 		t.Fatal("runner context is unavailable while GitHub parses a job-level environment")
 	}
+	if strings.Contains(workflow, "RELEASE_ID_FILE") {
+		t.Fatal("workflow must not retain the invalid job-level release ID variable")
+	}
 	initialize := strings.Index(workflow, `release_id_file="$RUNNER_TEMP/worktime-release-id"`)
 	firstUse := strings.Index(workflow, `test -s "$release_id_file"`)
 	if initialize < 0 || firstUse < 0 || initialize >= firstUse {
 		t.Fatal("release ID path must be initialized from RUNNER_TEMP before cleanup uses it")
+	}
+	if !strings.Contains(workflow, `"$release_json" > "$release_id_file"`) {
+		t.Fatal("created release ID must be written to the step-local release ID path")
+	}
+	if count := strings.Count(workflow, "$release_id_file"); count != 4 {
+		t.Fatalf("release ID path must have exactly four uses, got %d", count)
+	}
+	if count := strings.Count(workflow, `release_id="$(cat "$release_id_file")"`); count != 2 {
+		t.Fatalf("release ID path must be read exactly twice using its lowercase name, got %d", count)
 	}
 }
 

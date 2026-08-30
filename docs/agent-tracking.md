@@ -58,6 +58,12 @@ already pulled. The first duration that renders as `1m` (30 seconds) stays.
 Any outside edit is remembered permanently for the current entry, including a
 project- or tags-only edit, so deliberately touched short entries are never
 cleaned up; task-named and manually renamed entries are protected as well.
+Migration 010 conservatively marks every entry already materialized by a v9
+agent session as edited, because v9 did not retain enough history to distinguish
+an untouched row from a project, tags or bounds edit that the agent had already
+adopted. A few old technical `0m` rows may therefore remain; preserving possibly
+edited time data takes priority over cleaning historical noise. New v10 sessions
+start unmarked and follow the precise cleanup rule above.
 
 A session owns one running entry at a time and may produce several finished
 entries. Signals no farther apart than the idle threshold

@@ -11,6 +11,7 @@
   let open = $state(false);
   let activeIndex = $state(0);
   let root = $state<HTMLElement | null>(null);
+  let triggerElement = $state<HTMLButtonElement | null>(null);
   const uid = $props.id();
   const menuID = `${uid}-entry-project-menu`;
 
@@ -35,8 +36,10 @@
     open = true;
   }
 
-  function closeMenu(): void {
+  function closeMenu(restoreFocus = false): void {
+    if (!open) return;
     open = false;
+    if (restoreFocus) queueMicrotask(() => triggerElement?.focus());
   }
 
   function choose(nextProjectID: string | null): void {
@@ -53,7 +56,7 @@
     if (!open) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      closeMenu();
+      closeMenu(true);
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
       activeIndex = Math.min(options.length - 1, activeIndex + 1);
@@ -69,11 +72,14 @@
   }
 
   function onDocumentClick(event: MouseEvent): void {
-    if (open && root && !root.contains(event.target as Node)) closeMenu();
+    if (open && root && !root.contains(event.target as Node)) closeMenu(true);
   }
 
   function onDocumentKeydown(event: KeyboardEvent): void {
-    if (open && event.key === "Escape") closeMenu();
+    if (open && event.key === "Escape") {
+      event.preventDefault();
+      closeMenu(true);
+    }
   }
 </script>
 
@@ -81,6 +87,7 @@
 
 <span class="entry-quick" bind:this={root}>
   <button
+    bind:this={triggerElement}
     type="button"
     class="entry-project-trigger proj"
     role="combobox"

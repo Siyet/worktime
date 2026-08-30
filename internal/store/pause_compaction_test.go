@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,6 +187,63 @@ func TestEntryUserEditedMigrationAppliesToDeployedV9(t *testing.T) {
 		deployed.Close()
 		t.Fatalf("mark v9: %v", err)
 	}
+
+	userID := uuid.NewString()
+	projectID := uuid.NewString()
+	if _, err := deployed.Exec(`
+		INSERT INTO users (id, google_sub, email, name, created_at)
+		VALUES (?, ?, 'v9-migration@test.local', 'Migration Test', ?)`,
+		userID, "sub-"+userID, agentBaseMs); err != nil {
+		deployed.Close()
+		t.Fatalf("seed v9 user: %v", err)
+	}
+	if _, err := deployed.Exec(`
+		INSERT INTO projects (id, user_id, name, color, created_at, updated_at, server_seq)
+		VALUES (?, ?, 'Edited project', '#ffb84d', ?, ?, 40)`,
+		projectID, userID, agentBaseMs, agentBaseMs); err != nil {
+		deployed.Close()
+		t.Fatalf("seed v9 project: %v", err)
+	}
+	if _, err := deployed.Exec("UPDATE sync_state SET seq = 42"); err != nil {
+		deployed.Close()
+		t.Fatalf("seed v9 cursor: %v", err)
+	}
+
+	type seededSession struct {
+		sessionID string
+		entryID   string
+	}
+	seeded := make([]seededSession, 0, 2)
+	for index := 0; index < 2; index++ {
+		sessionID := uuid.NewString()
+		entryID := uuid.NewString()
+		seq := int64(41 + index)
+		description := "Codex #" + AgentSessionTag(sessionID)
+		// This is the ambiguous production-v9 shape: project, tags and bounds were
+		// edited, then a heartbeat adopted the row and copied its new server_seq.
+		// Version 009 consequently has no remaining evidence of the outside edit.
+		if _, err := deployed.Exec(`
+			INSERT INTO time_entries
+				(id, user_id, project_id, description, tags, started_at, stopped_at,
+				 created_at, updated_at, server_seq, agent_session_id)
+			VALUES (?, ?, ?, ?, '["review"]', ?, NULL, ?, ?, ?, ?)`,
+			entryID, userID, projectID, description, agentBaseMs+250,
+			agentBaseMs, agentBaseMs+500, seq, sessionID); err != nil {
+			deployed.Close()
+			t.Fatalf("seed v9 entry %d: %v", index, err)
+		}
+		if _, err := deployed.Exec(`
+			INSERT INTO agent_sessions
+				(id, user_id, source, status, started_at, last_heartbeat_at,
+				 time_entry_id, entry_server_seq, entry_user_named, created_at, updated_at)
+			VALUES (?, ?, 'codex', 'active', ?, ?, ?, ?, 0, ?, ?)`,
+			sessionID, userID, agentBaseMs, agentBaseMs+1_000, entryID, seq,
+			agentBaseMs, agentBaseMs+1_000); err != nil {
+			deployed.Close()
+			t.Fatalf("seed v9 session %d: %v", index, err)
+		}
+		seeded = append(seeded, seededSession{sessionID: sessionID, entryID: entryID})
+	}
 	if err := deployed.Close(); err != nil {
 		t.Fatalf("close v9 db: %v", err)
 	}
@@ -205,6 +263,51 @@ func TestEntryUserEditedMigrationAppliesToDeployedV9(t *testing.T) {
 		SELECT dflt_value FROM pragma_table_info('agent_sessions') WHERE name = 'entry_user_edited'`,
 	).Scan(&defaultValue); err != nil || defaultValue != "0" {
 		t.Fatalf("entry_user_edited default = %q, err %v; want 0", defaultValue, err)
+	}
+	for _, existing := range seeded {
+		var protected bool
+		if err := testStore.db.QueryRow(
+			"SELECT entry_user_edited FROM agent_sessions WHERE id = ?", existing.sessionID,
+		).Scan(&protected); err != nil || !protected {
+			t.Fatalf("v9 materialized session protected = %v, err %v; want true", protected, err)
+		}
+	}
+
+	// Both normal stop and stale reconciliation must preserve an ambiguous v9
+	// technical row even though its sub-minute duration would otherwise be noise.
+	testStop(t, testStore, userID, seeded[0].sessionID, agentBaseMs+2_000, "session_end")
+	if _, err := testStore.GetTimeEntry(t.Context(), userID, seeded[0].entryID); err != nil {
+		t.Fatalf("stop removed protected v9 row: %v", err)
+	}
+	closed, err := testStore.ReconcileAgentSessions(
+		t.Context(), agentBaseMs+1_000+testGraceMs+1, testGraceMs,
+	)
+	if err != nil || closed != 1 {
+		t.Fatalf("reconcile v9 session: closed=%d err=%v; want 1", closed, err)
+	}
+	for _, existing := range seeded {
+		entry, err := testStore.GetTimeEntry(t.Context(), userID, existing.entryID)
+		if err != nil {
+			t.Fatalf("protected v9 row was removed: %v", err)
+		}
+		if entry.ProjectID == nil || *entry.ProjectID != projectID || len(entry.Tags) != 1 || entry.Tags[0] != "review" || entry.StartedAt != agentBaseMs+250 {
+			t.Fatalf("protected v9 edits changed: %+v", entry)
+		}
+	}
+
+	// The migration remains conservative only for rows it finds. A session first
+	// materialized on v10 keeps the precise cleanup behaviour and starts at zero.
+	freshID := uuid.NewString()
+	fresh := startWorkingTestAgentSession(t, testStore, userID, freshID, agentBaseMs+100_000)
+	var freshProtected bool
+	if err := testStore.db.QueryRow(
+		"SELECT entry_user_edited FROM agent_sessions WHERE id = ?", freshID,
+	).Scan(&freshProtected); err != nil || freshProtected {
+		t.Fatalf("new v10 session protected = %v, err %v; want false", freshProtected, err)
+	}
+	testStop(t, testStore, userID, freshID, agentBaseMs+101_000, "session_end")
+	if _, err := testStore.GetTimeEntry(t.Context(), userID, *fresh.TimeEntryID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("new v10 zero-minute row survived: %v", err)
 	}
 }
 

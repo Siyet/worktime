@@ -7,19 +7,43 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/Siyet/worktime/internal/buildinfo"
 	"github.com/Siyet/worktime/internal/config"
+	"github.com/Siyet/worktime/internal/lifecycle"
 	"github.com/Siyet/worktime/internal/mcpserver"
 	"github.com/Siyet/worktime/internal/store"
+	appupdate "github.com/Siyet/worktime/internal/update"
 	"github.com/Siyet/worktime/web"
 )
 
 type server struct {
-	store *store.Store
-	cfg   config.Config
+	store     *store.Store
+	cfg       config.Config
+	lifecycle *lifecycle.Coordinator
+	updates   *appupdate.Manager
 }
 
-func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
-	s := &server{store: dataStore, cfg: cfg}
+type RouterOptions struct {
+	Lifecycle *lifecycle.Coordinator
+	Updates   *appupdate.Manager
+}
+
+func NewRouter(dataStore *store.Store, cfg config.Config, optional ...RouterOptions) http.Handler {
+	options := RouterOptions{}
+	if len(optional) > 0 {
+		options = optional[0]
+	}
+	if options.Lifecycle == nil {
+		options.Lifecycle = lifecycle.New()
+	}
+	if options.Updates == nil {
+		info := buildinfo.Current()
+		options.Updates = appupdate.NewManager(appupdate.Options{
+			CurrentVersion: info.Version, Revision: info.Revision, BuiltAt: info.BuiltAt,
+			ChecksEnabled: false, Policy: dataStore,
+		})
+	}
+	s := &server{store: dataStore, cfg: cfg, lifecycle: options.Lifecycle, updates: options.Updates}
 
 	router := chi.NewRouter()
 	// No RealIP here on purpose: it overwrites RemoteAddr from X-Forwarded-For and
@@ -36,6 +60,10 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 	router.Use(middleware.Compress(5))
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if s.lifecycle.Maintenance() {
+			http.Error(w, "maintenance", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -43,15 +71,16 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 	router.Route("/auth", func(auth chi.Router) {
 		auth.Get("/config", s.handleAuthConfig)
 		auth.Get("/google", s.handleGoogleLogin)
-		auth.Get("/google/callback", s.handleGoogleCallback)
+		auth.With(s.lifecycle.Middleware).Get("/google/callback", s.handleGoogleCallback)
 		// Signing out is a state change like any other: without this a page on a
 		// sibling host can log the owner out, since SameSite=Lax does not consider it
 		// cross-site. Nothing is destroyed - the local-first data survives in
 		// IndexedDB - but being logged out at random is not something to leave open.
-		auth.With(s.requireSameOrigin).Post("/logout", s.handleLogout)
+		auth.With(s.lifecycle.Middleware, s.requireSameOrigin).Post("/logout", s.handleLogout)
 	})
 
 	router.Route("/api", func(api chi.Router) {
+		api.Use(s.lifecycle.Middleware)
 		api.Use(s.requireAuth)
 		api.Use(s.requireSameOrigin)
 		api.Post("/sync", s.handleSync)
@@ -59,6 +88,11 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 		api.Get("/report", s.handleReport)
 		api.Get("/projects", s.handleListProjects)
 		api.Get("/entries", s.handleListEntries)
+		api.Get("/system/version", s.handleSystemVersion)
+		api.Get("/system/update", s.handleUpdateStatus)
+		api.With(requireSession, s.requireAdmin).Post("/system/update/check", s.handleUpdateCheck)
+		api.With(requireSession, s.requireAdmin).Put("/system/update/policy", s.handleUpdatePolicy)
+		api.With(requireSession, s.requireAdmin).Post("/system/update/apply", s.handleUpdateApply)
 		// Managing credentials takes the browser session: see requireSession.
 		api.With(requireSession).Get("/tokens", s.handleListTokens)
 		api.With(requireSession).Post("/tokens", s.handleCreateToken)
@@ -83,8 +117,8 @@ func NewRouter(dataStore *store.Store, cfg config.Config) http.Handler {
 	// type forces a preflight, and no CORS headers are returned - but that is the
 	// browser's rule protecting the endpoint, not the endpoint protecting itself.
 	mcpHandler := mcpserver.NewHandler(dataStore)
-	router.With(s.requireAuth, s.requireSameOrigin).Handle("/mcp", mcpHandler)
-	router.With(s.requireAuth, s.requireSameOrigin).Handle("/mcp/*", mcpHandler)
+	router.With(s.lifecycle.Middleware, s.requireAuth, s.requireSameOrigin).Handle("/mcp", mcpHandler)
+	router.With(s.lifecycle.Middleware, s.requireAuth, s.requireSameOrigin).Handle("/mcp/*", mcpHandler)
 
 	router.NotFound(spaHandler())
 

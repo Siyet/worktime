@@ -255,8 +255,8 @@ func TestEntryUserEditedMigrationAppliesToDeployedV9(t *testing.T) {
 	defer testStore.Close()
 
 	var version int
-	if err := testStore.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 10 {
-		t.Fatalf("schema version = %d, err %v; want 10", version, err)
+	if err := testStore.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
+		t.Fatalf("schema version = %d, err %v; want %d", version, err, len(migrations))
 	}
 	var defaultValue string
 	if err := testStore.db.QueryRow(`

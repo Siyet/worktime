@@ -252,6 +252,39 @@ func TestCrossSiteWritesAreRefused(t *testing.T) {
 	}
 }
 
+func TestOriginValidationIncludesTrustedExternalScheme(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://internal.example/api/sync", nil)
+	request.Host = "internal.example"
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-Host", "worktime.example")
+
+	direct := &server{cfg: config.Config{BaseURL: "https://configured.example"}}
+	if !direct.originAllowed("http://internal.example", request) {
+		t.Fatal("direct HTTP request rejected its exact scheme and host")
+	}
+	if direct.originAllowed("https://internal.example", request) {
+		t.Fatal("same host with a different scheme was accepted")
+	}
+	if direct.originAllowed("https://worktime.example", request) {
+		t.Fatal("untrusted forwarded origin was accepted")
+	}
+	if !direct.originAllowed("https://configured.example", request) {
+		t.Fatal("configured external scheme and host were rejected")
+	}
+
+	proxied := &server{cfg: config.Config{BaseURL: "https://configured.example", TrustProxy: true}}
+	if !proxied.originAllowed("https://worktime.example", request) {
+		t.Fatal("explicitly trusted proxy scheme and host were rejected")
+	}
+	if proxied.originAllowed("http://worktime.example", request) {
+		t.Fatal("proxy origin with a mismatched scheme was accepted")
+	}
+	request.Header.Set("X-Forwarded-Proto", "https,http")
+	if proxied.originAllowed("https://worktime.example", request) {
+		t.Fatal("ambiguous forwarded scheme was accepted")
+	}
+}
+
 // Signing out is a state change too, and it sits outside /api - so it needs the guard
 // wired explicitly rather than inherited from the route group.
 func TestCrossSiteLogoutIsRefused(t *testing.T) {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { syncState } from "../lib/sync.svelte";
   import { logout } from "../lib/session.svelte";
   import { DEMO } from "../lib/demo";
@@ -14,6 +15,17 @@
   import { downloadText } from "../lib/download";
   import { setupPrompt, setupPromptFilename, type AgentClient } from "../lib/agentSetup";
   import { uuidv7 } from "../lib/uuid";
+  import { CLIENT_BUILD_VERSION } from "../lib/buildVersion";
+  import {
+    applySystemUpdate,
+    checkSystemUpdate,
+    fetchSystemUpdate,
+    fetchSystemVersion,
+    watchSystemRestarts,
+    setSystemAutoApply,
+    type SystemUpdateStatus,
+    type UpdateState,
+  } from "../lib/systemUpdate";
   import type { User } from "../lib/types";
 
   // Language names are shown in their own language on purpose.
@@ -40,8 +52,40 @@
   let freshToken = $state<string | null>(null);
   let loadError = $state(false);
   let promptError = $state(false);
+  let systemVersion = $state<string | null>(null);
+  let updateStatus = $state<SystemUpdateStatus | null>(null);
+  let versionLoadError = $state(false);
+  let updateLoadError = $state(false);
+  let updateActionError = $state(false);
+  let updateAction = $state<"check" | "policy" | "apply" | null>(null);
+  let restartTarget: string | null = null;
   // Which download is in flight, so a double click cannot issue two tokens.
   let issuing = $state<AgentClient | null>(null);
+
+  const currentVersion = $derived(systemVersion ?? updateStatus?.current_version ?? null);
+  const canManageUpdates = $derived(updateStatus?.can_manage === true);
+  const updateBusy = $derived(
+    updateAction !== null || updateStatus?.state === "checking" || updateStatus?.state === "applying",
+  );
+  const canApplyUpdates = $derived(
+    canManageUpdates &&
+    updateStatus?.apply_mode === "automatic" &&
+    updateStatus.state === "available" &&
+    updateStatus.update_available &&
+    updateStatus.apply_ready,
+  );
+
+  function updateStateLabel(state: UpdateState): string {
+    switch (state) {
+      case "idle": return t("Not checked yet");
+      case "checking": return t("Checking for updates…");
+      case "up_to_date": return t("Up to date");
+      case "available": return t("Update available");
+      case "applying": return t("Installing update…");
+      case "restart_required": return t("Restart required");
+      case "failed": return t("Update check failed");
+    }
+  }
 
   async function load() {
     try {
@@ -54,7 +98,92 @@
       loadError = true;
     }
   }
-  if (!DEMO) void load();
+
+  async function loadSystemInfo() {
+    const [versionResult, updateResult] = await Promise.allSettled([
+      fetchSystemVersion(),
+      fetchSystemUpdate(),
+    ]);
+    if (versionResult.status === "fulfilled") {
+      systemVersion = versionResult.value.version;
+      versionLoadError = false;
+    } else {
+      versionLoadError = true;
+    }
+    if (updateResult.status === "fulfilled") {
+      updateStatus = updateResult.value;
+      updateLoadError = false;
+    } else {
+      updateLoadError = true;
+    }
+  }
+
+  async function checkForUpdate() {
+    if (!canManageUpdates || updateBusy) return;
+    updateAction = "check";
+    updateActionError = false;
+    try {
+      updateStatus = await checkSystemUpdate();
+      updateLoadError = false;
+    } catch {
+      updateActionError = true;
+    } finally {
+      updateAction = null;
+    }
+  }
+
+  async function changeAutoApply(autoApply: boolean) {
+    if (!canManageUpdates || updateStatus?.apply_mode !== "automatic" || updateBusy) return;
+    updateAction = "policy";
+    updateActionError = false;
+    try {
+      updateStatus = await setSystemAutoApply(autoApply);
+    } catch {
+      updateActionError = true;
+    } finally {
+      updateAction = null;
+    }
+  }
+
+  async function installUpdate() {
+    if (!canApplyUpdates || updateBusy) return;
+    if (!window.confirm(t("Install this update now? WorkTime may restart briefly."))) return;
+    updateAction = "apply";
+    updateActionError = false;
+    try {
+      updateStatus = await applySystemUpdate();
+      restartTarget = updateStatus.latest_version;
+    } catch {
+      updateActionError = true;
+    } finally {
+      updateAction = null;
+    }
+  }
+
+  onMount(() => {
+    if (DEMO) return;
+    const restartController = new AbortController();
+    void load();
+    void (async () => {
+      await loadSystemInfo();
+      if (restartController.signal.aborted) return;
+      await watchSystemRestarts({
+        baselineVersion: CLIENT_BUILD_VERSION,
+        targetVersion: () => restartTarget,
+        signal: restartController.signal,
+        onStatus: (status) => {
+          updateStatus = status;
+          updateLoadError = false;
+        },
+        onFailure: async () => {
+          restartTarget = null;
+          updateActionError = true;
+          await loadSystemInfo();
+        },
+      });
+    })();
+    return () => restartController.abort();
+  });
 
   async function createToken(event: SubmitEvent) {
     event.preventDefault();
@@ -189,6 +318,91 @@
 </div>
 
 {#if !DEMO}
+<div class="card updates" aria-labelledby="updates-heading">
+  <h3 id="updates-heading">{t("Version and updates")}</h3>
+  <dl class="version-grid">
+    <div>
+      <dt>{t("Current version")}</dt>
+      <dd class:muted={!currentVersion} class="mono">{currentVersion ?? t("Unavailable")}</dd>
+    </div>
+    <div>
+      <dt>{t("Latest version")}</dt>
+      <dd class:muted={!updateStatus?.latest_version} class="mono">
+        {updateStatus?.latest_version ?? t("Not checked yet")}
+      </dd>
+    </div>
+  </dl>
+
+  {#if versionLoadError && !currentVersion}
+    <p class="rejected" role="status">{t("Version information is unavailable.")}</p>
+  {/if}
+
+  {#if updateStatus}
+    <p class="update-state" aria-live="polite">
+      <strong>{updateStateLabel(updateStatus.state)}</strong>
+      {#if updateStatus.checked_at}
+        <span class="muted">
+          · {t("checked {date} at {time}", {
+            date: formatDate(updateStatus.checked_at),
+            time: formatTime(updateStatus.checked_at),
+          })}
+        </span>
+      {/if}
+    </p>
+    {#if updateStatus.message}
+      <p class="muted update-message">{updateStatus.message}</p>
+    {/if}
+    {#if updateStatus.changelog_url}
+      <p class="update-message">
+        <a href={updateStatus.changelog_url} target="_blank" rel="noreferrer">{t("Read the changelog")}</a>
+      </p>
+    {/if}
+
+    {#if updateStatus.apply_mode === "notification_only"}
+      <p class="muted update-note">
+        {t("This installation can announce updates, but it must be updated through its deployment platform.")}
+      </p>
+    {:else}
+      <label class="row auto-apply" class:muted={!canManageUpdates}>
+        <input
+          type="checkbox"
+          checked={updateStatus.auto_apply}
+          disabled={!canManageUpdates || updateBusy}
+          onchange={(event) => void changeAutoApply(event.currentTarget.checked)}
+        />
+        <span>{t("Install updates automatically")}</span>
+      </label>
+    {/if}
+
+    {#if !canManageUpdates}
+      <p class="muted update-note">{t("Only an administrator can manage updates.")}</p>
+    {/if}
+
+    <div class="row update-actions">
+      <button disabled={!canManageUpdates || updateBusy} onclick={() => void checkForUpdate()}>
+        {updateAction === "check" || updateStatus.state === "checking" ? t("Checking…") : t("Check now")}
+      </button>
+      {#if updateStatus.apply_mode === "automatic" && updateStatus.update_available}
+        <button
+          class="primary"
+          disabled={!canApplyUpdates || updateBusy}
+          onclick={() => void installUpdate()}
+        >
+          {updateAction === "apply" || updateStatus.state === "applying" ? t("Installing…") : t("Install update")}
+        </button>
+      {/if}
+    </div>
+  {:else if updateLoadError}
+    <p class="rejected" role="status">{t("Update information is unavailable.")}</p>
+  {:else}
+    <p class="muted" aria-live="polite">{t("Loading update information…")}</p>
+  {/if}
+
+  {#if updateActionError}
+    <p class="rejected" role="alert">{t("The update request failed. Try again.")}</p>
+  {/if}
+</div>
+
 <div class="card">
   <h3>{t("API tokens")}</h3>
   <p class="muted">
@@ -305,6 +519,52 @@
 
   .pref select {
     min-width: 11rem;
+  }
+
+  .version-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 0.75rem 0;
+  }
+
+  .version-grid > div {
+    min-width: 0;
+    padding: 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .version-grid dt {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+  }
+
+  .version-grid dd {
+    margin: 0.15rem 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .update-state,
+  .update-message,
+  .update-note {
+    margin: 0.55rem 0 0;
+  }
+
+  .auto-apply {
+    width: fit-content;
+    margin-top: 0.75rem;
+  }
+
+  .update-actions {
+    margin-top: 0.85rem;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 28rem) {
+    .version-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .fresh {

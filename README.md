@@ -49,8 +49,14 @@ Early development. Core works (timers, projects, time off, sync, reports, MCP); 
 
 ```sh
 make build          # produces bin/worktime with the web UI embedded
+./bin/worktime --version
 WORKTIME_GOOGLE_CLIENT_ID=... WORKTIME_GOOGLE_CLIENT_SECRET=... ./bin/worktime
 ```
+
+Local builds identify themselves as `dev`. Packagers can inject immutable build
+metadata with `VERSION=v1.2.3 REVISION=<full git revision>
+BUILT_AT=2026-08-30T12:00:00Z PACKAGING=native make build`. The packaging flag
+is deliberately explicit: an ordinary local build is notification-only.
 
 ### Docker
 
@@ -71,11 +77,30 @@ docker run -d -p 8080:8080 -v worktime-data:/data \
 | `WORKTIME_ADDR` | `:8080` | Listen address |
 | `WORKTIME_DB` | `worktime.db` | SQLite database path |
 | `WORKTIME_BASE_URL` | `http://localhost:8080` | External URL, used for OAuth redirects and secure cookies |
+| `WORKTIME_TRUST_PROXY` | off | Set to `1` only behind a trusted immediate proxy that overwrites `X-Forwarded-Proto` and `X-Forwarded-Host`; these values become part of same-origin validation |
 | `WORKTIME_GOOGLE_CLIENT_ID` / `WORKTIME_GOOGLE_CLIENT_SECRET` | - | Google OAuth Web credentials; redirect URI is `$BASE_URL/auth/google/callback` |
 | `WORKTIME_ALLOWED_EMAILS` | empty = everyone | Comma-separated allowlist of Google accounts |
+| `WORKTIME_ADMIN_EMAILS` | empty = nobody | Comma-separated accounts allowed to check, configure and apply instance updates; API tokens are never administrators |
+| `WORKTIME_UPDATE_CHECKS` | `1` | Set to `0` to disable all GitHub release and Sigstore TUF network checks |
 | `WORKTIME_DEV_AUTH` | off | `1` auto-signs every request in as a local dev user. Never use in production |
 
 Backup = copy the SQLite file (or the `/data` volume).
+
+### Releases and updates
+
+Release artifacts target native Linux on amd64 and arm64, plus the matching
+multi-platform image at `ghcr.io/siyet/worktime`. Native Linux is the first
+self-updating deployment target. Docker, macOS and Windows installations are
+notification-only and must be updated by their operator until their update
+mechanics are accepted and implemented separately.
+
+Release metadata is a keyless Sigstore-signed manifest. The trusted signing
+identity is this repository's release workflow on `refs/heads/main`; a valid
+signature therefore grants the released binary the same code-execution authority
+as that workflow. Publication is deliberately manual and requires GitHub immutable
+releases to be enabled. The protected `release` environment approver verifies that
+repository setting manually because the workflow token cannot read Administration
+settings. See [the release contract](docs/releases.md).
 
 ### MCP
 

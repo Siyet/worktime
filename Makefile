@@ -7,7 +7,7 @@ dev-web:
 	cd web && npm run dev
 
 build-web:
-	cd web && npm run build
+	cd web && VITE_WORKTIME_VERSION="$(VERSION)" npm run build
 
 # The e2e fixture launches bin/worktime.exe on Windows, so the binary name must
 # match the platform.
@@ -17,8 +17,19 @@ else
 BIN := bin/worktime
 endif
 
+VERSION ?= dev
+REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null || echo unknown)
+BUILT_AT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+PACKAGING ?= dev
+BUILDINFO_PACKAGE := github.com/Siyet/worktime/internal/buildinfo
+LDFLAGS := -s -w \
+	-X $(BUILDINFO_PACKAGE).Version=$(VERSION) \
+	-X $(BUILDINFO_PACKAGE).Revision=$(REVISION) \
+	-X $(BUILDINFO_PACKAGE).BuiltAt=$(BUILT_AT)
+LDFLAGS += -X $(BUILDINFO_PACKAGE).Packaging=$(PACKAGING)
+
 build: build-web
-	go build -ldflags "-s -w" -o $(BIN) ./cmd/worktime
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/worktime
 
 # Everything that runs in under two seconds. The vitest suite covers the report
 # arithmetic, the grouping and the time parsing - none of which go test can reach - and

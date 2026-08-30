@@ -66,28 +66,35 @@ test.describe("agent tracking", () => {
     });
   });
 
-  test("a session with a long pause stays one entry and the pause is not billed", async ({
+  test("a session with a long pause becomes two entries and the pause is not billed", async ({
     page,
     request,
     agentServer,
   }) => {
     const sessionID = crypto.randomUUID();
-    const base = Date.now() - 100 * MINUTE;
+    // Yesterday at 09:00 keeps both segments on one card at every wall-clock
+    // time the suite can run.
+    const base = new Date().setHours(9, 0, 0, 0) - 24 * 60 * MINUTE;
     await signal(request, agentServer.url, sessionID, "start", { started_at: base, source: "claude-code" });
     await signal(request, agentServer.url, sessionID, "heartbeat", { at: base + 5 * MINUTE });
-    // Ninety minutes of silence: far past the idle threshold, well under the
-    // maximum pause, and no timezone was ever sent - nothing may cut the row.
+    // Ninety minutes of silence: far past the idle threshold and with no
+    // timezone sent. The pause still has to split the work into two segments.
     await signal(request, agentServer.url, sessionID, "heartbeat", { at: base + 95 * MINUTE });
     await signal(request, agentServer.url, sessionID, "heartbeat", { at: base + 100 * MINUTE });
     await signal(request, agentServer.url, sessionID, "stop", { ended_at: base + 100 * MINUTE, reason: "clear" });
 
     await page.goto(agentServer.url + "/#/");
-    const row = page.locator(".item").filter({ hasText: "Claude Code" });
+    const group = page.locator(".group-row").filter({ hasText: "Claude Code" });
     await pollUI(page, async () => {
-      await expect(row).toHaveCount(1);
-      // A hundred minutes of interval, ninety of them idle.
-      await expect(row.locator(".dur")).toHaveText("10m");
+      await expect(group.locator(".count-value")).toHaveText("2");
+      await expect(group.locator(".dur")).toHaveText("10m");
+      await expect(group).not.toContainText(/#[0-9a-f]{8}/);
     });
+    await group.click();
+    const segments = page.locator(".item.member").filter({ hasText: "Claude Code" });
+    await expect(segments).toHaveCount(2);
+    await expect(segments.locator(".dur")).toHaveText(["5m", "5m"]);
+    expect((await segments.allInnerTexts()).every((text) => !/#[0-9a-f]{8}/.test(text))).toBe(true);
   });
 
   test("two sessions are two rows with different tags, one task groups them", async ({

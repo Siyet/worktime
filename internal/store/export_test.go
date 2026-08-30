@@ -97,18 +97,15 @@ func TestExportUserDB(t *testing.T) {
 	}
 }
 
-func TestExportKeepsAgentColumns(t *testing.T) {
+func TestExportKeepsAgentSessionLink(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
 	user := testUser(t, testStore, "export-agent@test.local")
 
 	// The exported file is a full WorkTime database: an agent entry has to keep
-	// both its pause and the session it belongs to, or the durations inside it
-	// would not match the instance it came from.
+	// the session link the timer UI uses.
 	sessionID := uuid.NewString()
 	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	gap := testIdleMs + 60_000
-	testHeartbeat(t, testStore, user.ID, sessionID, agentBaseMs+gap)
 
 	path, cleanup, err := testStore.ExportUserDB(ctx, user.ID)
 	if err != nil {
@@ -121,15 +118,11 @@ func TestExportKeepsAgentColumns(t *testing.T) {
 	}
 	defer exported.Close()
 
-	var pausedMs int64
 	var agentSessionID *string
 	if err := exported.db.QueryRow(
-		"SELECT paused_ms, agent_session_id FROM time_entries WHERE id = ?", *session.TimeEntryID,
-	).Scan(&pausedMs, &agentSessionID); err != nil {
+		"SELECT agent_session_id FROM time_entries WHERE id = ?", *session.TimeEntryID,
+	).Scan(&agentSessionID); err != nil {
 		t.Fatalf("read agent columns: %v", err)
-	}
-	if pausedMs != gap {
-		t.Errorf("expected paused_ms %d in the export, got %d", gap, pausedMs)
 	}
 	if agentSessionID == nil || *agentSessionID != sessionID {
 		t.Errorf("expected the session link in the export, got %v", agentSessionID)

@@ -8,15 +8,11 @@ package store
 // reconciliation job closes any session whose last heartbeat is older than
 // a grace period, at the moment of that last heartbeat.
 //
-// A session owns exactly one time entry. A gap between signals longer than the
-// idle threshold is added to that entry's paused_ms and subtracted from its
-// duration, so idle time in the middle of a session is never billed and the
-// session still reads as one row; started_at and stopped_at stay real
-// timestamps, which is what the printed report, the CSV and the day boundaries
-// are built on. Trailing idle is trimmed on stop and by reconciliation. Only a
-// pause crossing the agent's local midnight, or one longer than the maximum
-// pause, cuts the entry in two - both are about which day the work belongs to,
-// not about idling.
+// A session may produce several time entries. A gap between signals longer than
+// the idle threshold closes the current entry at the last billable activity and
+// opens a new one at the next signal. Every row therefore represents one
+// continuous work segment, and an idle gap can never turn into a multi-day row.
+// Trailing idle is trimmed on stop and by reconciliation.
 //
 // Every write here stamps updated_at as MAX(updated_at + 1, now). That column is the
 // version key last-write-wins compares, and it carries the *browser's* clock on rows
@@ -70,7 +66,6 @@ const (
 	// PostToolUse and SubagentStop both fire after the gap has already happened.
 	AgentKindToolStart = "tool_start"
 
-	msPerDay = int64(24 * 60 * 60 * 1000)
 	// formatDurationShort rounds to the nearest minute, so anything below this
 	// boundary is rendered as 0m. Only untouched, unassigned technical entries
 	// are discarded at that boundary; real user entries keep sub-minute precision.
@@ -116,13 +111,9 @@ type AgentPolicy struct {
 	IdleMs int64
 	// ToolMaxMs caps how much of a gap that started with a tool call is still
 	// billed. A ceiling, not a switch: a 45 minute gap after a tool start bills
-	// the first 30 and pauses the rest, so a hung tool cannot bill forever and a
-	// tool one minute over the limit does not lose everything.
+	// the first 30 and starts a new segment after the rest, so a hung tool cannot
+	// bill forever and a tool one minute over the limit does not lose everything.
 	ToolMaxMs int64
-	// MaxPauseMs is the pause after which the entry is cut in two even when the
-	// timezone is unknown. Without it a night break would glue yesterday and
-	// today into one row dated yesterday.
-	MaxPauseMs int64
 }
 
 // AgentStart carries the payload of a start signal. Zero StartedAt means "now".
@@ -581,9 +572,9 @@ func (s *Store) SetAgentTask(ctx context.Context, userID string, selector AgentT
 }
 
 // SetAgentSessionProject records which project the session's entries belong to. The
-// entry that is running gets moved by the ordinary sync path, but a session cut at the
-// local midnight or by a long pause opens its next entry from the session row, so
-// without this the project an agent picked would be forgotten by tomorrow morning.
+// entry that is running gets moved by the ordinary sync path, but a session split by
+// a pause opens its next entry from the session row, so without this the project an
+// agent picked would be forgotten after the next idle gap.
 // A nil project detaches future entries, which is the state a session starts in.
 func (s *Store) SetAgentSessionProject(ctx context.Context, userID, sessionID string, projectID *string) error {
 	transaction, err := s.db.BeginTx(ctx, nil)
@@ -622,7 +613,7 @@ type agentEntry struct {
 }
 
 // advanceAgentSession applies an activity signal at the given moment: it revives
-// a closed session, subtracts an idle gap from the entry instead of cutting it,
+// a closed session, splits the current entry at an idle gap,
 // adopts or replaces an entry that changed outside the agent flow, and always
 // leaves the session active with its watermark moved forward. Every branch runs
 // through the same tail, so the session can never end up closed while still
@@ -664,21 +655,15 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	opened := false
 	if current == nil && unopened {
 		// Deferred materialization. The row appears with the first activity but
-		// covers the session from its start, and every rule below then applies to
-		// it exactly as if the start had opened it: the gap between the start and
-		// this signal becomes a pause, never billed time. So waiting for activity
-		// decides whether the row exists, and nothing else.
+		// covers the session from its start when that signal arrives before the
+		// idle threshold. A later first signal starts the first segment itself.
 		//
-		// Except where that gap is one the rules below would cut rather than
-		// pause. Nothing is billed before the first signal - an unopened session
-		// has no tool run behind it, so its watermark is still the start itself -
-		// which makes the piece before the cut the start moment closed at the start
-		// moment: a zero-length row, the exact artefact opening on activity exists
-		// to stop writing. The entry opens at the signal instead, and the cut has
-		// already happened by the time the gap logic runs.
+		// Nothing is billed before a first signal that arrives after the idle
+		// threshold. Opening a zero-length segment before that pause would recreate
+		// the artefact deferred materialization exists to prevent, so the first
+		// entry starts at the signal instead.
 		from := session.StartedAt
-		if idle := at - mark; idle > policy.IdleMs &&
-			(crossesLocalMidnight(mark, at, session.TZOffsetMin) || idle > policy.MaxPauseMs) {
+		if at-mark > policy.IdleMs {
 			from = at
 			opened = true
 		}
@@ -697,24 +682,14 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 		}
 		workedUntil := mark + billable
 		if idle := at - workedUntil; idle > 0 {
-			switch {
-			case crossesLocalMidnight(workedUntil, at, session.TZOffsetMin) || idle > policy.MaxPauseMs:
-				// A pause across the local midnight has to cut: reports put an entry
-				// on the day it started, so gluing them would move this morning's work
-				// into yesterday and inflate that day's total.
-				if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, workedUntil, now); err != nil {
-					return err
-				}
-				current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
-				if err != nil {
-					return err
-				}
-				opened = true
-			default:
-				if err := addAgentPause(ctx, transaction, userID, current, idle, now); err != nil {
-					return err
-				}
+			if _, _, err := closeAgentEntry(ctx, transaction, userID, &current.id, workedUntil, now); err != nil {
+				return err
 			}
+			current, err = createAgentEntry(ctx, transaction, userID, *session, at, now)
+			if err != nil {
+				return err
+			}
+			opened = true
 		}
 	}
 	if current == nil {
@@ -765,58 +740,13 @@ func advanceAgentSession(ctx context.Context, transaction *sql.Tx, userID string
 	return err
 }
 
-// crossesLocalMidnight reports whether the interval spans a local calendar day
-// boundary. An unknown offset never counts as a crossing: guessing UTC would cut
-// entries at the wrong moment for most of the planet, and MaxPauseMs is the
-// timezone-independent guard for that case.
-func crossesLocalMidnight(fromMs, toMs int64, offsetMin *int) bool {
-	if offsetMin == nil {
-		return false
-	}
-	shift := int64(*offsetMin) * 60_000
-	return floorDiv(fromMs+shift, msPerDay) != floorDiv(toMs+shift, msPerDay)
-}
-
-func floorDiv(value, divisor int64) int64 {
-	quotient := value / divisor
-	if value%divisor != 0 && (value < 0) != (divisor < 0) {
-		quotient--
-	}
-	return quotient
-}
-
 // validTZOffset drops values outside the range real timezones live in, so a
-// broken hook cannot move an entry to a different day.
+// broken hook cannot distort report day boundaries.
 func validTZOffset(offsetMin *int) *int {
 	if offsetMin == nil || *offsetMin < -12*60 || *offsetMin > 14*60 {
 		return nil
 	}
 	return offsetMin
-}
-
-// addAgentPause records idle time inside the entry instead of cutting the entry
-// in two. The guard on server_seq keeps a row someone else has just changed from
-// being written blind; the caller has already checked ownership.
-func addAgentPause(ctx context.Context, transaction *sql.Tx, userID string, entry *agentEntry, pauseMs, now int64) error {
-	seq, err := allocateServerSeq(transaction, 1)
-	if err != nil {
-		return err
-	}
-	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET paused_ms = paused_ms + ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
-		pauseMs, now, seq, entry.id, userID, entry.serverSeq)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected > 0 {
-		entry.serverSeq = seq
-	}
-	return nil
 }
 
 // resolveAgentEntry decides what happens to the row the session points at.
@@ -971,19 +901,19 @@ func discardZeroMinuteTechnicalEntry(
 	}
 	var entry TimeEntry
 	err := transaction.QueryRowContext(ctx, `
-		SELECT started_at, stopped_at, paused_ms
+		SELECT started_at, stopped_at
 		FROM time_entries
 		WHERE id = ? AND user_id = ? AND agent_session_id = ?
 		  AND description = ? AND server_seq = ? AND deleted_at IS NULL`,
 		*session.TimeEntryID, userID, session.ID, agentEntryDescription(session), closedSeq).
-		Scan(&entry.StartedAt, &entry.StoppedAt, &entry.PausedMs)
+		Scan(&entry.StartedAt, &entry.StoppedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return closedSeq, false, nil
 	}
 	if err != nil {
 		return closedSeq, false, err
 	}
-	if entry.StoppedAt == nil || BillableDurationMs(entry, *entry.StoppedAt) >= agentZeroMinuteMs {
+	if entry.StoppedAt == nil || *entry.StoppedAt-entry.StartedAt >= agentZeroMinuteMs {
 		return closedSeq, false, nil
 	}
 

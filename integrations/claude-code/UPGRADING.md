@@ -69,5 +69,4 @@ WorkTime upgrade must not replace the user's terminal UI.
    ("call set_agent_task with the task number as soon as you know it") is what
    makes the tracked time group by task instead of by session.
 
-No server-side action is needed: migrations run at startup, and existing rows
-keep working (`paused_ms` starts at zero, so nothing changes retroactively).
+No manual server-side data change is needed: database migrations run at startup.

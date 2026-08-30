@@ -81,15 +81,10 @@ func writeAgentResult(w http.ResponseWriter, session store.AgentSession, err err
 }
 
 // agentPolicy falls back to the production defaults for any duration left at zero.
-// A zero MaxPauseMs makes every gap past the idle threshold split the entry in two,
-// which is the opposite of the documented "a session owns exactly one time entry" -
-// config.Load can never produce it, but a Config built by hand in a test can, and then
-// the test pins behaviour no deployment has.
 func (s *server) agentPolicy() store.AgentPolicy {
 	policy := store.AgentPolicy{
-		IdleMs:     s.cfg.AgentIdle.Milliseconds(),
-		ToolMaxMs:  s.cfg.AgentToolMax.Milliseconds(),
-		MaxPauseMs: s.cfg.AgentMaxPause.Milliseconds(),
+		IdleMs:    s.cfg.AgentIdle.Milliseconds(),
+		ToolMaxMs: s.cfg.AgentToolMax.Milliseconds(),
 	}
 	defaults := config.Defaults()
 	if policy.IdleMs <= 0 {
@@ -97,9 +92,6 @@ func (s *server) agentPolicy() store.AgentPolicy {
 	}
 	if policy.ToolMaxMs <= 0 {
 		policy.ToolMaxMs = defaults.AgentToolMax.Milliseconds()
-	}
-	if policy.MaxPauseMs <= 0 {
-		policy.MaxPauseMs = defaults.AgentMaxPause.Milliseconds()
 	}
 	return policy
 }
@@ -188,7 +180,7 @@ func (s *server) handleAgentStatusLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	elapsedMs := store.BillableDurationMs(entry, time.Now().UnixMilli())
+	elapsedMs := store.EntryDurationMs(entry, time.Now().UnixMilli())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = fmt.Fprintf(w, "WorkTime %s · %s\n", formatAgentStatusDuration(elapsedMs), formatAgentStatusDescription(entry.Description))

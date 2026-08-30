@@ -191,6 +191,7 @@
   {@const listID = `g-${dayISO}-${index}`}
   {@const shown = isExpanded(dayISO, group)}
   {@const countLabel = t("{n} entries", { n: group.entries.length })}
+  {@const displayedGroupDescription = displayEntryDescription(group.entries[0]!)}
   <!-- A running group is already this task, right now: repeating it would only
        add a second timer for the same work. -->
   {@const repeatable = group.lastStoppedAt !== null}
@@ -217,7 +218,7 @@
       <span class="dot" style="background: {project?.color ?? 'var(--border)'}"></span>
       <span class="main">
         <span class="desc-line">
-          <span class="desc-static">{group.description || t("(no description)")}</span>
+          <span class="desc-static">{displayedGroupDescription || t("(no description)")}</span>
           <!-- Stacked lines plus the number: "several rows live here" without a
                noun, which no plural rule can then get wrong. -->
           <span class="count" title={countLabel}>
@@ -262,7 +263,7 @@
       <!-- "Repeat", not "Start again": Playwright matches an accessible name by
            substring, and every spec that clicks the form's Start button would
            then hit this one too. -->
-      {@const repeatLabel = t("Repeat {task}", { task: group.description })}
+      {@const repeatLabel = t("Repeat {task}", { task: displayedGroupDescription })}
       <button type="button" class="kebab icon repeat" aria-label={repeatLabel} title={repeatLabel} onclick={() => repeatGroup(group)}>
         <svg
           width="15"

@@ -25,19 +25,16 @@ Three independent layers; each one is a fallback for the previous:
 **The entry waits for activity.** A start says a process exists, which is not
 the same as work: the agent binary is launched far more often than it is worked
 in, and on the first machine to measure it 222 of 249 sessions in a week
-reported no activity at all. So the entry is opened by the first heartbeat, and
-opened back at the session's start, where every rule below then applies to it as
-if the start had opened it - the gap between the start and that first signal
-becomes a pause, never billed time. Waiting decides whether the row exists and
-nothing else. A session that never reports activity keeps its row in
+reported no activity at all. So the entry is opened by the first heartbeat. If
+that signal arrives within the idle threshold, the entry is back-dated to the
+session start; after a longer gap it opens at the signal itself. A session that
+never reports activity keeps its row in
 `agent_sessions`, so the evidence of the launch survives, and produces no time
 entry.
 
-Where that first gap is one the rules below would cut rather than pause - it
-crosses the local midnight, or outlasts `WORKTIME_AGENT_MAX_PAUSE` - the entry
-opens at the first signal instead. Nothing is billed before that signal, so the
-piece before such a cut would be the start moment closed at the start moment: a
-zero-length row, which is the artefact this whole rule exists to stop writing.
+Nothing is billed before a late first signal. Writing a piece before the pause
+would produce a start moment closed at that same start moment: a zero-length row,
+which is the artefact deferred materialization exists to prevent.
 
 The rows the old behaviour had already written are removed by migration 008, on
 the deploy that brings it. The delete is soft, like every other delete here, so
@@ -62,33 +59,29 @@ Any outside edit is remembered permanently for the current entry, including a
 project- or tags-only edit, so deliberately touched short entries are never
 cleaned up; task-named and manually renamed entries are protected as well.
 
-A session owns exactly one time entry, so the PWA shows agent work as a live
-timer. Signals closer together than the idle threshold (`WORKTIME_AGENT_IDLE`,
-default `10m`) count as continuous work; a larger gap is added to the entry's
-`paused_ms` and subtracted from its duration, so idle time in the middle of a
-session is never billed and the session still stays one row. `started_at` and
-`stopped_at` remain real timestamps - a nine-to-six entry with an hour of
-pauses shows "09:00-18:00" next to "8h 00m", and the entry editor spells the
-difference out. Trailing idle is trimmed on stop and by reconciliation.
-Auto-compaction sends a heartbeat (`PreCompact`), not a stop, so long sessions
-keep accumulating time under the same `session_id`.
+A session owns one running entry at a time and may produce several finished
+entries. Signals no farther apart than the idle threshold
+(`WORKTIME_AGENT_IDLE`, default `10m`) count as continuous work. A larger gap
+closes the current entry at the last billable activity and opens a new one at
+the next signal. Every pause is therefore a row boundary: a session can stay
+alive under the same `session_id`, while its time appears as separate continuous
+segments in the PWA and reports. Trailing idle is trimmed on stop and by
+reconciliation. Auto-compaction sends a heartbeat (`PreCompact`), not a stop,
+so it does not create a false pause.
 
-Two things still cut the entry in two, both about days rather than idling:
-
-- a pause crossing the agent's **local midnight** (the hook sends its UTC
-  offset with `start`). Reports place an entry on the day it started, so gluing
-  the two would move this morning's work into yesterday;
-- a pause longer than `WORKTIME_AGENT_MAX_PAUSE` (default `4h`), which is the
-  same guard for a session whose timezone is unknown - an old hook that does
-  not send `tz_offset_min` yet.
+Migration 009 removes the old `paused_ms` column. Historical rows store only the
+total paused duration, not individual pause boundaries, so the migration
+preserves their duration by compressing the interval: it moves the stop backward
+for finished rows and the start forward for running rows. Every changed row gets
+a fresh sync cursor so existing browsers receive the compacted boundary.
 
 **Long tool calls.** `PreToolUse` sends a heartbeat with `activity=tool_start`.
 Without it a twenty minute `Bash` or `Task` is indistinguishable from an empty
 chair: `PostToolUse` and `SubagentStop` only fire once the gap has already
 happened. After a `tool_start` the first `WORKTIME_AGENT_TOOL_MAX` (default
-`30m`) of the gap are billed and the rest becomes a pause - a ceiling, not a
-switch, so a hung tool cannot bill forever and a tool one minute over the limit
-does not lose everything.
+`30m`) of the gap are billed and any remainder becomes a pause between two
+entries - a ceiling, not a switch, so a hung tool cannot bill forever and a tool
+one minute over the limit does not lose everything.
 
 Entries land in `time_entries` through the same `server_seq` allocation as
 `/api/sync` writes, so they reach every client over the normal pull path.
@@ -115,9 +108,8 @@ set_agent_task(task_key: "MT-12345", task_title: "Slow AMaaS quote creation",
   tracker with whatever MCP connection you already have (Notion, GitLab,
   GitHub): WorkTime never goes to a tracker itself and stores no tracker
   tokens. Without the title the entry is named just `MT-12345`.
-- It renames **every** entry of the session, not only the current one - a
-  session cut by the local midnight would otherwise leave half its work under
-  the technical name.
+- It renames **every** entry of the session, not only the current one - every
+  segment belongs to the same task and must carry the same description.
 - Entries the user renamed by hand are left alone.
 - An explicit `session_id` is authoritative. Otherwise a supplied `cwd` is a
   constraint, not a fallback hint: after lexical, case-insensitive path
@@ -156,8 +148,8 @@ update_time_entry(project: "WorkTime", entry_id?: "...", description?: "...")
   first. An unknown name is an error, never a new project. An empty string
   detaches the entry.
 - When the row is the one an agent session currently owns, the project is
-  written to the session too, so the entry it opens after the next midnight cut
-  starts on the same project instead of falling back to none.
+  written to the session too, so the entry it opens after the next pause starts
+  on the same project instead of falling back to none.
 - It edits a finished entry too, by `entry_id` - `list_running_timers` only
   reports the running ones, so that id has to come from the app or from the
   earlier answer of this tool.
@@ -247,16 +239,18 @@ POST /api/agent/sessions/{id}/start
     "cwd": "...", "git_branch": "...", "model": "...", "project_id": "...",
     "tz_offset_min": 180 }
   -> upsert by id; opens no time entry on its own - the first heartbeat does,
-     back at this moment. A replay (--continue / --resume) refreshes metadata
-     and counts as activity, it never duplicates sessions or entries
+     back at this moment when it arrives inside the idle threshold. A replay
+     (--continue / --resume) refreshes metadata and counts as activity; after
+     a pause it starts a new entry without duplicating the agent session
 
 POST /api/agent/sessions/{id}/heartbeat
   { "at": 1730000600000, "activity": "tool_start|prompt|turn_end|compact",
     "cwd": "...", "git_branch": "...", "model": "...", "tz_offset_min": 180 }
   -> advances the watermark (monotonic, out-of-order heartbeats cannot rewind
-     it); an unknown id is created implicitly, a closed session is revived and
-     continues its own entry. Metadata is optional and only fills values a lost
-     start never delivered.
+     it); an unknown id is created implicitly, and a closed session is revived.
+     It continues the current entry inside the idle threshold and starts a new
+     one after a pause. Metadata is optional and only fills values a lost start
+     never delivered.
 
 POST /api/agent/sessions/{id}/stop
   { "ended_at": 1730003600000, "reason": "clear|logout|prompt_input_exit|other" }
@@ -315,9 +309,8 @@ Every start, heartbeat and stop response is the session state, including
 | Env var | Default | Meaning |
 |---|---|---|
 | `WORKTIME_AGENT_GRACE` | `10m` | Heartbeat silence after which reconciliation closes the session at the last heartbeat (`end_reason = stale_heartbeat`). |
-| `WORKTIME_AGENT_IDLE` | `10m` | Largest gap between signals still billed as continuous work; a larger gap becomes `paused_ms` and is not billed. |
+| `WORKTIME_AGENT_IDLE` | `10m` | Largest gap between signals still billed as continuous work; a larger gap starts a new entry. |
 | `WORKTIME_AGENT_TOOL_MAX` | `30m` | How much of a gap that began with `activity=tool_start` is still billed. |
-| `WORKTIME_AGENT_MAX_PAUSE` | `4h` | Pause after which the entry is cut in two even when the timezone is unknown. |
 | `WORKTIME_AGENT_RECONCILE` | `1m` | How often the reconciliation job runs. |
 
 All accept Go duration syntax (`90s`, `15m`). Grace should be a small multiple

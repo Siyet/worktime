@@ -19,9 +19,8 @@ const (
 )
 
 var testPolicy = AgentPolicy{
-	IdleMs:     testIdleMs,
-	ToolMaxMs:  30 * 60 * 1000,
-	MaxPauseMs: 4 * 60 * 60 * 1000,
+	IdleMs:    testIdleMs,
+	ToolMaxMs: 30 * 60 * 1000,
 }
 
 func startTestAgentSession(t *testing.T, testStore *Store, userID, sessionID string, startedAt int64) AgentSession {
@@ -288,11 +287,10 @@ func TestAgentReconcileDiscardsTechnicalZeroMinuteEntry(t *testing.T) {
 }
 
 // Back-dating the entry to the start is right up to the point where the gap to
-// the first signal is one the rules cut rather than pause. Nothing is billed
-// before that signal, so the piece before the cut would be the start moment
-// closed at the start moment - the zero-length row this whole rule exists to
-// stop writing. Both cutting gaps are covered: the local midnight and MaxPause.
-func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
+// the first signal becomes a pause. Nothing is billed before that signal, so a
+// zero-length row before the pause would only recreate the artefact deferred
+// materialization exists to prevent.
+func TestAgentFirstSignalAfterAnIdleGapOpensAtTheSignal(t *testing.T) {
 	ctx := context.Background()
 	// UTC+3: local midnight is 21:00 UTC, so 23:30 -> 00:30 local crosses it.
 	offset := 180
@@ -305,8 +303,8 @@ func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
 		startedAt int64
 		signalAt  int64
 	}{
+		{name: "same day", startedAt: agentBaseMs, signalAt: agentBaseMs + testIdleMs + 1},
 		{name: "across the local midnight", offset: &offset, startedAt: evening, signalAt: morning},
-		{name: "past MaxPause", startedAt: agentBaseMs, signalAt: agentBaseMs + testPolicy.MaxPauseMs + 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -325,7 +323,7 @@ func TestAgentFirstSignalAfterACuttingGapOpensAtTheSignal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get entry: %v", err)
 			}
-			if entry.StartedAt != test.signalAt || entry.StoppedAt != nil || entry.PausedMs != 0 {
+			if entry.StartedAt != test.signalAt || entry.StoppedAt != nil {
 				t.Fatalf("the entry must open at the signal, got %+v", entry)
 			}
 			// One row and no stub before it: the cut left nothing to close.
@@ -543,7 +541,7 @@ func TestAgentHeartbeatFillsMissingMetadata(t *testing.T) {
 	}
 }
 
-func TestAgentIdleGapKeepsOneEntry(t *testing.T) {
+func TestAgentIdleGapStartsANewEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-idle@test.local")
 	ctx := context.Background()
@@ -555,30 +553,34 @@ func TestAgentIdleGapKeepsOneEntry(t *testing.T) {
 	lastActive := agentBaseMs + 60_000
 	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 
-	// Silence longer than the idle threshold: the gap must not be billed, but it
-	// must not cost the session its entry either - one session is one row.
+	// Silence longer than the idle threshold ends the current work segment. The
+	// same agent session stays active and points to a fresh running entry.
 	gap := testIdleMs + 300_000
 	afterIdle := lastActive + gap
 	session := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
-	if *session.TimeEntryID != entryID {
-		t.Fatal("an idle gap must not open a second entry")
+	if *session.TimeEntryID == entryID {
+		t.Fatal("an idle gap must open a second entry")
 	}
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
+	first, err := testStore.GetTimeEntry(ctx, user.ID, entryID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get first entry: %v", err)
 	}
-	if entry.StoppedAt != nil {
-		t.Fatalf("the entry must still be running: %+v", entry)
+	if first.StoppedAt == nil || *first.StoppedAt != lastActive {
+		t.Fatalf("the first entry must end at the last activity: %+v", first)
 	}
-	if entry.PausedMs != gap {
-		t.Fatalf("expected the whole gap paused, got %d of %d", entry.PausedMs, gap)
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
 	}
-	if count := countUserEntries(t, testStore, user.ID); count != 1 {
-		t.Fatalf("expected exactly one entry, got %d", count)
+	if second.StartedAt != afterIdle || second.StoppedAt != nil {
+		t.Fatalf("the second entry must start at resumed activity: %+v", second)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 2 {
+		t.Fatalf("expected exactly two entries, got %d", count)
 	}
 }
 
-func TestAgentDurationExcludesPause(t *testing.T) {
+func TestAgentDurationIsSplitAroundPause(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-duration@test.local")
 	ctx := context.Background()
@@ -592,40 +594,23 @@ func TestAgentDurationExcludesPause(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, resumed+60_000)
 	testStop(t, testStore, user.ID, sessionID, resumed+60_000, "prompt_input_exit")
 
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get first entry: %v", err)
 	}
-	billable := *entry.StoppedAt - entry.StartedAt - entry.PausedMs
-	if billable != 120_000 {
-		t.Fatalf("expected two billed minutes, got %d ms (paused %d)", billable, entry.PausedMs)
+	if first.StoppedAt == nil || *first.StoppedAt-first.StartedAt != 60_000 {
+		t.Fatalf("unexpected first segment: %+v", first)
 	}
-}
-
-func TestAgentPausedMsNeverExceedsSpan(t *testing.T) {
-	testStore := openTestStore(t)
-	user := testUser(t, testStore, "agent-pause-bounds@test.local")
-	ctx := context.Background()
-
-	sessionID := uuid.NewString()
-	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// Out of order, repeated and far apart signals in one go.
-	moments := []int64{60_000, 61_000, 20 * 60_000, 20*60_000 + 1, 90 * 60_000, 30 * 60_000, 95 * 60_000}
-	for _, offset := range moments {
-		if _, err := testStore.AgentHeartbeat(ctx, user.ID, sessionID,
-			AgentSignal{At: agentBaseMs + offset}, testPolicy); err != nil {
-			t.Fatalf("heartbeat at +%d: %v", offset, err)
-		}
-	}
-	testStop(t, testStore, user.ID, sessionID, agentBaseMs+95*60_000, "other")
-
-	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	session, err := testStore.GetAgentSession(ctx, user.ID, sessionID)
 	if err != nil {
-		t.Fatalf("get entry: %v", err)
+		t.Fatalf("get session: %v", err)
 	}
-	span := *entry.StoppedAt - entry.StartedAt
-	if entry.PausedMs < 0 || entry.PausedMs > span {
-		t.Fatalf("paused_ms %d is outside 0..%d", entry.PausedMs, span)
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *session.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
+	}
+	if second.StoppedAt == nil || *second.StoppedAt-second.StartedAt != 60_000 {
+		t.Fatalf("unexpected second segment: %+v", second)
 	}
 }
 
@@ -647,25 +632,26 @@ func TestAgentLongToolRunBilledUpToCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 0 {
-		t.Fatalf("a tool run inside the cap must be billed in full, paused %d", entry.PausedMs)
-	}
 
-	// A forty five minute one bills the first thirty and pauses the rest: a hung
-	// tool must not bill forever, and one minute over the cap must not lose all.
+	// A forty five minute one bills the first thirty and splits before the rest: a
+	// hung tool must not bill forever, and one minute over the cap must not lose all.
 	longRun := uuid.NewString()
 	longStarted := startWorkingTestAgentSession(t, testStore, user.ID, longRun, agentBaseMs)
 	if _, err := testStore.AgentHeartbeat(ctx, user.ID, longRun,
 		AgentSignal{At: agentBaseMs + 60_000, Kind: AgentKindToolStart}, testPolicy); err != nil {
 		t.Fatalf("tool start: %v", err)
 	}
-	testHeartbeat(t, testStore, user.ID, longRun, agentBaseMs+60_000+45*60_000)
+	resumed := testHeartbeat(t, testStore, user.ID, longRun, agentBaseMs+60_000+45*60_000)
 	entry, err = testStore.GetTimeEntry(ctx, user.ID, *longStarted.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 15*60_000 {
-		t.Fatalf("expected 15 minutes paused past the cap, got %d", entry.PausedMs)
+	if *resumed.TimeEntryID == *longStarted.TimeEntryID {
+		t.Fatal("time past the tool cap must start a new entry")
+	}
+	wantStoppedAt := agentBaseMs + 60_000 + testPolicy.ToolMaxMs
+	if entry.StoppedAt == nil || *entry.StoppedAt != wantStoppedAt {
+		t.Fatalf("expected the first entry capped at %d, got %+v", wantStoppedAt, entry)
 	}
 }
 
@@ -692,11 +678,45 @@ func TestAgentResumeDoesNotPauseBilledTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != 0 {
-		t.Fatalf("a one minute resume gap is under the idle threshold, paused %d", entry.PausedMs)
-	}
 	if entry.StoppedAt != nil {
 		t.Fatalf("the entry must be running again: %+v", entry)
+	}
+}
+
+func TestAgentResumeAfterPauseStartsNewEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-resume-pause@test.local")
+	ctx := context.Background()
+
+	sessionID := uuid.NewString()
+	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+	endedAt := agentBaseMs + 5*60_000
+	testHeartbeat(t, testStore, user.ID, sessionID, endedAt)
+	testStop(t, testStore, user.ID, sessionID, endedAt, "prompt_input_exit")
+
+	resumedAt := endedAt + testIdleMs + 1
+	resumed, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{
+		SessionID: sessionID, StartedAt: resumedAt,
+	}, testPolicy)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if *resumed.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("resuming after a pause must start a new entry")
+	}
+	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get first entry: %v", err)
+	}
+	if first.StoppedAt == nil || *first.StoppedAt != endedAt {
+		t.Fatalf("the first entry must stay stopped before the pause: %+v", first)
+	}
+	second, err := testStore.GetTimeEntry(ctx, user.ID, *resumed.TimeEntryID)
+	if err != nil {
+		t.Fatalf("get second entry: %v", err)
+	}
+	if second.StartedAt != resumedAt || second.StoppedAt != nil {
+		t.Fatalf("the resumed entry must start after the pause: %+v", second)
 	}
 }
 
@@ -739,7 +759,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get second entry: %v", err)
 	}
-	if second.StartedAt != morning || second.PausedMs != 0 {
+	if second.StartedAt != morning {
 		t.Fatalf("unexpected morning entry: %+v", second)
 	}
 
@@ -754,7 +774,7 @@ func TestAgentMidnightGapSplitsEntry(t *testing.T) {
 	}
 }
 
-func TestAgentUnknownTimezoneNeverSplits(t *testing.T) {
+func TestAgentIdleGapSplitsWithoutTimezone(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-notz@test.local")
 	ctx := context.Background()
@@ -764,31 +784,30 @@ func TestAgentUnknownTimezoneNeverSplits(t *testing.T) {
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, evening)
 	morning := time.Date(2026, 7, 1, 21, 30, 0, 0, time.UTC).UnixMilli()
 	session := testHeartbeat(t, testStore, user.ID, sessionID, morning)
-	if *session.TimeEntryID != *started.TimeEntryID {
-		t.Fatal("without a known offset there is no local midnight to cut at")
+	if *session.TimeEntryID == *started.TimeEntryID {
+		t.Fatal("an idle gap must split even without a known timezone")
 	}
 	entry, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.PausedMs != morning-evening {
-		t.Fatalf("the whole gap must be paused, got %d", entry.PausedMs)
+	if entry.StoppedAt == nil || *entry.StoppedAt != evening {
+		t.Fatalf("the first entry must stop before the pause: %+v", entry)
 	}
 }
 
-func TestAgentMaxPauseSplitsEntry(t *testing.T) {
+func TestAgentLongPauseSplitsEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-maxpause@test.local")
 	ctx := context.Background()
 
 	sessionID := uuid.NewString()
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// Longer than the maximum pause and with no timezone known: the
-	// timezone-independent guard has to cut the entry anyway.
+	// A long pause follows the same rule as every other idle gap.
 	afterNight := agentBaseMs + 5*60*60*1000
 	session := testHeartbeat(t, testStore, user.ID, sessionID, afterNight)
 	if *session.TimeEntryID == *started.TimeEntryID {
-		t.Fatal("a pause longer than the maximum must open a new entry")
+		t.Fatal("a long pause must open a new entry")
 	}
 	first, err := testStore.GetTimeEntry(ctx, user.ID, *started.TimeEntryID)
 	if err != nil {
@@ -1106,8 +1125,7 @@ func TestAgentLateStopClosesAtWatermark(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, lastActive)
 	testStop(t, testStore, user.ID, sessionID, lastActive+testIdleMs+1, "other")
 
-	// Work resumes: the session must pick its own entry back up rather than
-	// scatter the rest of the session over new rows.
+	// Work resumes inside the idle threshold, so it is still the same segment.
 	session := testHeartbeat(t, testStore, user.ID, sessionID, lastActive+60_000)
 	if *session.TimeEntryID != *started.TimeEntryID {
 		t.Fatal("the revived session must continue its own entry")
@@ -1514,8 +1532,8 @@ func TestAgentStartValidatesProject(t *testing.T) {
 }
 
 // A project chosen mid-session has to reach the session row, not only the entry that
-// is running: the next entry - after a pause past the maximum, or a cut at the local
-// midnight - is opened from the session and would otherwise land under no project.
+// is running: the next entry after any pause is opened from the session and would
+// otherwise land under no project.
 func TestSetAgentSessionProjectCarriesToTheNextEntry(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-session-project@test.local")
@@ -1563,9 +1581,9 @@ func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 
 	sessionID := uuid.NewString()
 	started := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
-	// A pause past the maximum leaves the session with two entries; both belong
-	// to the same task, and half the work would keep the technical name if only
-	// the current entry were renamed.
+	// A pause leaves the session with two entries; both belong to the same task,
+	// and half the work would keep the technical name if only the current entry
+	// were renamed.
 	afterIdle := agentBaseMs + 5*60*60*1000
 	second := testHeartbeat(t, testStore, user.ID, sessionID, afterIdle)
 	if *second.TimeEntryID == *started.TimeEntryID {

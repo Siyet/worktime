@@ -194,9 +194,54 @@ WHERE agent_session_id IS NULL
 	// the reasoning behind each of its three conditions live with the agent code,
 	// in purgeEmptyAgentEntries.
 	purgeEmptyAgentEntries,
-	// 009 is the deployed pause-compaction migration added by the baseline that
-	// this branch is integrated with below. This entry_user_edited column is 010:
-	// it distinguishes any deliberate outside edit from a merely unassigned row.
+	// 009: pauses are row boundaries again. Preserve every displayed duration by
+	// compressing the old aggregate pause out of the interval, publish each changed
+	// row under a fresh sync cursor, then remove the obsolete column. Running rows
+	// move their start forward; finished rows move their stop backward. Historical
+	// data stores only the aggregate pause, so no more accurate placement exists.
+	`
+CREATE TEMP TABLE pause_compaction (
+	id         TEXT PRIMARY KEY,
+	seq_offset INTEGER NOT NULL
+);
+INSERT INTO pause_compaction (id, seq_offset)
+SELECT id, ROW_NUMBER() OVER (ORDER BY id)
+FROM time_entries
+WHERE paused_ms > 0;
+
+UPDATE sync_state
+SET seq = seq + (SELECT COUNT(*) FROM pause_compaction);
+
+UPDATE time_entries
+SET started_at = CASE
+		WHEN stopped_at IS NULL THEN started_at + paused_ms
+		ELSE started_at
+	END,
+	stopped_at = CASE
+		WHEN stopped_at IS NULL THEN NULL
+		ELSE MAX(started_at, stopped_at - paused_ms)
+	END,
+	updated_at = MAX(updated_at + 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+	server_seq = (
+		SELECT sync_state.seq - (SELECT COUNT(*) FROM pause_compaction) + pause_compaction.seq_offset
+		FROM sync_state
+		JOIN pause_compaction ON pause_compaction.id = time_entries.id
+	)
+WHERE id IN (SELECT id FROM pause_compaction);
+
+UPDATE agent_sessions
+SET entry_server_seq = (
+	SELECT server_seq FROM time_entries WHERE time_entries.id = agent_sessions.time_entry_id
+)
+WHERE time_entry_id IN (SELECT id FROM pause_compaction);
+
+ALTER TABLE time_entries DROP COLUMN paused_ms;
+DROP TABLE pause_compaction;
+`,
+	// 010: remember every edit made outside the agent lifecycle. entry_user_named
+	// cannot serve this purpose: changing only the project or tags must still let
+	// set_agent_task replace the technical description, while zero-minute cleanup
+	// must never discard anything the user deliberately touched.
 	`
 ALTER TABLE agent_sessions ADD COLUMN entry_user_edited INTEGER NOT NULL DEFAULT 0;
 `,

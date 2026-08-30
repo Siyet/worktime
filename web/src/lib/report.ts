@@ -36,10 +36,6 @@ export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {
       description: entry.description,
       tags: entry.tags ?? [],
       startedAt: entry.started_at,
-      // Billable minutes, so a paused agent entry is not reported as the whole
-      // interval. ReportEntry deliberately carries no paused_ms of its own:
-      // splitOverlapMinutes then models such an entry as [start, start+minutes],
-      // which leaves every ordinary entry's numbers untouched.
       minutes: Math.round(entryDurationMs(entry, entry.stopped_at) / 60000),
     });
   }

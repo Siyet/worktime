@@ -94,8 +94,8 @@ export async function mergeServerRows(
       //
       // Rows pushed in this very request are the exception: their marker is only
       // cleared after this merge, and the response can carry server-owned fields
-      // the client has no other way to learn (paused_ms, agent_session_id, a
-      // rename by the agent flow). Skipping those loses them for good - the
+      // the client has no other way to learn (agent_session_id or a rename by
+      // the agent flow). Skipping those loses them for good - the
       // cursor has already moved past that server_seq. The updated_at comparison
       // below still protects an edit made while the push was in flight.
       if (!justPushed.has(`${table}:${row.id}`) && (await dirty.get(`${table}:${row.id}`))) continue;
@@ -128,10 +128,10 @@ function sameStoredRow(local: SyncedRow, incoming: SyncedRow): boolean {
       if (localItems.some((item, index) => item !== incomingItems[index])) return false;
       continue;
     }
-    // A locally created row omits the server-owned fields entirely, while the server
-    // always sends them: paused_ms as 0 and agent_session_id as null. Comparing those
-    // as different would make every new timer's own echo look like a change and reload
-    // the whole state from disk - the exact cost this check exists to avoid.
+    // A locally created row omits agent_session_id, while the server sends it as
+    // null. Comparing those as different would make every new timer's own echo
+    // look like a change and reload the whole state from disk - the exact cost
+    // this check exists to avoid.
     if (localValue === undefined && (incomingValue === null || incomingValue === 0)) continue;
     if (localValue !== incomingValue) return false;
   }

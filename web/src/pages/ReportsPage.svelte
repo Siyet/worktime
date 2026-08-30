@@ -15,6 +15,7 @@
     splitOverlapMinutes,
     summariseReport,
     UNTAGGED_KEY,
+    visibleReportProjects,
     type GroupBy,
     type ReportEntry,
   } from "../lib/report";
@@ -87,8 +88,12 @@
 
   // --- filter chips ---
 
+  const rangeAllEntries = $derived(dateRangeEntries(appState.entries, dateFrom, dateTo));
+
   const chips = $derived.by(() => {
-    const projects = [...appState.projects].sort((left, right) => left.name.localeCompare(right.name));
+    const projects = visibleReportProjects(appState.projects, rangeAllEntries).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
     return [
       ...projects.map((project) => ({ key: project.id, name: project.name, color: project.color })),
       { key: NO_PROJECT_KEY, name: t("No project"), color: "var(--border)" },
@@ -115,8 +120,6 @@
 
   const projectKey = (entry: ReportEntry) => entry.projectID ?? NO_PROJECT_KEY;
   const tagKeysOf = (entry: ReportEntry) => (entry.tags.length > 0 ? entry.tags : [UNTAGGED_KEY]);
-
-  const rangeAllEntries = $derived(dateRangeEntries(appState.entries, dateFrom, dateTo));
 
   // The tag strip exists only while the range actually contains tagged entries - a
   // history with no tags must not grow empty UI. It is built from the unfiltered range

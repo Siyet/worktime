@@ -2,7 +2,7 @@
 // All durations are whole minutes; days are local YYYY-MM-DD strings.
 import { descriptionKey, entryDurationMs, localDateISO } from "./format";
 import { formattingLocale } from "./settings.svelte";
-import type { TimeEntry, TimeOff, TimeOffKind } from "./types";
+import type { Project, TimeEntry, TimeOff, TimeOffKind } from "./types";
 
 export interface ReportEntry {
   id: string;
@@ -23,6 +23,14 @@ export const NO_PROJECT_KEY = "none";
 export const UNTAGGED_KEY = "__untagged";
 
 export type GroupBy = "project" | "tag" | "day" | "description";
+
+// Active projects remain available as filters even when the selected range has
+// no entries for them. Archived projects are historical context instead: offer
+// one only while that range actually contains time attributed to it.
+export function visibleReportProjects(projects: Project[], entries: ReportEntry[]): Project[] {
+  const projectIDsInRange = new Set(entries.map((entry) => entry.projectID));
+  return projects.filter((project) => !project.archived || projectIDsInRange.has(project.id));
+}
 
 // Finished entries only; running timers never enter reports.
 export function toReportEntries(entries: TimeEntry[]): ReportEntry[] {

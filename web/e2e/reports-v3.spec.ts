@@ -11,6 +11,59 @@ function isoDate(offsetDays: number): string {
 }
 
 test.describe("reports v3", () => {
+  test("archived project chips follow the range without dropping recorded time", async ({ page, server }) => {
+    const activeProjectID = crypto.randomUUID();
+    const currentArchivedProjectID = crypto.randomUUID();
+    const oldArchivedProjectID = crypto.randomUUID();
+    const todayNine = new Date().setHours(9, 0, 0, 0);
+    await seedServer(server.url, {
+      projects: [
+        { id: activeProjectID, name: "Active without entries" },
+        { id: currentArchivedProjectID, name: "Archived current", archived: true },
+        { id: oldArchivedProjectID, name: "Archived old", archived: true },
+      ],
+      entries: [
+        {
+          description: "archived range work",
+          startedAt: todayNine,
+          stoppedAt: todayNine + 2 * HOUR,
+          projectID: currentArchivedProjectID,
+        },
+        {
+          description: "old archived work",
+          startedAt: todayNine - 90 * DAY,
+          stoppedAt: todayNine - 90 * DAY + HOUR,
+          projectID: oldArchivedProjectID,
+        },
+      ],
+    });
+
+    await page.goto(server.url + "/#/reports");
+    const projectChips = page.locator(".chipstrip").first();
+    await expect(projectChips.getByRole("button", { name: "Active without entries" })).toBeVisible();
+    await expect(projectChips.getByRole("button", { name: "Archived current" })).toBeVisible();
+    await expect(projectChips.getByRole("button", { name: "Archived old" })).toHaveCount(0);
+
+    // The archived project is not merely offered as a chip: its entry remains in
+    // every report surface driven by that chip set.
+    await expect(page.locator(".stat").first()).toContainText("2.0h");
+    await expect(page.locator(".proj-item").filter({ hasText: "Archived current" })).toContainText("2h");
+    const reportCard = page.locator(".card").filter({ has: page.locator("tbody") });
+    await expect(reportCard.locator("tr.group").filter({ hasText: "Archived current" })).toContainText("2h");
+    await expect(page.locator(".chart rect[stroke='var(--axis)']")).toHaveCount(1);
+
+    // Moving the range past one archived project replaces its chip with the
+    // archived project that actually has time in the new range. Active projects
+    // remain available even there without any entries.
+    await page.getByLabel("From", { exact: true }).fill(isoDate(-90));
+    await page.getByLabel("To", { exact: true }).fill(isoDate(-90));
+    await expect(projectChips.getByRole("button", { name: "Active without entries" })).toBeVisible();
+    await expect(projectChips.getByRole("button", { name: "Archived current" })).toHaveCount(0);
+    await expect(projectChips.getByRole("button", { name: "Archived old" })).toBeVisible();
+    await expect(page.locator(".stat").first()).toContainText("1.0h");
+    await expect(reportCard.locator("tr.group").filter({ hasText: "Archived old" })).toContainText("1h");
+  });
+
   test("CSV export downloads current filter contents", async ({ page, server }) => {
     const projectID = crypto.randomUUID();
     // 9:00 local keeps the entry inside the default Month range even right after midnight.

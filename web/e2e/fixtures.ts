@@ -154,7 +154,7 @@ interface SeedEntry {
 export async function seedServer(
   serverURL: string,
   data: {
-    projects?: { id: string; name: string; color?: string }[];
+    projects?: { id: string; name: string; color?: string; archived?: boolean }[];
     entries?: SeedEntry[];
     timeOff?: { kind: "sick" | "vacation" | "dayoff"; dateFrom: string; dateTo: string }[];
   },
@@ -165,7 +165,7 @@ export async function seedServer(
       id: project.id,
       name: project.name,
       color: project.color ?? "#2563eb",
-      archived: false,
+      archived: project.archived ?? false,
       created_at: now,
       updated_at: now,
       deleted_at: null,

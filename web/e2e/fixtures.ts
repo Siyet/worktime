@@ -61,6 +61,9 @@ async function launchServer(options: ServerOptions): Promise<{ server: WorktimeS
     WORKTIME_ADDR: `127.0.0.1:${port}`,
     WORKTIME_DB: path.join(dataDir, "e2e.db"),
     WORKTIME_DEV_AUTH: options.devAuth ? "1" : "",
+    // Keep the isolated suite deterministic and prevent every fixture process
+    // from discovering public releases unless a test opts in explicitly.
+    WORKTIME_UPDATE_CHECKS: "0",
     ...options.env,
   };
   const child = spawn(binaryPath, [], { env: { ...process.env, ...env }, stdio: "ignore" });

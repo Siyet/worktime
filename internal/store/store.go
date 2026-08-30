@@ -258,6 +258,17 @@ WHERE time_entry_id IS NOT NULL
 	  AND time_entries.user_id = agent_sessions.user_id
   );
 `,
+	// 011: instance-wide update policy. This is deliberately not a synced table:
+	// clients may display it, but only an explicitly configured administrator may
+	// change how the server binary is maintained.
+	`
+CREATE TABLE instance_settings (
+	id           INTEGER PRIMARY KEY CHECK (id = 1),
+	auto_update  INTEGER NOT NULL DEFAULT 0 CHECK (auto_update IN (0, 1)),
+	updated_at   INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO instance_settings (id, auto_update, updated_at) VALUES (1, 0, 0);
+`,
 }
 
 type Store struct {

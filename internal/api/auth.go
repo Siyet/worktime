@@ -66,6 +66,29 @@ func requireSession(next http.Handler) http.Handler {
 	})
 }
 
+func (s *server) isAdmin(r *http.Request) bool {
+	if authctx.IsAPIToken(r.Context()) {
+		return false
+	}
+	email := strings.ToLower(currentUser(r).Email)
+	for _, allowed := range s.cfg.AdminEmails {
+		if email == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isAdmin(r) {
+			http.Error(w, "administrator access required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // requireSameOrigin blocks cross-site state changes on cookie-authenticated requests.
 // The session cookie is SameSite=Lax, which a sibling host on the same registrable
 // domain does not count as cross-site - on a self-hosted instance sharing a domain with
@@ -84,7 +107,7 @@ func (s *server) requireSameOrigin(next http.Handler) http.Handler {
 			http.Error(w, "cross-site requests are not allowed", http.StatusForbidden)
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(origin, r.Host) {
+		if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(origin, r) {
 			http.Error(w, "cross-site requests are not allowed", http.StatusForbidden)
 			return
 		}
@@ -92,20 +115,35 @@ func (s *server) requireSameOrigin(next http.Handler) http.Handler {
 	})
 }
 
-// originAllowed compares the Origin against the host the request actually arrived on,
-// not only against the configured base URL. The two differ in every deployment that is
-// reached by more than one name - a reverse proxy, a bare IP, a LAN address, the
-// random port the end-to-end suite binds - and rejecting those would break the app for
-// its own users rather than for an attacker. The configured base URL is accepted as
-// well, for a proxy that rewrites Host.
-func (s *server) originAllowed(origin, requestHost string) bool {
+// originAllowed compares both scheme and host. Proxy headers are security inputs only
+// when the operator explicitly trusts the immediate proxy; otherwise a direct client
+// could claim an HTTPS external origin while sending plain HTTP to WorkTime.
+func (s *server) originAllowed(origin string, r *http.Request) bool {
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
 	}
-	if parsed.Host == requestHost {
+	if base, err := url.Parse(s.cfg.BaseURL); err == nil && sameSchemeHost(parsed.Scheme, parsed.Host, base.Scheme, base.Host) {
 		return true
 	}
-	base, err := url.Parse(s.cfg.BaseURL)
-	return err == nil && base.Host != "" && parsed.Host == base.Host
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if s.cfg.TrustProxy {
+		forwardedScheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+		forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+		if strings.Contains(forwardedScheme, ",") || strings.Contains(forwardedHost, ",") ||
+			(forwardedScheme != "http" && forwardedScheme != "https") || forwardedHost == "" {
+			return false
+		}
+		scheme, host = forwardedScheme, forwardedHost
+	}
+	return sameSchemeHost(parsed.Scheme, parsed.Host, scheme, host)
+}
+
+func sameSchemeHost(leftScheme, leftHost, rightScheme, rightHost string) bool {
+	return strings.EqualFold(leftScheme, rightScheme) && strings.EqualFold(leftHost, rightHost)
 }

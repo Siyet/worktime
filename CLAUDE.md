@@ -10,6 +10,7 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 - **Sync protocol**: single `POST /api/sync` does push + pull in one transaction. Pull cursor is `server_seq` (global monotonic counter, server-side). Conflicts resolve by last-write-wins on `updated_at` (client clock). Deletes are soft (`deleted_at` tombstones). IDs are client-generated UUIDv7. All timestamps are unix **milliseconds** UTC.
 - **Auth**: Google OIDC -> session cookie; API tokens (`wt_` prefix, sha256-hashed) for MCP/scripts; `WORKTIME_DEV_AUTH=1` auto-signs in a local dev user (dev/e2e only).
 - **MCP**: `/mcp`, streamable HTTP, stateless mode; a per-user server instance is built per request from the Bearer token. Tools call the store directly and write through `store.Sync` so changes reach clients via the normal pull path.
+- **Build identity**: `internal/buildinfo` is the application binary's version, full Git revision, UTC build time and packaging mode. Release builds inject all four through `-ldflags -X`; local builds report `dev` and cannot self-replace. This is separate from `internal/mcpserver.serverVersion`, which describes the MCP implementation rather than an application release.
 - **Agent tracking**: Claude Code hooks post idempotent start/heartbeat/stop to `/api/agent/sessions/{id}/*`; a session owns one running `time_entries` row at a time, opened by the **first heartbeat** (a start alone only says a process exists - most launches never work, and they must leave no row). A first heartbeat inside `WORKTIME_AGENT_IDLE` is back-dated to the start; every larger idle gap closes the current row at the last billable activity and opens a new one when work resumes. A reconcile job closes sessions silent for > `WORKTIME_AGENT_GRACE` at the last heartbeat, so a lost stop can never inflate a duration. Untouched, unassigned technical rows below the feed's 30-second `0m` boundary are soft-deleted on stop/reconcile. Every row is named after the tracker task set through the `set_agent_task` MCP tool and stores a `Claude Code #<8 hex of session id>` tag until then; the feed hides that identifier and the editor exposes the full id. See `docs/agent-tracking.md`.
 - SQLite runs with a **single connection** (`SetMaxOpenConns(1)`) - serializes everything, eliminates SQLITE_BUSY. Benchmarks in `docs/benchmark.md` show this is orders of magnitude above the real load; don't add pooling without re-benchmarking.
 
@@ -19,6 +20,8 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 |---|---|
 | `cmd/worktime` | server entrypoint |
 | `cmd/benchdb`, `cmd/solidtime-import` | Phase-0 benchmark, solidtime importer |
+| `internal/buildinfo` | ldflags-injected application version, revision and build time |
+| `internal/update`, `internal/lifecycle` | signed release discovery, instance update policy, request/job drain gate and native Linux recovery transaction |
 | `internal/store` | SQLite: migrations (`user_version`-based), sync, queries, reports |
 | `internal/api` | chi router, handlers, auth middleware, Google OIDC |
 | `internal/mcpserver` | MCP tools |
@@ -34,10 +37,17 @@ Free, open-source, self-hosted time tracker. Go backend + SQLite, Svelte 5 PWA f
 make dev-api    # go run, :8080 (set WORKTIME_DEV_AUTH=1 to skip Google sign-in)
 make dev-web    # vite dev server, proxies /api /auth /mcp to :8080
 make build      # npm build + go build -> bin/worktime (frontend embedded via go:embed)
+./bin/worktime --version # print linked application build metadata without opening the DB
 make test       # go test ./... + the vitest suite
 make test-hook  # the Claude Code hook (plain sh, covered by nothing else)
 make e2e        # builds the binary, then npx playwright test (e2e runs against bin/worktime!)
 ```
+
+Packaged builds set all three build identity values, for example:
+`VERSION=v1.2.3 REVISION=<full-git-revision>
+BUILT_AT=2026-08-30T12:00:00Z PACKAGING=native make build`. The release manifest and binary must
+carry exactly the same values. See `docs/releases.md` for the signed manifest and
+platform-support contract.
 
 Always run before finishing: `go vet ./...`, `cd web && npm run check`, `make test`, and the e2e suite if frontend/sync/API changed. `.github/workflows/ci.yml` runs the same set on every push. **e2e tests run against the embedded build** - rebuild `bin/worktime` (`make build`) after frontend changes or Playwright will test stale UI. On Windows the e2e fixture launches `bin/worktime.exe` - the Makefile picks the right name via `$(OS)`; a stray extension-less `bin/worktime` next to an old `.exe` means the suite silently tests the old build.
 

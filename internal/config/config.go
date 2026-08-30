@@ -17,11 +17,18 @@ type Config struct {
 	DevAuth bool
 	// AllowedEmails restricts Google sign-in to the listed addresses. Empty list allows everyone.
 	AllowedEmails []string
+	// AdminEmails is the explicit allowlist for instance-wide update mutations.
+	// Empty means nobody can change policy or apply an update.
+	AdminEmails []string
 	// GoogleClientID and GoogleClientSecret configure Google OIDC sign-in.
 	GoogleClientID     string
 	GoogleClientSecret string
 	// BaseURL is the externally visible URL of the instance, used for OAuth redirects.
 	BaseURL string
+	// TrustProxy allows the immediate reverse proxy to supply the external scheme
+	// and host through X-Forwarded-Proto and X-Forwarded-Host. Leave disabled when
+	// WorkTime is reachable directly.
+	TrustProxy bool
 	// AgentGrace is how long an agent session may go without heartbeats before the
 	// reconciliation job closes it at the last heartbeat.
 	AgentGrace time.Duration
@@ -34,6 +41,8 @@ type Config struct {
 	// AgentReconcile is how often the reconciliation job runs. Configurable so the
 	// end-to-end suite can watch a session go stale inside a test timeout.
 	AgentReconcile time.Duration
+	// UpdateChecks disables every GitHub and Sigstore TUF request when false.
+	UpdateChecks bool
 }
 
 // Defaults returns the agent timings a deployment gets when nothing is configured.
@@ -45,6 +54,7 @@ func Defaults() Config {
 		AgentIdle:      10 * time.Minute,
 		AgentToolMax:   30 * time.Minute,
 		AgentReconcile: time.Minute,
+		UpdateChecks:   true,
 	}
 }
 
@@ -57,14 +67,21 @@ func Load() Config {
 		GoogleClientID:     os.Getenv("WORKTIME_GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("WORKTIME_GOOGLE_CLIENT_SECRET"),
 		BaseURL:            envOr("WORKTIME_BASE_URL", "http://localhost:8080"),
+		TrustProxy:         os.Getenv("WORKTIME_TRUST_PROXY") == "1",
 		AgentGrace:         envDuration("WORKTIME_AGENT_GRACE", defaults.AgentGrace),
 		AgentIdle:          envDuration("WORKTIME_AGENT_IDLE", defaults.AgentIdle),
 		AgentToolMax:       envDuration("WORKTIME_AGENT_TOOL_MAX", defaults.AgentToolMax),
 		AgentReconcile:     envDuration("WORKTIME_AGENT_RECONCILE", defaults.AgentReconcile),
+		UpdateChecks:       os.Getenv("WORKTIME_UPDATE_CHECKS") != "0",
 	}
 	for _, email := range strings.Split(os.Getenv("WORKTIME_ALLOWED_EMAILS"), ",") {
 		if email = strings.TrimSpace(email); email != "" {
 			cfg.AllowedEmails = append(cfg.AllowedEmails, strings.ToLower(email))
+		}
+	}
+	for _, email := range strings.Split(os.Getenv("WORKTIME_ADMIN_EMAILS"), ",") {
+		if email = strings.TrimSpace(email); email != "" {
+			cfg.AdminEmails = append(cfg.AdminEmails, strings.ToLower(email))
 		}
 	}
 	return cfg

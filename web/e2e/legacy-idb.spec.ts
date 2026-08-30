@@ -68,8 +68,9 @@ test("a v1 offline database compacts legacy pauses once before state load", asyn
     { stoppedID, runningID, deletedID, fixedNow, dirtyUpdatedAt, hour },
   );
 
-  await page.clock.install();
-  await page.clock.pauseAt(new Date(fixedNow));
+  // Install directly at the target time. Installing at wall-clock time and
+  // pausing at 17:00 fails whenever the suite itself starts after 17:00.
+  await page.clock.install({ time: new Date(fixedNow) });
   await context.route("**/api/**", (route) => route.abort());
   await context.route("**/auth/**", (route) => route.abort());
   await page.goto(server.url + "/#/");

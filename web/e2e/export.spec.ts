@@ -19,4 +19,14 @@ test.describe("sqlite export", () => {
     await download.saveAs(savedPath);
     expect(statSync(savedPath).size).toBeGreaterThan(0);
   });
+
+  test("Settings shows build identity and keeps update controls read-only without an admin allowlist", async ({ page, server }) => {
+    await page.goto(server.url + "/#/settings");
+
+    const updates = page.getByRole("heading", { name: "Version and updates" }).locator("..");
+    await expect(updates).toContainText("Current version");
+    await expect(updates).toContainText("dev");
+    await expect(updates).toContainText("Only an administrator can manage updates.");
+    await expect(updates.getByRole("button", { name: "Check now" })).toBeDisabled();
+  });
 });

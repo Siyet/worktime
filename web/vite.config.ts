@@ -7,6 +7,13 @@ const base = process.env.DEMO_BASE ?? "/";
 
 export default defineConfig({
   base,
+  // The browser must compare the server against the build it is actually
+  // executing. Fetching a baseline from the server races an automatic restart.
+  define: {
+    __WORKTIME_BUILD_VERSION__: JSON.stringify(
+      process.env.VITE_WORKTIME_VERSION ?? process.env.VERSION ?? "dev",
+    ),
+  },
   plugins: [
     svelte(),
     VitePWA({

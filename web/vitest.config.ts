@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 export default defineConfig({
+  define: {
+    __WORKTIME_BUILD_VERSION__: JSON.stringify("v9.8.7-test"),
+  },
   plugins: [svelte()],
   test: {
     include: ["src/**/*.test.ts"],

@@ -184,4 +184,95 @@ test.describe("entry editing", () => {
     await expect(chips.locator(".tag").first()).toHaveText("development");
     await expect(chips.locator(".tag").nth(1)).toHaveText("+1");
   });
+
+  test("the no-tags icon opens tags-only editing and preserves every other field", async ({ page, request, server }) => {
+    const projectID = crypto.randomUUID();
+    const startedAt = todayAt(9, 0);
+    const stoppedAt = todayAt(10, 0);
+    await seedServer(server.url, {
+      projects: [{ id: projectID, name: "Backend" }],
+      entries: [{ description: "quick tags", startedAt, stoppedAt, projectID }],
+    });
+    await page.goto(server.url + "/#/");
+
+    const row = entryRow(page, "quick tags");
+    const trigger = row.getByRole("button", { name: "Add tags" });
+    await expect(trigger).toBeVisible();
+    await expect(trigger.locator("svg")).toHaveCount(1);
+    await trigger.click();
+
+    const pushed = pushBarrier(page, '"development"');
+    await row.locator(".tags-menu").getByRole("button", { name: "development", exact: true }).click();
+    await pushed;
+    await expect(row.getByRole("button", { name: "Edit tags" })).toContainText("development");
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "quick tags",
+    );
+    expect(synced).toMatchObject({
+      description: "quick tags",
+      project_id: projectID,
+      started_at: startedAt,
+      stopped_at: stoppedAt,
+      tags: ["development"],
+    });
+  });
+
+  test("project quick editing excludes archived choices but keeps the current archived project", async ({ page, request, server }) => {
+    const activeID = crypto.randomUUID();
+    const archivedID = crypto.randomUUID();
+    await seedServer(server.url, {
+      projects: [
+        { id: activeID, name: "Active project" },
+        { id: archivedID, name: "Archived project", archived: true },
+      ],
+      entries: [
+        { description: "move project", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) },
+        { description: "archived current", startedAt: todayAt(11, 0), stoppedAt: todayAt(12, 0), projectID: archivedID },
+      ],
+    });
+    await page.goto(server.url + "/#/");
+
+    const archivedRow = entryRow(page, "archived current");
+    await expect(archivedRow.getByRole("combobox", { name: "Edit project" })).toHaveText("Archived project");
+
+    const row = entryRow(page, "move project");
+    const projectTrigger = row.getByRole("combobox", { name: "Edit project" });
+    await projectTrigger.click();
+    await expect(row.getByRole("option", { name: /Archived project/ })).toHaveCount(0);
+
+    const pushed = pushBarrier(page, activeID);
+    await row.getByRole("option", { name: "Active project" }).click();
+    await pushed;
+    await expect(projectTrigger).toHaveText("Active project");
+
+    const pull = await request.post(server.url + "/api/sync", { data: { since: 0, changes: {} } });
+    const synced = (await pull.json()).changes.time_entries.find(
+      (entry: { description: string }) => entry.description === "move project",
+    );
+    expect(synced).toMatchObject({
+      description: "move project",
+      project_id: activeID,
+      started_at: todayAt(9, 0),
+      stopped_at: todayAt(10, 0),
+      tags: [],
+    });
+  });
+
+  test("clicking the modal backdrop closes the editor without breaking its own controls", async ({ page, server }) => {
+    await seedServer(server.url, {
+      entries: [{ description: "backdrop target", startedAt: todayAt(9, 0), stoppedAt: todayAt(10, 0) }],
+    });
+    await page.goto(server.url + "/#/");
+
+    await entryRow(page, "backdrop target").locator(".desc").click();
+    const dialog = editorDialog(page);
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Description").click();
+    await expect(dialog).toBeVisible();
+
+    await page.mouse.click(4, 4);
+    await expect(dialog).toHaveCount(0);
+  });
 });

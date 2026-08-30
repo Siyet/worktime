@@ -182,6 +182,111 @@ func TestAgentFirstSignalAtTheStartMomentStillOpensTheEntry(t *testing.T) {
 	}
 }
 
+func TestAgentStopDiscardsOnlyUntouchedTechnicalZeroMinuteEntries(t *testing.T) {
+	tests := []struct {
+		name       string
+		durationMs int64
+		prepare    func(*testing.T, *Store, string, string, string)
+		wantKept   bool
+	}{
+		{name: "zero length", durationMs: 0},
+		{name: "last duration rendered as zero minutes", durationMs: agentZeroMinuteMs - 1},
+		{name: "first duration rendered as one minute", durationMs: agentZeroMinuteMs, wantKept: true},
+		{
+			name: "task assigned", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, _ string) {
+				if _, err := testStore.SetAgentTask(t.Context(), userID,
+					AgentTaskSelector{SessionID: sessionID}, "WT-1", "Real task"); err != nil {
+					t.Fatalf("set task: %v", err)
+				}
+			},
+		},
+		{
+			name: "description edited", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, entryID string) {
+				entry, err := testStore.GetTimeEntry(t.Context(), userID, entryID)
+				if err != nil {
+					t.Fatalf("get entry: %v", err)
+				}
+				entry.Description = "Manual note"
+				pushEntry(t, testStore, userID, entry)
+				testHeartbeat(t, testStore, userID, sessionID, agentBaseMs+500)
+			},
+		},
+		{
+			name: "tags edited", durationMs: 1_000, wantKept: true,
+			prepare: func(t *testing.T, testStore *Store, userID, sessionID, entryID string) {
+				entry, err := testStore.GetTimeEntry(t.Context(), userID, entryID)
+				if err != nil {
+					t.Fatalf("get entry: %v", err)
+				}
+				entry.Tags = TagList{"review"}
+				pushEntry(t, testStore, userID, entry)
+				testHeartbeat(t, testStore, userID, sessionID, agentBaseMs+500)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-zero-minute@test.local")
+			sessionID := uuid.NewString()
+			session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+			entryID := *session.TimeEntryID
+			if test.prepare != nil {
+				test.prepare(t, testStore, user.ID, sessionID, entryID)
+			}
+
+			closed := testStop(t, testStore, user.ID, sessionID, agentBaseMs+test.durationMs, "session_end")
+			_, err := testStore.GetTimeEntry(t.Context(), user.ID, entryID)
+			if test.wantKept && err != nil {
+				t.Fatalf("meaningful short entry was removed: %v", err)
+			}
+			if !test.wantKept && !errors.Is(err, ErrNotFound) {
+				t.Fatalf("technical zero-minute entry survived: %v", err)
+			}
+			if !test.wantKept {
+				var deletedAt, serverSeq int64
+				if err := testStore.db.QueryRow(
+					"SELECT deleted_at, server_seq FROM time_entries WHERE id = ?", entryID,
+				).Scan(&deletedAt, &serverSeq); err != nil {
+					t.Fatalf("read tombstone: %v", err)
+				}
+				if deletedAt == 0 || closed.EntryServerSeq == nil || *closed.EntryServerSeq != serverSeq {
+					t.Fatalf("session does not own the synced tombstone: deleted=%d seq=%d session=%v",
+						deletedAt, serverSeq, closed.EntryServerSeq)
+				}
+				pull, err := testStore.Sync(t.Context(), user.ID, SyncRequest{Since: serverSeq - 1})
+				if err != nil {
+					t.Fatalf("pull tombstone: %v", err)
+				}
+				if len(pull.Changes.TimeEntries) != 1 || pull.Changes.TimeEntries[0].DeletedAt == nil {
+					t.Fatalf("cleanup did not sync a tombstone: %+v", pull.Changes.TimeEntries)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentReconcileDiscardsTechnicalZeroMinuteEntry(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-zero-minute-reconcile@test.local")
+	sessionID := uuid.NewString()
+	session := startWorkingTestAgentSession(t, testStore, user.ID, sessionID, agentBaseMs)
+
+	closed, err := testStore.ReconcileAgentSessions(t.Context(), agentBaseMs+testGraceMs+1, testGraceMs)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("closed %d sessions, want 1", closed)
+	}
+	if _, err := testStore.GetTimeEntry(t.Context(), user.ID, *session.TimeEntryID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reconcile left the zero-minute technical entry: %v", err)
+	}
+}
+
 // Back-dating the entry to the start is right up to the point where the gap to
 // the first signal is one the rules cut rather than pause. Nothing is billed
 // before that signal, so the piece before the cut would be the start moment
@@ -1276,8 +1381,10 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 
 	staleID := uuid.NewString()
 	stale := startWorkingTestAgentSession(t, testStore, user.ID, staleID, agentBaseMs)
+	lastActivity := agentBaseMs + 60_000
+	stale = testHeartbeat(t, testStore, user.ID, staleID, lastActivity)
 	freshID := uuid.NewString()
-	now := agentBaseMs + testGraceMs + 60_000
+	now := lastActivity + testGraceMs + 60_000
 	if _, err := testStore.StartAgentSession(ctx, user.ID, AgentStart{SessionID: freshID, StartedAt: now - 1000}, testPolicy); err != nil {
 		t.Fatalf("start fresh: %v", err)
 	}
@@ -1294,7 +1401,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get stale: %v", err)
 	}
-	if staleSession.Status != agentStatusClosed || *staleSession.EndedAt != agentBaseMs {
+	if staleSession.Status != agentStatusClosed || *staleSession.EndedAt != lastActivity {
 		t.Fatalf("unexpected stale session: %+v", staleSession)
 	}
 	if *staleSession.EndReason != AgentEndReasonStale {
@@ -1304,7 +1411,7 @@ func TestAgentReconcileClosesStaleSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
-	if entry.StoppedAt == nil || *entry.StoppedAt != agentBaseMs {
+	if entry.StoppedAt == nil || *entry.StoppedAt != lastActivity {
 		t.Fatalf("stale entry must stop at the last heartbeat, got %+v", entry)
 	}
 

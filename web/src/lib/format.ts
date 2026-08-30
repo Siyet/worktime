@@ -23,6 +23,18 @@ export function sessionTag(sessionID: string): string {
   return sessionID.replaceAll("-", "").slice(0, 8).toLowerCase();
 }
 
+// The technical suffix identifies the producing agent session, not the user's
+// work. Lists show the source label; the full identifier remains in the editor.
+export function displayEntryDescription(entry: Pick<TimeEntry, "description" | "agent_session_id">): string {
+  if (entry.agent_session_id) {
+    const suffix = ` #${sessionTag(entry.agent_session_id)}`;
+    if (entry.description.toLowerCase().endsWith(suffix)) {
+      return entry.description.slice(0, -suffix.length).trim();
+    }
+  }
+  return entry.description;
+}
+
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);

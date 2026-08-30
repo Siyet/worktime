@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { descriptionKey, entryDurationMs, sessionTag } from "./format";
+import { descriptionKey, displayEntryDescription, entryDurationMs, sessionTag } from "./format";
 import type { TimeEntry } from "./types";
 
 function makeEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
@@ -29,6 +29,18 @@ describe("descriptionKey", () => {
 
   it("maps an empty description to an empty key", () => {
     expect(descriptionKey("   ")).toBe("");
+  });
+});
+
+describe("displayEntryDescription", () => {
+  it("keeps technical session identifiers out of entry lists", () => {
+    const sessionID = "01a03f80-1234-5678-9abc-def012345678";
+    expect(displayEntryDescription({ description: "Codex #01a03f80", agent_session_id: sessionID })).toBe("Codex");
+    expect(displayEntryDescription({ description: "WT-1 Real task", agent_session_id: sessionID })).toBe("WT-1 Real task");
+  });
+
+  it("does not strip text from ordinary entries", () => {
+    expect(displayEntryDescription({ description: "Codex #01a03f80", agent_session_id: null })).toBe("Codex #01a03f80");
   });
 });
 

@@ -194,6 +194,12 @@ WHERE agent_session_id IS NULL
 	// the reasoning behind each of its three conditions live with the agent code,
 	// in purgeEmptyAgentEntries.
 	purgeEmptyAgentEntries,
+	// 009 is the deployed pause-compaction migration added by the baseline that
+	// this branch is integrated with below. This entry_user_edited column is 010:
+	// it distinguishes any deliberate outside edit from a merely unassigned row.
+	`
+ALTER TABLE agent_sessions ADD COLUMN entry_user_edited INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 type Store struct {

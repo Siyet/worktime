@@ -49,6 +49,19 @@ the PWA stays. The `agent_sessions` rows are kept either way: the launch did
 happen, and a deleted session could no longer tell "was empty" from "went
 missing".
 
+**Short technical sessions are noise, not work.** A short-lived subagent can
+emit one heartbeat and then stop before `set_agent_task` has a chance to name
+it. That is real activity as far as the lifecycle is concerned, so the first
+heartbeat correctly opens a row, but a duration below 30 seconds rounds to
+`0m` in the feed. Stop and reconciliation soft-delete only that exact class:
+the task is still unset, the automatic description is unchanged, the agent
+still owns the row, and its billable duration is below 30 seconds. The
+tombstone gets its own `server_seq`, so every device removes a row it may have
+already pulled. The first duration that renders as `1m` (30 seconds) stays.
+Any outside edit is remembered permanently for the current entry, including a
+project- or tags-only edit, so deliberately touched short entries are never
+cleaned up; task-named and manually renamed entries are protected as well.
+
 A session owns exactly one time entry, so the PWA shows agent work as a live
 timer. Signals closer together than the idle threshold (`WORKTIME_AGENT_IDLE`,
 default `10m`) count as continuous work; a larger gap is added to the entry's
@@ -83,9 +96,10 @@ Entries land in `time_entries` through the same `server_seq` allocation as
 ## Naming an entry: the task, not the directory
 
 An agent entry is named after the tracker task it belongs to. Until the task is
-known it carries a short session tag - `Claude Code #ab12cd34`, the first eight
-hex characters of the session id - which is also what keeps two concurrent
-Claude Code sessions visibly distinct rows. Nothing is guessed from the branch,
+known its stored description carries a short session tag - `Claude Code
+#ab12cd34`, the first eight hex characters of the session id - which keeps two
+concurrent sessions as distinct rows. The Timer feed hides that technical
+suffix and exposes the full identifier in the entry editor. Nothing is guessed from the branch,
 the prompt or an environment variable: guessing is exactly what used to produce
 "Claude Code" and "Claude Code (main)" for the same work.
 
@@ -120,8 +134,9 @@ set_agent_task(task_key: "MT-12345", task_title: "Slow AMaaS quote creation",
 agent can tell whether the call is still needed.
 
 Two sessions attached to the same task stay two rows - different sessions are
-different data - but the Timer page groups them into one line with a `×2` badge
-that unfolds back into the individual sessions.
+different data - but the Timer page groups them into one line with a count badge
+that unfolds back into individual rows repeating the task name. Their technical
+identifiers remain available in each row's full editor.
 
 ## Filing the session under a project
 

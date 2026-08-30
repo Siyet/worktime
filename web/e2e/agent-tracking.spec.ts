@@ -49,6 +49,23 @@ async function pollUI(page: Page, check: () => Promise<void>): Promise<void> {
 }
 
 test.describe("agent tracking", () => {
+  test("an untouched technical session that would display as 0m leaves no feed row", async ({
+    page,
+    request,
+    agentServer,
+  }) => {
+    const sessionID = crypto.randomUUID();
+    const base = Date.now() - 10_000;
+    await signal(request, agentServer.url, sessionID, "start", { started_at: base, source: "codex" });
+    await signal(request, agentServer.url, sessionID, "heartbeat", { at: base });
+    await signal(request, agentServer.url, sessionID, "stop", { ended_at: base + 10_000, reason: "subagent_stop" });
+
+    await page.goto(agentServer.url + "/#/");
+    await pollUI(page, async () => {
+      await expect(page.locator(".item").filter({ hasText: "Codex" })).toHaveCount(0);
+    });
+  });
+
   test("a session with a long pause stays one entry and the pause is not billed", async ({
     page,
     request,
@@ -65,7 +82,7 @@ test.describe("agent tracking", () => {
     await signal(request, agentServer.url, sessionID, "stop", { ended_at: base + 100 * MINUTE, reason: "clear" });
 
     await page.goto(agentServer.url + "/#/");
-    const row = page.locator(".item").filter({ hasText: /Claude Code #/ });
+    const row = page.locator(".item").filter({ hasText: "Claude Code" });
     await pollUI(page, async () => {
       await expect(row).toHaveCount(1);
       // A hundred minutes of interval, ninety of them idle.
@@ -95,9 +112,13 @@ test.describe("agent tracking", () => {
       await expect(card.locator(".item")).toHaveCount(2);
     });
     const names = await card.locator(".item .desc").allInnerTexts();
-    expect(names[0]).toMatch(/^Claude Code #[0-9a-f]{8}$/);
-    expect(names[1]).toMatch(/^Claude Code #[0-9a-f]{8}$/);
-    expect(names[0]).not.toBe(names[1]);
+    expect(names).toEqual(["Claude Code", "Claude Code"]);
+    await expect(card).not.toContainText(/#[0-9a-f]{8}/);
+
+    await card.locator(".item .desc").first().click();
+    const identifier = page.locator("dialog.sheet").getByLabel("Session identifier");
+    await expect(identifier).toHaveText(new RegExp(`^(${first}|${second})$`));
+    await page.locator("dialog.sheet").getByRole("button", { name: "Cancel" }).click();
 
     // Both sessions turn out to be the same task: the rows keep their identity
     // but read as one line of work.
@@ -118,11 +139,13 @@ test.describe("agent tracking", () => {
 
     await group.click();
     await expect(card.locator(".item.member")).toHaveCount(2);
-    // Inside a group the description is the same on every member, so a member
-    // is labelled by the session it came from.
-    const tags = await card.locator(".item.member .desc.session").allInnerTexts();
-    expect(tags).toHaveLength(2);
-    expect(tags[0]).not.toBe(tags[1]);
+    // Expanded members repeat the session's task name; the identifier belongs
+    // in the full editor, not in either list row.
+    await expect(card.locator(".item.member .desc")).toHaveText([
+      "MT-12345 Slow AMaaS quote creation",
+      "MT-12345 Slow AMaaS quote creation",
+    ]);
+    await expect(card).not.toContainText(/#[0-9a-f]{8}/);
   });
 
   test("stopping an agent row by hand does not lose the rest of the session", async ({
@@ -151,7 +174,7 @@ test.describe("agent tracking", () => {
     await signal(request, agentServer.url, sessionID, "heartbeat", { at: Date.now() });
     await pollUI(page, async () => {
       await expect(runningCard(page).locator(".item")).toHaveCount(1);
-      await expect(page.locator(".item").filter({ hasText: /Claude Code #/ })).toHaveCount(2);
+      await expect(page.locator(".item").filter({ hasText: "Claude Code" })).toHaveCount(2);
     });
   });
 
@@ -172,7 +195,7 @@ test.describe("agent tracking", () => {
     // on any of those states.
     await pollUI(page, async () => {
       await expect(page.getByRole("heading", { name: "Running" })).toHaveCount(0);
-      const row = page.locator(".item").filter({ hasText: /Claude Code #/ });
+      const row = page.locator(".item").filter({ hasText: "Claude Code" });
       await expect(row).toHaveCount(1);
       // Closed at the last heartbeat, not at the moment the job noticed: five
       // minutes of work, not six.

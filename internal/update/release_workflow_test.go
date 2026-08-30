@@ -19,7 +19,8 @@ func TestReleaseCleanupCoversOwnPublicNonImmutableFailure(t *testing.T) {
 	workflow := releaseWorkflow(t)
 	for _, required := range []string{
 		"cleanup_armed=true",
-		`release_id="$(cat "$RELEASE_ID_FILE")"`,
+		`release_id_file="$RUNNER_TEMP/worktime-release-id"`,
+		`release_id="$(cat "$release_id_file")"`,
 		`releases/$release_id`,
 		"String(r.id)===process.argv[2]",
 		"r.immutable===false",
@@ -39,6 +40,35 @@ func TestReleaseCleanupCoversOwnPublicNonImmutableFailure(t *testing.T) {
 	predicateLineEnd := strings.Index(workflow[predicate:], "\n")
 	if predicateLineEnd < 0 || strings.Contains(workflow[predicate:predicate+predicateLineEnd], "r.draft") {
 		t.Fatal("failure cleanup still requires a draft")
+	}
+}
+
+func TestReleaseWorkflowDoesNotUseRunnerContextInJobEnvironment(t *testing.T) {
+	workflow := releaseWorkflow(t)
+	jobs := strings.Index(workflow, "jobs:")
+	steps := strings.Index(workflow, "    steps:")
+	if jobs < 0 || steps < 0 || jobs >= steps {
+		t.Fatal("release workflow does not have the expected jobs/env/steps structure")
+	}
+	if strings.Contains(workflow[jobs:steps], "${{ runner.") {
+		t.Fatal("runner context is unavailable while GitHub parses a job-level environment")
+	}
+	if strings.Contains(workflow, "RELEASE_ID_FILE") {
+		t.Fatal("workflow must not retain the invalid job-level release ID variable")
+	}
+	initialize := strings.Index(workflow, `release_id_file="$RUNNER_TEMP/worktime-release-id"`)
+	firstUse := strings.Index(workflow, `test -s "$release_id_file"`)
+	if initialize < 0 || firstUse < 0 || initialize >= firstUse {
+		t.Fatal("release ID path must be initialized from RUNNER_TEMP before cleanup uses it")
+	}
+	if !strings.Contains(workflow, `"$release_json" > "$release_id_file"`) {
+		t.Fatal("created release ID must be written to the step-local release ID path")
+	}
+	if count := strings.Count(workflow, "$release_id_file"); count != 4 {
+		t.Fatalf("release ID path must have exactly four uses, got %d", count)
+	}
+	if count := strings.Count(workflow, `release_id="$(cat "$release_id_file")"`); count != 2 {
+		t.Fatalf("release ID path must be read exactly twice using its lowercase name, got %d", count)
 	}
 }
 

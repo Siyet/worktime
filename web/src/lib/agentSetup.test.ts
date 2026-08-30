@@ -58,6 +58,15 @@ describe("agent setup prompts", () => {
     }
   });
 
+  it("keeps repository issue keys in their native short form", () => {
+    for (const client of CLIENTS) {
+      const prompt = setupPrompt(client, options);
+      expect(prompt).toContain('repository-scoped issue is exactly "#N"');
+      expect(prompt).toContain('never "owner/repo#N"');
+      expect(prompt).toContain('project-scoped keys such as "AIM2-123" stay unchanged');
+    }
+  });
+
   // A start says a process exists; the entry opens on the first heartbeat. A
   // probe that sends only the start finds no time_entry_id on the stop, gets
   // renamed_entries: 0 from set_agent_task and leaves no row on the Timer page -

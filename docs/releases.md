@@ -157,13 +157,21 @@ while the tag ref still points at that exact source revision.
 A pre-existing release, an immutable release, or a response with missing/unknown
 immutability is never touched.
 
-Before pushing the multi-platform image, the workflow uses the authenticated
-registry client to prove that the version tag is absent. An existing tag, an
-authorization failure, or any registry error that cannot be identified as a
-missing manifest stops the run; the workflow never overwrites or deletes a GHCR
-tag. The image build has plain progress logs and a 30-minute limit, and signing is
-a separate step. If a timed-out push created the tag, a retry therefore stops for
-operator review instead of silently replacing the partial result.
+Before pushing the multi-platform image, the workflow makes authenticated GHCR
+token and manifest requests and proceeds only for an HTTP 404 whose body contains
+the exact registry code `MANIFEST_UNKNOWN`. Existing tags, authentication errors,
+transport failures, and every other response stop the run. The image build has
+plain progress logs and a 30-minute limit, and signing is a separate step. If a
+timed-out push created the tag, a retry therefore stops for operator review.
+
+This lookup is not an atomic tag reservation: GHCR provides no conditional create
+or documented immutable-tag primitive. The protected `release` environment and
+the workflow concurrency group are the single writer for WorkTime version tags;
+manual and package-administrator publication of those tags is prohibited. The tag
+is only a convenience pointer. Release authority is the keyless-signed immutable
+manifest, and the container identity is its exact `image.digest`. Operators deploy
+`image.name@image.digest` from a successfully verified manifest, never a version
+tag alone.
 
 Immutable releases and branch protection are manual repository prerequisites. The
 ordinary workflow `GITHUB_TOKEN` has no Administration read permission and therefore

@@ -100,7 +100,9 @@ signature therefore grants the released binary the same code-execution authority
 as that workflow. Publication is deliberately manual and requires GitHub immutable
 releases to be enabled. The protected `release` environment approver verifies that
 repository setting manually because the workflow token cannot read Administration
-settings. See [the release contract](docs/releases.md).
+settings. Docker operators must deploy the `image.name@image.digest` reference from
+that verified manifest; the version tag alone is not a trusted or immutable
+identifier. See [the release contract](docs/releases.md).
 
 ### MCP
 

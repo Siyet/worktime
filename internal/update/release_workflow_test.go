@@ -148,14 +148,12 @@ func TestReleaseImageBuildIsBoundedObservableAndRetrySafe(t *testing.T) {
 		t.Fatalf("container guard/build/sign order is unsafe: guard=%d image=%d sign=%d manifest=%d", guardStart, imageStart, signStart, manifestStart)
 	}
 	guard := workflow[guardStart:imageStart]
-	for _, required := range []string{
-		`docker buildx imagetools inspect "$IMAGE:$VERSION"`,
-		`echo "Container image $IMAGE:$VERSION already exists; refusing to overwrite it"`,
-		`grep -Eqi 'not found|manifest unknown'`,
-		`echo "Cannot prove that container image $IMAGE:$VERSION is absent"`,
-	} {
-		if !strings.Contains(guard, required) {
-			t.Fatalf("container retry guard is missing %q", required)
+	if !strings.Contains(guard, "          go run ./cmd/ghcr-tag-check\n") {
+		t.Fatal("container retry guard must use the status-aware authenticated GHCR checker")
+	}
+	for _, forbidden := range []string{"imagetools inspect", "grep -Eq", "manifest unknown", "credential"} {
+		if strings.Contains(guard, forbidden) {
+			t.Fatalf("container retry guard must not classify text or depend on a credential helper: %q", forbidden)
 		}
 	}
 	image := workflow[imageStart:signStart]

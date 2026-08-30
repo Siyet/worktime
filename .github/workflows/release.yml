@@ -136,16 +136,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          inspect_error="$RUNNER_TEMP/image-tag-inspect.err"
-          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>"$inspect_error"; then
-            echo "Container image $IMAGE:$VERSION already exists; refusing to overwrite it" >&2
-            exit 1
-          fi
-          if ! grep -Eqi 'not found|manifest unknown' "$inspect_error"; then
-            cat "$inspect_error" >&2
-            echo "Cannot prove that container image $IMAGE:$VERSION is absent" >&2
-            exit 1
-          fi
+          go run ./cmd/ghcr-tag-check
 
       - name: Build and push multi-platform image
         timeout-minutes: 30

@@ -52,8 +52,14 @@ type toolDeps struct {
 	userID string
 }
 
+const agentOwnershipInstructions = "Only the top-level/main agent for the user's chat may use WorkTime tools. " +
+	"A child, subagent, reviewer, Task worker, background agent or delegated agent must not call any tool on this server; " +
+	"return task, project and time findings to the parent/main agent instead, which owns the chat's time attribution."
+
 func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "worktime", Version: serverVersion}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "worktime", Version: serverVersion}, &mcp.ServerOptions{
+		Instructions: agentOwnershipInstructions,
+	})
 	deps := toolDeps{store: dataStore, userID: user.ID}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -105,8 +111,10 @@ func newServerForUser(dataStore *store.Store, user store.User) *mcp.Server {
 	}, deps.timeReport)
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "set_agent_task",
-		Description: "Attach the running agent session to a tracker task and rename every time entry it produced. " +
-			"Call this as soon as the task number is known (look the title up in the tracker yourself): until then the " +
+		Description: "Only the top-level/main agent may call this tool; a subagent, child, reviewer or delegated worker " +
+			"must return task details to its parent instead. Attach the running agent session to a tracker task and rename " +
+			"every time entry it produced. Call this as soon as the task number is known (look the title up in the tracker " +
+			"yourself): until then the " +
 			"work is tracked under a technical session tag like 'Claude Code #ab12cd34'. A supplied cwd must " +
 			"match exactly one active session; it is never ignored as a fallback hint.",
 	}, deps.setAgentTask)

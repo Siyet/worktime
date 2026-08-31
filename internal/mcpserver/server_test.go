@@ -99,6 +99,22 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 	return decoded
 }
 
+func TestMCPInstructionsReserveWorkTimeForMainAgent(t *testing.T) {
+	session := newMCPSession(t)
+	result := session.InitializeResult()
+	if result == nil {
+		t.Fatal("MCP initialize result is missing")
+	}
+	for _, required := range []string{
+		"Only the top-level/main agent", "child", "subagent", "reviewer", "Task worker",
+		"background agent", "delegated agent", "must not call any tool", "parent/main agent",
+	} {
+		if !strings.Contains(result.Instructions, required) {
+			t.Fatalf("MCP ownership instructions are missing %q: %q", required, result.Instructions)
+		}
+	}
+}
+
 func TestMCPTimerFlow(t *testing.T) {
 	session := newMCPSession(t)
 
@@ -460,6 +476,10 @@ func TestMCPSetAgentTaskSchemaDescribesSelectors(t *testing.T) {
 		if tool.Name != "set_agent_task" {
 			continue
 		}
+		if !strings.Contains(tool.Description, "Only the top-level/main agent") ||
+			!strings.Contains(tool.Description, "must return task details to its parent") {
+			t.Fatalf("set_agent_task ownership contract is missing from description: %q", tool.Description)
+		}
 		encoded, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			t.Fatalf("marshal schema: %v", err)
@@ -484,6 +504,76 @@ func TestMCPSetAgentTaskWithoutSession(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatalf("expected an error without an active session, got %+v", result)
+	}
+	entries, err := fixture.store.ListEntries(t.Context(), fixture.userID)
+	if err != nil {
+		t.Fatalf("list entries after rejected call: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("set_agent_task created entries without a session: %+v", entries)
+	}
+}
+
+func TestMCPSetAgentTaskRequiresExactChoiceForConcurrentSameCwdSessions(t *testing.T) {
+	fixture := newMCPFixture(t)
+	policy := store.AgentPolicy{IdleMs: 10 * 60 * 1000}
+	startedAt := time.Now().UnixMilli() - 60_000
+	firstID := uuid.NewString()
+	secondID := uuid.NewString()
+	for index, sessionID := range []string{firstID, secondID} {
+		if _, err := fixture.store.StartAgentSession(t.Context(), fixture.userID, store.AgentStart{
+			SessionID: sessionID, StartedAt: startedAt + int64(index), Cwd: "/projects/shared",
+		}, policy); err != nil {
+			t.Fatalf("start agent session %s: %v", sessionID, err)
+		}
+		if _, err := fixture.store.AgentHeartbeat(t.Context(), fixture.userID, sessionID,
+			store.AgentSignal{At: startedAt + int64(index)}, policy); err != nil {
+			t.Fatalf("heartbeat %s: %v", sessionID, err)
+		}
+	}
+
+	ambiguous, err := fixture.session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: "set_agent_task", Arguments: map[string]any{
+			"task_key": "WRONG", "task_title": "Must not be applied", "cwd": "/projects/shared",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ambiguous call: %v", err)
+	}
+	if !ambiguous.IsError {
+		t.Fatalf("expected same-cwd ambiguity to fail, got %+v", ambiguous)
+	}
+	for _, sessionID := range []string{firstID, secondID} {
+		session, getErr := fixture.store.GetAgentSession(t.Context(), fixture.userID, sessionID)
+		if getErr != nil || session.TaskKey != "" {
+			t.Fatalf("ambiguous call mutated %s: session=%+v err=%v", sessionID, session, getErr)
+		}
+	}
+
+	result := callTool(t, fixture.session, "set_agent_task", map[string]any{
+		"task_key": "WT-7", "task_title": "Keep parent attribution", "session_id": secondID,
+		"cwd": "/projects/ignored",
+	})
+	if result["session_id"] != secondID {
+		t.Fatalf("explicit selection chose the wrong session: %+v", result)
+	}
+	first, err := fixture.store.GetAgentSession(t.Context(), fixture.userID, firstID)
+	if err != nil {
+		t.Fatalf("get first session: %v", err)
+	}
+	second, err := fixture.store.GetAgentSession(t.Context(), fixture.userID, secondID)
+	if err != nil {
+		t.Fatalf("get second session: %v", err)
+	}
+	if first.TaskKey != "" || second.TaskKey != "WT-7" {
+		t.Fatalf("explicit selection mutated the wrong sessions: first=%+v second=%+v", first, second)
+	}
+	entries, err := fixture.store.ListEntries(t.Context(), fixture.userID)
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("selection created or removed an entry: %+v", entries)
 	}
 }
 

@@ -433,19 +433,36 @@ end, so during real work they are seconds apart.
 | Status line is read-only, one line, one-second timeout and uncached assets match the binary | API/status-line/hook asset suites | Verified in CI |
 | One real production week differs from OTel active time by at most 5% | Operational template above | **Pending real-world evidence** |
 
-## Subagents
+## Subagents and tool ownership
 
-Subagent transcripts carry the **parent's** `session_id` (plus `isSidechain`
-and their own `agent_id`), so a subagent can never create a second session or a
-duplicate entry - session id is the idempotency key of all three endpoints. The
-problem subagents do cause is the opposite one: while the parent waits for a
-long `Task`, no hook fires, which is what `tool_start` exists for.
+Only the top-level/main agent for the user's chat owns WorkTime attribution.
+A child, subagent, reviewer, Task worker, background agent or delegated agent
+must not call `set_agent_task` or any other WorkTime MCP tool. It returns task
+and project findings to the parent instead; the parent applies them to the
+sessions that belong to the chat. This rule is part of both generated managed
+blocks (`~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`) and the MCP server's
+model-facing initialization instructions.
 
-If a future Claude Code release starts giving subagents their own `session_id`,
-each of them will show up as its own session and its own row. Attach them to
-the same task with `set_agent_task` and the Timer page will group them; the
-wall-clock figure next to the sum is there precisely because parallel agents
-make the two differ.
+Hook session identifiers are a client protocol detail and can vary between
+client versions and execution modes. WorkTime makes only the narrower guarantee
+it can enforce: every received `session_id` is an idempotency key. A `start`
+with a previously unseen id records a metadata-only session; it creates no Timer
+row until that id sends a heartbeat. It is therefore possible to see a
+start-only session in diagnostics without seeing a duplicate timer.
+
+The MCP connection is stateless and authenticated by a user-wide Bearer token.
+Its request has no authenticated main/subagent identity, so the server cannot
+authorize by agent role. `set_agent_task` instead fails closed on the facts it
+does know: an explicit `session_id` is authoritative and user-scoped; otherwise
+a supplied cwd must match exactly one active session; without either selector
+there must be exactly one active session. Independent concurrent top-level
+sessions remain supported and must use an exact selector when the implicit
+choice is ambiguous. cwd, source, activity and the presence of a Timer row are
+not reliable evidence that the MCP caller is the main agent.
+
+While a parent waits for a long `Task`, no ordinary post-tool hook fires. That
+accounting gap is what the pre-tool `tool_start` signal covers; it is separate
+from who is allowed to name or file the resulting work.
 
 ## Not implemented yet
 

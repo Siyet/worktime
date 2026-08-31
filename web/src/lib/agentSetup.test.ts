@@ -67,6 +67,36 @@ describe("agent setup prompts", () => {
     }
   });
 
+  it("gives WorkTime ownership only to the top-level agent", () => {
+    for (const client of CLIENTS) {
+      const prompt = setupPrompt(client, options);
+      expect(prompt.match(/<!-- worktime:begin -->/g)).toHaveLength(1);
+      expect(prompt.match(/<!-- worktime:end -->/g)).toHaveLength(1);
+
+      const managed = prompt.slice(prompt.indexOf("<!-- worktime:begin -->"), prompt.indexOf("<!-- worktime:end -->"));
+      expect(managed).toContain("only the top-level/main agent");
+      expect(managed).toContain("child, subagent, reviewer, Task worker, background agent");
+      expect(managed).toContain("must never call set_agent_task or any other WorkTime tool");
+      expect(managed).toContain("return task and project findings to the parent/main agent");
+      expect(managed).toContain("If you are the top-level/main agent, call set_agent_task");
+      expect(managed).toContain("If you are the top-level/main agent and are asked to book this work");
+      expect(prompt).toContain("replace its contents instead of adding a second one");
+    }
+  });
+
+  it("reserves the MCP setup probe for the top-level agent", () => {
+    for (const client of CLIENTS) {
+      const prompt = setupPrompt(client, options);
+      const probe = prompt.slice(prompt.indexOf("7.3"), prompt.indexOf("A short probe entry"));
+      expect(probe).toContain("Only the top-level/main setup agent may run this step");
+      expect(probe).toContain("child, subagent, reviewer, Task worker, background agent or delegated agent");
+      expect(probe).toContain("skip all of 7.3: do not call any WorkTime tool or probe MCP directly");
+      expect(probe).toContain("parent/main agent must run this verification");
+      expect(probe).toContain("If you are the top-level/main setup agent but those tools are not listed");
+      expect(probe).toContain(`session_id: "${options.probeSession}"`);
+    }
+  });
+
   // A start says a process exists; the entry opens on the first heartbeat. A
   // probe that sends only the start finds no time_entry_id on the stop, gets
   // renamed_entries: 0 from set_agent_task and leaves no row on the Timer page -

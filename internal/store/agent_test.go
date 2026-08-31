@@ -2217,6 +2217,25 @@ func TestSetAgentTaskRenamesAllSessionEntries(t *testing.T) {
 	}
 }
 
+func TestSetAgentTaskWithoutSessionCreatesNothing(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-task-empty@test.local")
+
+	if _, err := testStore.SetAgentTask(t.Context(), user.ID, AgentTaskSelector{}, "WT-7", "No session"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+	for _, table := range []string{"agent_sessions", "time_entries"} {
+		var count int
+		if err := testStore.db.QueryRowContext(t.Context(),
+			"SELECT COUNT(*) FROM "+table+" WHERE user_id = ?", user.ID).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("set task without a session created %d rows in %s", count, table)
+		}
+	}
+}
+
 func TestSetAgentTaskWithoutTitleUsesKey(t *testing.T) {
 	testStore := openTestStore(t)
 	user := testUser(t, testStore, "agent-task-key@test.local")

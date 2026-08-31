@@ -171,9 +171,11 @@ That last one is the criterion. A stop on a session that is already closed only 
 
 A \`404 session not found\` means the start never reached the server: stop is the one signal that never creates a session. Check the queue before calling it a failure.
 
-7.3 Cross the MCP half. If the worktime tools are already in your tool list, call \`set_agent_task(task_key: "WORKTIME", task_title: "setup check", session_id: "${session}")\` and expect \`"task_key":"WORKTIME"\` back - \`renamed_entries\` is 1 the first time and 0 on a re-run, when the name is already right.
+7.3 Cross the MCP half. Only the top-level/main setup agent may run this step. If you are a child, subagent, reviewer, Task worker, background agent or delegated agent, skip all of 7.3: do not call any WorkTime tool or probe MCP directly, and report that the parent/main agent must run this verification.
 
-If those tools are not listed, that is expected rather than a failure - a server added in step 5 is not loaded until the client restarts. Ask the server directly instead:
+If you are the top-level/main setup agent and the worktime tools are already in your tool list, call \`set_agent_task(task_key: "WORKTIME", task_title: "setup check", session_id: "${session}")\` and expect \`"task_key":"WORKTIME"\` back - \`renamed_entries\` is 1 the first time and 0 on a re-run, when the name is already right.
+
+If you are the top-level/main setup agent but those tools are not listed, that is expected rather than a failure - a server added in step 5 is not loaded until the client restarts. Ask the server directly instead:
 
     curl -sS -X POST -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \\
       -H 'Accept: application/json, text/event-stream' \\
@@ -190,18 +192,23 @@ const standingInstruction = (file: string, tag: string) => `## 6. Standing instr
 Append this block to \`${file}\`, creating the file if it is missing. If a block with the same markers is already there, replace its contents instead of adding a second one:
 
     <!-- worktime:begin -->
-    - WorkTime: call the MCP tool set_agent_task(task_key, task_title) as soon as the
-      task number is known, looking the title up in whatever tracker connection is
-      available. WorkTime never reads a tracker itself. Preserve the tracker's native
-      visible key: a repository-scoped issue is exactly "#N", never "owner/repo#N";
-      project-scoped keys such as "AIM2-123" stay unchanged. Until it is called, the
-      work is filed under a technical tag like "${tag}".
-    - If asked to book this work to a project, call update_time_entry(project: "<name>")
-      with no entry_id - it edits the running session and takes a project name from
-      list_projects, never an id.
+    - WorkTime ownership: only the top-level/main agent for the user's chat may call
+      WorkTime MCP tools. A child, subagent, reviewer, Task worker, background agent
+      or delegated agent must never call set_agent_task or any other WorkTime tool;
+      return task and project findings to the parent/main agent instead. The parent
+      already owns the chat's time attribution.
+    - If you are the top-level/main agent, call set_agent_task(task_key, task_title) as
+      soon as the task number is known, looking the title up in whatever tracker
+      connection is available. WorkTime never reads a tracker itself. Preserve the
+      tracker's native visible key: a repository-scoped issue is exactly "#N", never "owner/repo#N";
+      project-scoped keys such as "AIM2-123" stay unchanged. Until it
+      is called, the work is filed under a technical tag like "${tag}".
+    - If you are the top-level/main agent and are asked to book this work to a project,
+      call update_time_entry(project: "<name>") with no entry_id - it edits the
+      running session and takes a project name from list_projects, never an id.
     <!-- worktime:end -->
 
-Nothing else about tracking belongs there: the hooks do the tracking, these two calls only name the work and file it.
+Nothing else about tracking belongs there: the hooks do the tracking, and only the main agent's calls name the work and file it.
 `;
 
 function claudeCodePrompt(origin: string, token: string, probeSession: string): string {

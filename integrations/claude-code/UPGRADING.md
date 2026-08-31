@@ -82,10 +82,23 @@ WorkTime upgrade must not replace the user's terminal UI.
    time can be tracked perfectly while every `set_agent_task` call fails, and
    the only symptom is that entries keep their session tag.
 
-4. **Tell the agent to name its work.** Entries are called
-   `Claude Code #ab12cd34` until the session is attached to a tracker task with
-   the `set_agent_task` MCP tool. Adding a line to the project's `CLAUDE.md`
-   ("call set_agent_task with the task number as soon as you know it") is what
-   makes the tracked time group by task instead of by session.
+4. **Upgrade the managed agent instruction.** Entries are called
+   `Claude Code #ab12cd34` until the top-level/main agent attaches its session
+   to a tracker task with `set_agent_task`. The old instruction said every agent
+   should call the tool; because child agents inherit `CLAUDE.md`, that lets a
+   subagent rename its parent's work.
+
+   The safest upgrade is to download a fresh Claude Code setup prompt from
+   Settings and run it again. It keeps the stable `<!-- worktime:begin -->` and
+   `<!-- worktime:end -->` markers: replace everything between the existing
+   pair with the freshly generated managed block, preserve both markers and all
+   text outside them, and never append a second block. The new block says that
+   only the top-level/main agent uses WorkTime MCP tools; children, subagents,
+   reviewers, Task workers, background and delegated agents call none of them
+   and return task or project findings to the parent instead.
+
+   Codex installations use the same managed block in `~/.codex/AGENTS.md` and
+   are upgraded by re-running the Codex setup prompt from Settings. Local files
+   are not rewritten automatically when the WorkTime server is upgraded.
 
 No manual server-side data change is needed: database migrations run at startup.

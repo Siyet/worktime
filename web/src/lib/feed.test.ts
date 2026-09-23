@@ -1,11 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   dayOffsets,
+  daySignature,
   estimateDayHeight,
   FEED_CHUNK_DAYS,
   FEED_DEFAULT_DAY_HEIGHT,
+  FEED_PROBE_DAYS,
   feedDays,
   planFeedWindow,
+  probeSpan,
+  resolveSpan,
   resolveWindow,
   windowKeys,
   type FeedDay,
@@ -251,5 +255,43 @@ describe("resolveWindow and windowKeys", () => {
     const keys = windowKeys(MONTH, { first: 0, last: 4, loaded: 5 });
     const older = MONTH.slice(5);
     expect(resolveWindow(older, keys).loaded).toBe(0);
+  });
+});
+
+describe("probeSpan", () => {
+  it("starts at the stale day nearest above the window and takes a few more above it", () => {
+    const stale = new Set([2, 3, 8, 9]);
+    expect(probeSpan(12, (index) => stale.has(index))).toEqual({ first: 9 - FEED_PROBE_DAYS + 1, last: 9 });
+  });
+
+  it("stops at the newest day", () => {
+    expect(probeSpan(12, (index) => index === 1)).toEqual({ first: 0, last: 1 });
+  });
+
+  it("has nothing to do when every day above is fresh, or nothing is above", () => {
+    expect(probeSpan(12, () => false)).toBeNull();
+    expect(probeSpan(0, () => true)).toBeNull();
+  });
+});
+
+describe("daySignature", () => {
+  it("changes when an entry is added, removed or edited, and not otherwise", () => {
+    const first = entry(at("2026-07-01T09:00"));
+    const second = entry(at("2026-07-01T11:00"));
+    const base = daySignature({ iso: "2026-07-01", entries: [first, second] });
+    expect(daySignature({ iso: "2026-07-01", entries: [first, second] })).toBe(base);
+    expect(daySignature({ iso: "2026-07-01", entries: [first] })).not.toBe(base);
+    expect(daySignature({ iso: "2026-07-01", entries: [first, { ...second, updated_at: second.updated_at + 1 }] })).not.toBe(base);
+  });
+});
+
+describe("resolveSpan", () => {
+  it("finds a run of days by its edge keys", () => {
+    expect(resolveSpan(MONTH, "2026-07-27", "2026-07-25")).toEqual({ first: 3, last: 5 });
+  });
+
+  it("shrinks inwards when an edge day is gone", () => {
+    const withoutEdge = MONTH.filter((feedDay) => feedDay.iso !== "2026-07-27");
+    expect(resolveSpan(withoutEdge, "2026-07-27", "2026-07-25")).toEqual({ first: 3, last: 4 });
   });
 });

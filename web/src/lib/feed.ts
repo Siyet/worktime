@@ -192,6 +192,34 @@ export function resolveWindow(days: readonly FeedDay[], keys: FeedWindowKeys): F
   return { first, last, loaded };
 }
 
+// resolveSpan is resolveWindow for a plain run of days named by its newest and
+// oldest day.
+export function resolveSpan(days: readonly FeedDay[], newest: string, oldest: string): { first: number; last: number } {
+  return { first: countNewer(days, newest, false), last: countNewer(days, oldest, true) - 1 };
+}
+
+/** Days re-measured per idle frame once their remembered heights have gone stale. */
+export const FEED_PROBE_DAYS = 5;
+
+// daySignature changes whenever anything that sizes a day's card could have: an
+// entry added, removed or edited. A remembered height is trusted only while the day
+// still has the signature it was measured with.
+export function daySignature(day: FeedDay): string {
+  let updated = 0;
+  for (const entry of day.entries) updated += entry.updated_at;
+  return `${day.entries.length}:${updated}`;
+}
+
+// probeSpan picks the next days to re-measure: the stale day nearest above the
+// mounted window, plus up to FEED_PROBE_DAYS-1 more above it. Only days above count -
+// a wrong height below the reader never moves what they are reading.
+export function probeSpan(first: number, isStale: (index: number) => boolean): { first: number; last: number } | null {
+  for (let index = first - 1; index >= 0; index--) {
+    if (isStale(index)) return { first: Math.max(0, index - FEED_PROBE_DAYS + 1), last: index };
+  }
+  return null;
+}
+
 export function windowKeys(days: readonly FeedDay[], window: FeedWindow): FeedWindowKeys {
   return {
     first: window.first === 0 ? null : (days[window.first]?.iso ?? null),

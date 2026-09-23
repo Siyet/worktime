@@ -85,6 +85,19 @@ async function rowY(page: Page, text: string): Promise<number> {
   return box.y;
 }
 
+// Keyboard scrolling keys act on the document only while nothing is focused.
+async function blur(page: Page): Promise<void> {
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+}
+
+// After a width change the scroller re-measures the days above the window while
+// the reader idles; wait for it to start and to finish.
+async function remeasured(page: Page): Promise<void> {
+  await settle(page);
+  await expect(page.locator(".feed")).toHaveAttribute("data-measuring", "");
+  await expect(page.locator(".feed")).not.toHaveAttribute("data-measuring", /.*/, { timeout: 15_000 });
+}
+
 function runningCard(page: Page) {
   return page.locator(".card").filter({ has: page.getByRole("heading", { name: "Running" }) });
 }
@@ -240,7 +253,10 @@ test.describe("pinned running timers", () => {
     expect(padding).toBeGreaterThanOrEqual(card!.height);
 
     const probe = await probeRow(page, card!.y + card!.height);
-    await runningCard(page).getByRole("button", { name: "Stop" }).click();
+    // From the keyboard: Playwright's click scrolls its target into view first,
+    // which a real pointer never does, and that scroll is not what is tested here.
+    await runningCard(page).getByRole("button", { name: "Stop" }).focus();
+    await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "Running" })).toHaveCount(0);
     await settle(page);
     expect(Math.abs((await rowY(page, probe.text)) - probe.y)).toBeLessThanOrEqual(1);
@@ -254,8 +270,12 @@ test.describe("pinned running timers", () => {
   });
 
   test("the description suggestions open over the running card", async ({ page, server }) => {
+    await trackErrors(page);
+    // Enough matching tasks that the list reaches well down over the card.
     await seedServer(server.url, {
-      entries: [{ description: "Write e2e tests", startedAt: dayNine(-1), stoppedAt: dayNine(-1) + HOUR }],
+      entries: ["Write e2e tests", "Write docs", "Write the changelog", "Write a spec", "Write release notes"].map(
+        (description, index) => ({ description, startedAt: dayNine(-1) + index * HOUR, stoppedAt: dayNine(-1) + index * HOUR + 30 * 60_000 }),
+      ),
     });
     await page.goto(server.url + "/#/");
     await page.getByPlaceholder("What are you working on?").fill("Pinned work");
@@ -264,7 +284,135 @@ test.describe("pinned running timers", () => {
 
     const input = page.getByPlaceholder("What are you working on?");
     await input.fill("write");
-    await page.getByRole("listbox", { name: "Recent tasks" }).getByRole("option", { name: /Write e2e tests/ }).click();
-    await expect(input).toHaveValue("Write e2e tests");
+    const list = page.getByRole("listbox", { name: "Recent tasks" });
+    const last = list.getByRole("option").last();
+    // The option really is drawn over the card, not merely clickable beside it.
+    const card = (await runningCard(page).boundingBox())!;
+    const option = (await last.boundingBox())!;
+    expect(option.y + option.height / 2).toBeGreaterThan(card.y);
+    const onTop = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest("[role=listbox]") !== null,
+      { x: option.x + option.width / 2, y: option.y + option.height / 2 },
+    );
+    expect(onTop).toBe(true);
+    const text = (await last.locator(".stext").textContent())!;
+    await last.click();
+    await expect(input).toHaveValue(text);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("keyboard focus walks the pinned card without moving the page", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    // A phone, and more timers than the capped card can show at once.
+    await page.setViewportSize({ width: 360, height: 740 });
+    await seedServer(server.url, {
+      entries: [0, 1, 2, 3, 4, 5].map((index) => ({
+        description: `Agent task ${index}`,
+        startedAt: Date.now() - (index + 1) * 60_000,
+        stoppedAt: null,
+      })),
+    });
+    await page.goto(server.url + "/#/");
+    await expect(runningCard(page).locator(".item")).toHaveCount(6);
+    await scrollUntilVisible(page, "Day 20 task 0");
+    await expect(page.locator(".pinned")).toHaveClass(/stuck/);
+    await expect(page.locator(".pinned > .card")).toHaveClass(/overflowing/);
+
+    // Every control in the card, from the last up - the order Shift+Tab takes
+    // coming in from the feed. Focused one by one rather than tabbed through: Safari
+    // only tabs to buttons with "Press Tab to highlight each item" switched on.
+    const scrollY = await page.evaluate(() => window.scrollY);
+    const controls = page.locator(".pinned > .card").locator("button, [tabindex='0']");
+    const count = await controls.count();
+    const stopCount = await runningCard(page).getByRole("button", { name: "Stop" }).count();
+    let visited = 0;
+    for (let index = count - 1; index >= 0; index--) {
+      await controls.nth(index).evaluate((control) => (control as HTMLElement).focus());
+      const focus = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement;
+        const card = document.querySelector(".pinned > .card")!.getBoundingClientRect();
+        const rect = active.getBoundingClientRect();
+        return {
+          isStop: active.textContent?.trim() === "Stop",
+          visible: rect.top >= card.top - 1 && rect.bottom <= card.bottom + 1,
+          scrollY: window.scrollY,
+        };
+      });
+      expect(focus.scrollY).toBe(scrollY);
+      expect(focus.visible).toBe(true);
+      if (focus.isStop) visited += 1;
+    }
+    expect(visited).toBe(stopCount);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("PageDown never slides unread rows under the pinned card", async ({ page, server }) => {
+    await seedHistory(server.url, 40);
+    await page.goto(server.url + "/#/");
+    await page.getByPlaceholder("What are you working on?").fill("Pinned work");
+    await page.getByRole("button", { name: "Start" }).click();
+    await scrollUntilVisible(page, "Day 15 task 0");
+    await blur(page);
+
+    const lastVisible = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll<HTMLElement>(".feed .item")].filter(
+        (row) => row.getBoundingClientRect().bottom <= window.innerHeight,
+      );
+      return rows.at(-1)!.querySelector(".desc")!.textContent!.trim();
+    });
+    await page.keyboard.press("PageDown");
+    await settle(page);
+    const card = (await runningCard(page).boundingBox())!;
+    expect(await rowY(page, lastVisible)).toBeGreaterThanOrEqual(card.y + card.height - 1);
+  });
+
+  test("a timer that starts while the reader is deep does not cover their row", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    await page.goto(server.url + "/#/");
+    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
+    await scrollUntilVisible(page, "Day 20 task 0");
+    const probe = await probeRow(page);
+
+    // A timer started elsewhere - another device, an agent - arrives by sync.
+    await seedServer(server.url, {
+      entries: [{ description: "Started elsewhere", startedAt: Date.now() - 60_000, stoppedAt: null }],
+    });
+    await triggerSync(page);
+    await expect(page.locator(".pinned")).toHaveClass(/stuck/);
+    await settle(page);
+    const card = (await runningCard(page).boundingBox())!;
+    // Pushed down by exactly the card, so it sits just as far below its bottom edge
+    // as it sat below the top of the screen.
+    expect(Math.abs((await rowY(page, probe.text)) - (probe.y + card.y + card.height))).toBeLessThanOrEqual(1);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+});
+
+test.describe("feed after a width change", () => {
+  // Stale remembered heights would make every remount correct the scroll, and an
+  // instant correction cancels a smooth scroll: Home and the iOS status-bar tap
+  // would stop halfway. The scroller re-measures stale days while the reader idles.
+  test("Home and a smooth scroll to the top both arrive", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 120);
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.goto(server.url + "/#/");
+    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
+    await scrollUntilVisible(page, "Day 90 task 0");
+
+    await page.setViewportSize({ width: 400, height: 800 });
+    await remeasured(page);
+    await blur(page);
+    await page.keyboard.press("Home");
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 10_000 }).toBe(0);
+
+    await scrollUntilVisible(page, "Day 90 task 0");
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await remeasured(page);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 10_000 }).toBe(0);
+    expect(await pageErrors(page)).toEqual([]);
   });
 });

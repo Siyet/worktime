@@ -10,5 +10,10 @@ export default defineConfig({
   expect: { timeout: 5_000 },
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    // The feed keeps the reader's place by hand because Safari has no scroll
+    // anchoring, so its specs run in WebKit as well.
+    { name: "webkit", testMatch: /feed\.spec\.ts/, use: { ...devices["Desktop Safari"], locale: "en-US" } },
+  ],
 });

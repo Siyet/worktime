@@ -40,7 +40,7 @@
   import type { GroupEditSaveResult } from "../lib/group-edit";
   import type { TrackedLocalMutationReceipt } from "../lib/mutation-progress";
   import { syncState } from "../lib/sync.svelte";
-  import { feedDays } from "../lib/feed";
+  import { feedDays, type FeedDay } from "../lib/feed";
   import { FeedScroller } from "../lib/feed-scroll.svelte";
   import { t } from "../lib/i18n";
   import { maxTextLength } from "../lib/limits";
@@ -101,6 +101,9 @@
   const days = $derived(feedDays(appState.entries));
   const scroller = new FeedScroller(() => days);
   const mountedDays = $derived(days.slice(scroller.range.first, scroller.range.last + 1));
+  const probeDays = $derived(
+    scroller.probeRange === null ? [] : days.slice(scroller.probeRange.first, scroller.probeRange.last + 1),
+  );
   const currentYear = $derived(Number(todayISO.slice(0, 4)));
 
   let feedElement = $state<HTMLElement | null>(null);
@@ -111,6 +114,23 @@
     if (feedElement === null) return;
     return scroller.start({ feed: feedElement, sentinel: () => sentinelElement, pinned: () => pinnedElement });
   });
+
+  // The running card is capped in height, but it only scrolls - and so clips -
+  // when its rows actually overflow the cap: the project and tag menus of a running
+  // row open below it, and a scrolling card would cut them off.
+  let pinnedOverflows = $state(false);
+
+  function watchPinnedOverflow(card: HTMLElement): () => void {
+    const rows = card.firstElementChild as HTMLElement;
+    const observer = new ResizeObserver(() => {
+      const style = getComputedStyle(card);
+      const room = card.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      pinnedOverflows = rows.offsetHeight > room + 0.5;
+    });
+    observer.observe(rows);
+    observer.observe(card);
+    return () => observer.disconnect();
+  }
 
   // New data can move or resize the mounted days; the scroller replans on the
   // next frame. Scheduling writes no state, so this never reruns itself.
@@ -551,65 +571,83 @@
 <!-- The running timers stay pinned while the feed scrolls under them. -->
 {#if running.length > 0}
   <div class="pinned" class:stuck={scroller.stuck} bind:this={pinnedElement}>
-    <div class="card" class:has-groups={runningGroups.some((group) => group.entries.length > 1)}>
-      <h3>{t("Running")}</h3>
-      {#each runningGroups as group, index (group.key)}
-        {#if group.entries.length === 1}
-          {@render entryRow(group.entries[0]!, false)}
-        {:else}
-          {@render groupRow("running", group, index)}
-        {/if}
-      {/each}
-    </div>
-  </div>
-{/if}
-
-<!-- The feed keeps its own scroll anchoring (see feed-scroll.svelte.ts), so the
-     browser's is switched off inside it. Each day sits in a wrapper that is
-     measured as a whole, margin included; the gaps stand in for the days that
-     are not mounted. -->
-<div class="feed" bind:this={feedElement}>
-  <div class="feed-gap" style:height="{scroller.gapTop}px"></div>
-  {#each mountedDays as day (day.iso)}
-    {@const groups = groupDayEntries(day.entries)}
-    {@const tracked = dayTotal(groups)}
-    {@const wall = wallClockMs(day.entries, 0)}
-    <!-- Every entry here is finished, so neither groupDayEntries nor wallClockMs
-         reads `now` - passing clock.now would subscribe every mounted day to the
-         one-second ticker for nothing. -->
-    <div class="day" data-key={day.iso} {@attach scroller.observeDay}>
-      <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
-        <div class="row" data-anchor>
-          <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
-          <span class="spacer"></span>
-          {#if wall !== tracked}
-            <!-- Two readings of one day: how much was tracked, and how much clock time
-                 it took with parallel work counted once. Side by side and unlabelled
-                 they read as the same number printed twice, so they get a divider and
-                 one sentence that says which is which. -->
-            {@const totalsLabel = t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once", {
-              wall: formatDurationShort(wall),
-              tracked: formatDurationShort(tracked),
-            })}
-            <span class="muted mono totals" title={totalsLabel}>
-              <span class="wall">{@render dialIcon()}{formatDurationShort(wall)}</span>
-              <span class="sep" aria-hidden="true">/</span>
-              <span class="tracked">{formatDurationShort(tracked)}</span>
-              <span class="sr-only">{totalsLabel}</span>
-            </span>
-          {:else}
-            <span class="muted mono tracked">{formatDurationShort(tracked)}</span>
-          {/if}
-        </div>
-        {#each groups as group, index (group.key)}
+    <div
+      class="card"
+      class:has-groups={runningGroups.some((group) => group.entries.length > 1)}
+      class:overflowing={pinnedOverflows}
+      {@attach watchPinnedOverflow}
+    >
+      <div class="pinned-rows">
+        <h3>{t("Running")}</h3>
+        {#each runningGroups as group, index (group.key)}
           {#if group.entries.length === 1}
             {@render entryRow(group.entries[0]!, false)}
           {:else}
-            {@render groupRow(day.iso, group, index)}
+            {@render groupRow("running", group, index)}
           {/if}
         {/each}
       </div>
     </div>
+  </div>
+{/if}
+
+<!-- One day of the feed, in a wrapper that is measured as a whole, margin
+     included. -->
+{#snippet dayCard(day: FeedDay)}
+  <!-- Every entry here is finished, so neither groupDayEntries nor wallClockMs
+       reads `now` - passing clock.now would subscribe every mounted day to the
+       one-second ticker for nothing. -->
+  {@const groups = groupDayEntries(day.entries)}
+  {@const tracked = dayTotal(groups)}
+  {@const wall = wallClockMs(day.entries, 0)}
+  <div class="day" data-key={day.iso} {@attach scroller.observeDay}>
+    <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
+      <div class="row" data-anchor>
+        <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
+        <span class="spacer"></span>
+        {#if wall !== tracked}
+          <!-- Two readings of one day: how much was tracked, and how much clock time
+               it took with parallel work counted once. Side by side and unlabelled
+               they read as the same number printed twice, so they get a divider and
+               one sentence that says which is which. -->
+          {@const totalsLabel = t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once", {
+            wall: formatDurationShort(wall),
+            tracked: formatDurationShort(tracked),
+          })}
+          <span class="muted mono totals" title={totalsLabel}>
+            <span class="wall">{@render dialIcon()}{formatDurationShort(wall)}</span>
+            <span class="sep" aria-hidden="true">/</span>
+            <span class="tracked">{formatDurationShort(tracked)}</span>
+            <span class="sr-only">{totalsLabel}</span>
+          </span>
+        {:else}
+          <span class="muted mono tracked">{formatDurationShort(tracked)}</span>
+        {/if}
+      </div>
+      {#each groups as group, index (group.key)}
+        {#if group.entries.length === 1}
+          {@render entryRow(group.entries[0]!, false)}
+        {:else}
+          {@render groupRow(day.iso, group, index)}
+        {/if}
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
+<!-- The feed keeps its own scroll anchoring (see feed-scroll.svelte.ts), so the
+     browser's is switched off inside it. The gaps stand in for the days that are
+     not mounted; a probe - stale days above the window, mounted for one frame to
+     be measured again - splits the top gap in two. data-measuring is up while any
+     such day is left, which the tests wait on. -->
+<div class="feed" bind:this={feedElement} data-measuring={scroller.measuring ? "" : undefined}>
+  <div class="feed-gap" style:height="{scroller.gapAbove}px"></div>
+  {#each probeDays as day (day.iso)}
+    {@render dayCard(day)}
+  {/each}
+  <div class="feed-gap" style:height="{scroller.gapTop}px"></div>
+  {#each mountedDays as day (day.iso)}
+    {@render dayCard(day)}
   {/each}
   <div class="feed-gap" style:height="{scroller.gapBottom}px"></div>
 </div>
@@ -686,14 +724,20 @@
     scroll-margin-top: calc(-1 * var(--pinned-offset, 0px));
   }
 
-  /* Capped so a room full of agent timers cannot bury the feed; the card scrolls
-     inside itself beyond that. svh rather than dvh: dvh changes as the iOS
-     toolbars collapse, which would resize the card - and move the feed - mid-scroll.
-     Running rows carry no popup menus, so clipping them is safe. */
+  /* Capped so a room full of agent timers cannot bury the feed; beyond the cap the
+     card scrolls inside itself (see watchPinnedOverflow for why only then). svh
+     rather than dvh: dvh changes as the iOS toolbars collapse, which would resize
+     the card - and move the feed - mid-scroll. The scroll padding pairs with the
+     negative scroll margin above: inside this scroller they cancel out, so focus
+     still scrolls a hidden Stop into view within the card. */
   .pinned > .card {
     margin-bottom: 0;
     max-height: 50vh;
     max-height: 50svh;
+    scroll-padding-top: var(--pinned-offset, 0px);
+  }
+
+  .pinned > .card.overflowing {
     overflow-y: auto;
   }
 

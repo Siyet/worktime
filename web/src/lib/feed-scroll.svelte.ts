@@ -45,6 +45,8 @@ const IDLE_MS = 250;
 
 /** Keys that scroll the page; any other key leaves the reader idle. */
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+/** The scroll keys the scroller pages with itself while running timers are pinned. */
+const PAGE_KEYS = new Set(["PageUp", "PageDown", " "]);
 
 /** Input that may start a scroll before the first scroll event reports it. */
 const READER_INPUTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
@@ -191,11 +193,13 @@ export class FeedScroller {
       this.gapTop = 0;
       this.gapBottom = offsets[loaded]! - offsets[index + 1]!;
       await tick();
+      // The page may have gone away in the meantime.
+      if (this.#elements !== elements) return;
     }
     const day = elements.feed.querySelector<HTMLElement>(`:scope > .day[data-key="${iso}"]`);
     if (day === null) return;
     this.#anchor = null;
-    const line = elements.pinned()?.offsetHeight ?? 0;
+    const line = this.#stuckLine();
     window.scrollTo({ top: day.getBoundingClientRect().top + window.scrollY - line, behavior: "instant" });
     this.schedule();
   }
@@ -212,16 +216,20 @@ export class FeedScroller {
 
   #onReaderInput = (event: Event): void => {
     if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
-    if (!(event instanceof KeyboardEvent)) this.#page = null;
+    // Any other scroll moves the page away from where the last page step was
+    // heading, so the next page key starts from wherever the page is.
+    if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
     this.#readerActiveAt = performance.now();
   };
 
   // A page step under the stuck card is a page less the card, as the scroll
   // padding asks - but WebKit ignores that padding for page keys, and a full page
   // would carry the next unread rows beneath the card. So the step is taken here,
-  // in every engine, whenever the page itself is what the key would scroll.
+  // in every engine, whenever the page itself is what the key would scroll. Also
+  // before the card sticks: the step that sticks it must not bury rows either.
   #onKeydown = (event: KeyboardEvent): void => {
-    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || !this.stuck) return;
+    const pinned = this.#elements?.pinned() ?? null;
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || pinned === null) return;
     const direction =
       event.key === "PageDown" || (event.key === " " && !event.shiftKey)
         ? 1
@@ -232,13 +240,17 @@ export class FeedScroller {
     const active = document.activeElement;
     const nothingFocused = active === null || active === document.body || active === document.documentElement;
     // Space presses a focused control; page keys belong to fields, dialogs and
-    // the pinned card, which scrolls on its own once it outgrows its cap.
+    // the pinned card while it can still scroll its own rows that way.
     if (!nothingFocused) {
       if (event.key === " " || active.closest(KEEPS_PAGE_KEYS) !== null) return;
-      if (this.#elements?.pinned()?.contains(active)) return;
+      const card = pinned.firstElementChild;
+      if (card !== null && pinned.contains(active)) {
+        const room = direction > 0 ? card.scrollHeight - card.clientHeight - card.scrollTop : card.scrollTop;
+        if (room > 1) return;
+      }
     }
     event.preventDefault();
-    const visible = window.innerHeight - this.#readingLine();
+    const visible = window.innerHeight - this.#stuckLine();
     const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
     const now = performance.now();
     const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
@@ -401,6 +413,14 @@ export class FeedScroller {
 
   #readingLine(): number {
     return this.#pinnedRect()?.bottom ?? 0;
+  }
+
+  // Where the pinned card's bottom edge is once it sticks, stuck yet or not: its
+  // sticky offset (the safe area) plus its height.
+  #stuckLine(): number {
+    const pinned = this.#elements?.pinned() ?? null;
+    if (pinned === null) return 0;
+    return (parseFloat(getComputedStyle(pinned).top) || 0) + pinned.offsetHeight;
   }
 
   // Returns the reading line: the pinned card's bottom while it is stuck.

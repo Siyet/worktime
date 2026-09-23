@@ -375,14 +375,25 @@ test.describe("pinned running timers", () => {
     await page.goto(server.url + "/#/");
     await page.getByPlaceholder("What are you working on?").fill("Pinned work");
     await page.getByRole("button", { name: "Start" }).click();
-    await scrollUntilVisible(page, "Day 15 task 0");
     await blur(page);
     const card = (await runningCard(page).boundingBox())!;
     const height = await page.evaluate(() => window.innerHeight);
-    // Whatever sat at the bottom of the screen must still be in view below the card.
-    const visible = height - (card.y + card.height);
+    // Whatever sat at the bottom of the screen must still be in view below the
+    // card, which is stuck to the top once the page has moved.
+    const visible = height - card.height;
 
+    // From the top: this step is the one that sticks the card.
     let scrollY = await restingScrollY(page);
+    expect(scrollY).toBe(0);
+    await page.keyboard.press("PageDown");
+    scrollY = await restingScrollY(page);
+    expect(scrollY).toBeLessThanOrEqual(visible);
+    expect(scrollY).toBeGreaterThan(visible / 2);
+    await expect(page.locator(".pinned")).toHaveClass(/stuck/);
+
+    await scrollUntilVisible(page, "Day 15 task 0");
+    await blur(page);
+    scrollY = await restingScrollY(page);
     for (const [key, direction] of [["PageDown", 1], ["Space", 1], ["PageUp", -1], ["Shift+Space", -1]] as const) {
       await page.keyboard.press(key);
       const next = await restingScrollY(page);
@@ -391,6 +402,23 @@ test.describe("pinned running timers", () => {
       expect(step, key).toBeGreaterThan(visible / 2);
       scrollY = next;
     }
+
+    // A scroll key between two quick page steps moves the page elsewhere: the
+    // second step starts from there, not from where the first was heading.
+    await page.keyboard.press("PageDown");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("PageDown");
+    const twoSteps = (await restingScrollY(page)) - scrollY;
+    expect(twoSteps).toBeLessThan(2 * visible - 1);
+    scrollY += twoSteps;
+
+    // Focus in a card with nothing left to scroll of its own - after Stop, after
+    // picking a project - pages the page the same way.
+    await runningCard(page).getByRole("button", { name: "Stop" }).focus();
+    await page.keyboard.press("PageDown");
+    const fromCard = (await restingScrollY(page)) - scrollY;
+    expect(fromCard).toBeLessThanOrEqual(visible);
+    expect(fromCard).toBeGreaterThan(visible / 2);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -443,6 +471,15 @@ test.describe("pinned running timers", () => {
     expect(await hitsItself(last)).toBe(true);
     await last.click();
     await expect(row.getByRole("combobox", { name: "Edit project" })).toHaveText("Foxtrot");
+
+    // Scrolled out of the card's view, the trigger takes its open menu with it.
+    await row.getByRole("combobox", { name: "Edit project" }).click();
+    await expect(menu).toBeVisible();
+    await card.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+    await expect(menu).toBeHidden();
+    await card.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "instant" }));
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // A feed row's menu scrolls with the page as before; only the card's float.
     const feedRow = page.locator(".feed .item").filter({ hasText: "Day 20 task 0" });

@@ -351,6 +351,9 @@ test.describe("pinned running timers", () => {
     let visited = 0;
     for (let index = count - 1; index >= 0; index--) {
       await controls.nth(index).evaluate((control) => (control as HTMLElement).focus());
+      // Linux WebKit scrolls the card to a newly focused control a frame later;
+      // waiting also catches a page scroll that would only show up late.
+      await settle(page);
       const focus = await page.evaluate(() => {
         const active = document.activeElement as HTMLElement;
         const card = document.querySelector(".pinned > .card")!.getBoundingClientRect();

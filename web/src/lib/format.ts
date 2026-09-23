@@ -57,8 +57,18 @@ export function formatTime(ms: number): string {
   });
 }
 
-export function formatDay(ms: number): string {
-  return new Date(ms).toLocaleDateString(formattingLocale(), { weekday: "short", month: "short", day: "numeric" });
+// A day card's heading. The year is spelled out only when it is not the current
+// one: the feed scrolls back through the whole history, where two Wednesdays a
+// year apart would otherwise read the same. The caller passes the current year so
+// it rolls over with the page's own idea of today.
+export function formatDay(ms: number, currentYear: number): string {
+  const date = new Date(ms);
+  return date.toLocaleDateString(formattingLocale(), {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === currentYear ? {} : { year: "numeric" }),
+  });
 }
 
 // Full numeric date, honoring the date-format preference.

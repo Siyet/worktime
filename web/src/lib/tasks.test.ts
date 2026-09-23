@@ -127,7 +127,7 @@ describe("taskKey", () => {
 
 describe("taskSuggestions", () => {
   // The third argument is the window cutoff, not "now": the caller derives it from the
-  // day boundary so the suggestions and the feed they mirror share one window.
+  // day boundary so every surface that suggests shares one window.
   const CUTOFF = NOW - SUGGESTION_WINDOW_DAYS * 24 * HOUR;
   const source = [
     entry({ description: "Write e2e tests", started_at: NOW - 2 * HOUR, project_id: "p1", tags: ["review"] }),

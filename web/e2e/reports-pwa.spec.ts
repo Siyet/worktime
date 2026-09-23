@@ -37,7 +37,7 @@ test.describe("reports", () => {
     await expect(stats).toContainText("2.0h");
   });
 
-  test("period boundaries: old entries leave this week but stay in last 30 days and leave the Timer feed", async ({
+  test("period boundaries: old entries leave this week but stay in last 30 days and in the Timer feed", async ({
     page,
     server,
   }) => {
@@ -58,10 +58,10 @@ test.describe("reports", () => {
     await page.getByRole("button", { name: "30 days" }).click();
     await expect(stats).toContainText("2.5h");
 
-    // The Timer feed shows only the last 7 days.
+    // The Timer feed reaches back past a week: it loads older days as it scrolls.
     await page.goto(server.url + "/#/");
     await expect(page.locator(".item").filter({ hasText: "recent work" })).toBeVisible();
-    await expect(page.getByText("old work")).toHaveCount(0);
+    await expect(page.locator(".item").filter({ hasText: "old work" })).toBeVisible();
   });
 
   test("time off day counts appear in the report", async ({ page, server }) => {

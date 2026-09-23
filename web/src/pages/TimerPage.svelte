@@ -115,23 +115,6 @@
     return scroller.start({ feed: feedElement, sentinel: () => sentinelElement, pinned: () => pinnedElement });
   });
 
-  // The running card is capped in height, but it only scrolls - and so clips -
-  // when its rows actually overflow the cap: the project and tag menus of a running
-  // row open below it, and a scrolling card would cut them off.
-  let pinnedOverflows = $state(false);
-
-  function watchPinnedOverflow(card: HTMLElement): () => void {
-    const rows = card.firstElementChild as HTMLElement;
-    const observer = new ResizeObserver(() => {
-      const style = getComputedStyle(card);
-      const room = card.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-      pinnedOverflows = rows.offsetHeight > room + 0.5;
-    });
-    observer.observe(rows);
-    observer.observe(card);
-    return () => observer.disconnect();
-  }
-
   // New data can move or resize the mounted days; the scroller replans on the
   // next frame. Scheduling writes no state, so this never reruns itself.
   $effect(() => {
@@ -241,22 +224,30 @@
 
   async function focusEditedMembers(snapshot: TaskGroupSnapshot): Promise<void> {
     await tick();
+    let control = editedMemberControl(snapshot);
+    if (control === null) {
+      // The edited rows may sit in a day the feed has unmounted since.
+      const edited = new Set(snapshot.entryIDs);
+      const day = days.find((candidate) => candidate.entries.some((entry) => edited.has(entry.id)));
+      if (day !== undefined) {
+        await scroller.reveal(day.iso);
+        control = editedMemberControl(snapshot);
+      }
+    }
+    (control ?? startForm?.querySelector<HTMLInputElement>("input"))?.focus();
+  }
+
+  function editedMemberControl(snapshot: TaskGroupSnapshot): HTMLElement | null {
     for (const entryID of snapshot.entryIDs) {
       const current = currentGroupContaining(entryID);
       if (current?.group.entries.length && current.group.entries.length > 1) {
         const trigger = groupEditButtonRefs.get(current.key);
-        if (trigger) {
-          trigger.focus();
-          return;
-        }
+        if (trigger) return trigger;
       }
       const entryButton = entryButtonRefs.get(entryID);
-      if (entryButton) {
-        entryButton.focus();
-        return;
-      }
+      if (entryButton) return entryButton;
     }
-    startForm?.querySelector<HTMLInputElement>("input")?.focus();
+    return null;
   }
 
   function watchMutation(
@@ -571,22 +562,15 @@
 <!-- The running timers stay pinned while the feed scrolls under them. -->
 {#if running.length > 0}
   <div class="pinned" class:stuck={scroller.stuck} bind:this={pinnedElement}>
-    <div
-      class="card"
-      class:has-groups={runningGroups.some((group) => group.entries.length > 1)}
-      class:overflowing={pinnedOverflows}
-      {@attach watchPinnedOverflow}
-    >
-      <div class="pinned-rows">
-        <h3>{t("Running")}</h3>
-        {#each runningGroups as group, index (group.key)}
-          {#if group.entries.length === 1}
-            {@render entryRow(group.entries[0]!, false)}
-          {:else}
-            {@render groupRow("running", group, index)}
-          {/if}
-        {/each}
-      </div>
+    <div class="card" class:has-groups={runningGroups.some((group) => group.entries.length > 1)}>
+      <h3>{t("Running")}</h3>
+      {#each runningGroups as group, index (group.key)}
+        {#if group.entries.length === 1}
+          {@render entryRow(group.entries[0]!, false)}
+        {:else}
+          {@render groupRow("running", group, index)}
+        {/if}
+      {/each}
     </div>
   </div>
 {/if}
@@ -725,20 +709,18 @@
   }
 
   /* Capped so a room full of agent timers cannot bury the feed; beyond the cap the
-     card scrolls inside itself (see watchPinnedOverflow for why only then). svh
-     rather than dvh: dvh changes as the iOS toolbars collapse, which would resize
-     the card - and move the feed - mid-scroll. The scroll padding pairs with the
-     negative scroll margin above: inside this scroller they cancel out, so focus
-     still scrolls a hidden Stop into view within the card. */
+     card scrolls inside itself, and the row menus lift themselves out of that clip
+     (lib/float-menu.ts). svh rather than dvh: dvh changes as the iOS toolbars
+     collapse, which would resize the card - and move the feed - mid-scroll. The
+     scroll padding pairs with the negative scroll margin above: inside this
+     scroller they cancel out, so focus still scrolls a hidden Stop into view
+     within the card. */
   .pinned > .card {
     margin-bottom: 0;
     max-height: 50vh;
     max-height: 50svh;
-    scroll-padding-top: var(--pinned-offset, 0px);
-  }
-
-  .pinned > .card.overflowing {
     overflow-y: auto;
+    scroll-padding-top: var(--pinned-offset, 0px);
   }
 
   .pinned.stuck > .card {
@@ -952,9 +934,11 @@
   }
 
   @media (max-width: 34rem) {
+    /* Two running rows in full - each with its project and tags line - and the
+       top of a third, so a card that scrolls looks like one. */
     .pinned > .card {
-      max-height: min(50vh, 13rem);
-      max-height: min(50svh, 13rem);
+      max-height: min(50vh, 16rem);
+      max-height: min(50svh, 16rem);
     }
 
     form.row {

@@ -11,7 +11,7 @@
 //    that one update, so nothing reruns itself inside a single flush.
 //
 // Scroll anchoring is done here by hand rather than left to the browser: Safari
-// has none, and the tests only run Chromium, which would hide every mistake.
+// has none, and Chromium's own would hide every mistake made here from the tests.
 // .feed carries overflow-anchor: none so the browser never corrects the same
 // shift a second time.
 //
@@ -20,8 +20,15 @@
 // remembered heights that went stale: the window changed width, or a sync changed
 // a day while it was unmounted. So stale days above the window are re-measured in
 // place while the reader is idle, a few per frame, before scrolling ever reaches
-// them.
+// them. Idle means no scroll and no input that starts one: a wheel turn, a fling
+// or Home begins on the compositor, and its first scroll event can arrive only
+// after the frame that would have mounted a probe. What remains is the moment
+// right after a width change: a scroll to the top started before the stale days
+// are re-measured - a few hundred milliseconds for a year of history - can still
+// stop short, and a second Home finishes it.
+import { tick } from "svelte";
 import {
+  FEED_CHUNK_DAYS,
   dayOffsets,
   daySignature,
   planFeedWindow,
@@ -33,8 +40,22 @@ import {
   type FeedWindowKeys,
 } from "./feed";
 
-/** How long after the reader's last scroll the page counts as idle. */
+/** How long after the reader's last scroll or scrolling input the page counts as idle. */
 const IDLE_MS = 250;
+
+/** Keys that scroll the page; any other key leaves the reader idle. */
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+
+/** Input that may start a scroll before the first scroll event reports it. */
+const READER_INPUTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+
+/** A page step keeps this much of the previous page on screen, as Chromium's own does. */
+const PAGE_OVERLAP = 40;
+/** A page key pressed within this long of the last one continues from its target. */
+const PAGE_REPEAT_MS = 1000;
+
+/** Controls that take page keys and Space for themselves. */
+const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
 
 interface Anchor {
   element: Element;
@@ -80,13 +101,15 @@ export class FeedScroller {
   #anchor: Anchor | null = null;
   #frame = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
-  #lastReaderScroll = 0;
+  #readerActiveAt = 0;
   /** Where our own last correction scrolled to, so its scroll event is not the reader's. */
   #ownScrollTarget: number | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
   #focusInPinned = false;
+  /** Where the last page key is scrolling to, so a quick repeat continues from there. */
+  #page: { target: number; at: number } | null = null;
   #observer: ResizeObserver | null = null;
 
   constructor(days: () => FeedDay[]) {
@@ -112,13 +135,17 @@ export class FeedScroller {
     this.#observer.observe(document.body);
     for (const day of elements.feed.querySelectorAll<HTMLElement>(":scope > .day")) this.#observer.observe(day);
     window.addEventListener("scroll", this.#onScroll, { passive: true });
+    for (const type of READER_INPUTS) window.addEventListener(type, this.#onReaderInput, { capture: true, passive: true });
     window.addEventListener("resize", this.schedule);
+    window.addEventListener("keydown", this.#onKeydown);
     document.addEventListener("focusin", this.#onFocusChange);
     document.addEventListener("focusout", this.#onFocusChange);
     this.schedule();
     return () => {
       window.removeEventListener("scroll", this.#onScroll);
+      for (const type of READER_INPUTS) window.removeEventListener(type, this.#onReaderInput, { capture: true });
       window.removeEventListener("resize", this.schedule);
+      window.removeEventListener("keydown", this.#onKeydown);
       document.removeEventListener("focusin", this.#onFocusChange);
       document.removeEventListener("focusout", this.#onFocusChange);
       this.#observer?.disconnect();
@@ -141,13 +168,85 @@ export class FeedScroller {
     if (this.#frame === 0 && this.#elements !== null) this.#frame = requestAnimationFrame(this.#update);
   };
 
+  /**
+   * Mounts a day wherever it is in the feed and scrolls it to the reading line,
+   * so a control inside it can take focus. Resolves once the day is on screen.
+   */
+  async reveal(iso: string): Promise<void> {
+    const elements = this.#elements;
+    if (elements === null) return;
+    const days = this.#days();
+    const index = days.findIndex((day) => day.iso === iso);
+    if (index < 0) return;
+    const current = resolveWindow(days, this.keys);
+    if (index < current.first || index > current.last) {
+      // Just this day, with the same gaps the planner would leave around it; the
+      // next frame plans the rest of the window from the new scroll position.
+      const loaded = Math.max(current.loaded, Math.min(days.length, index + FEED_CHUNK_DAYS));
+      const offsets = dayOffsets(days.slice(0, loaded).map((day) => this.#heights.get(day.iso)?.height ?? null));
+      this.#anchor = null;
+      this.keys = windowKeys(days, { first: index, last: index, loaded });
+      this.probe = null;
+      this.gapAbove = offsets[index]!;
+      this.gapTop = 0;
+      this.gapBottom = offsets[loaded]! - offsets[index + 1]!;
+      await tick();
+    }
+    const day = elements.feed.querySelector<HTMLElement>(`:scope > .day[data-key="${iso}"]`);
+    if (day === null) return;
+    this.#anchor = null;
+    const line = elements.pinned()?.offsetHeight ?? 0;
+    window.scrollTo({ top: day.getBoundingClientRect().top + window.scrollY - line, behavior: "instant" });
+    this.schedule();
+  }
+
   #onScroll = (): void => {
+    if (this.#page !== null && Math.abs(window.scrollY - this.#page.target) < 1) this.#page = null;
     if (this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1) {
       this.#ownScrollTarget = null;
     } else {
-      this.#lastReaderScroll = performance.now();
+      this.#readerActiveAt = performance.now();
     }
     this.schedule();
+  };
+
+  #onReaderInput = (event: Event): void => {
+    if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
+    if (!(event instanceof KeyboardEvent)) this.#page = null;
+    this.#readerActiveAt = performance.now();
+  };
+
+  // A page step under the stuck card is a page less the card, as the scroll
+  // padding asks - but WebKit ignores that padding for page keys, and a full page
+  // would carry the next unread rows beneath the card. So the step is taken here,
+  // in every engine, whenever the page itself is what the key would scroll.
+  #onKeydown = (event: KeyboardEvent): void => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || !this.stuck) return;
+    const direction =
+      event.key === "PageDown" || (event.key === " " && !event.shiftKey)
+        ? 1
+        : event.key === "PageUp" || (event.key === " " && event.shiftKey)
+          ? -1
+          : 0;
+    if (direction === 0) return;
+    const active = document.activeElement;
+    const nothingFocused = active === null || active === document.body || active === document.documentElement;
+    // Space presses a focused control; page keys belong to fields, dialogs and
+    // the pinned card, which scrolls on its own once it outgrows its cap.
+    if (!nothingFocused) {
+      if (event.key === " " || active.closest(KEEPS_PAGE_KEYS) !== null) return;
+      if (this.#elements?.pinned()?.contains(active)) return;
+    }
+    event.preventDefault();
+    const visible = window.innerHeight - this.#readingLine();
+    const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
+    const now = performance.now();
+    const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    const target = Math.min(bottom, Math.max(0, from + direction * step));
+    this.#page = { target, at: now };
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: target, behavior: reduced ? "instant" : "smooth" });
   };
 
   #update = (): void => {
@@ -211,7 +310,7 @@ export class FeedScroller {
   // the next - and only while the reader is idle, because mounting it is exactly a
   // stale remount: the correction it causes would cancel a scroll in progress.
   #whenIdle(span: { first: number; last: number }): { first: number; last: number } | null {
-    const quietFor = performance.now() - this.#lastReaderScroll;
+    const quietFor = performance.now() - this.#readerActiveAt;
     if (quietFor >= IDLE_MS) return span;
     // Come back once the reader stops; no scroll event will ask again.
     clearTimeout(this.#idleTimer);
@@ -285,6 +384,8 @@ export class FeedScroller {
     anchor.dayTop += shift;
     anchor.line = line;
     if (Math.abs(correction) < 0.5) return;
+    // The correction cancels a smooth page step; the next key starts afresh.
+    this.#page = null;
     const target = window.scrollY + correction;
     this.#ownScrollTarget = target;
     window.scrollTo({ top: target, behavior: "instant" });
@@ -308,6 +409,10 @@ export class FeedScroller {
     const stuck = stuckRect !== null;
     if (stuck !== this.stuck) this.stuck = stuck;
     this.#stuckPadding = stuck ? `${Math.ceil(stuckRect.bottom)}px` : "";
+    // WebKit fires no focusout when the focused control is removed - a Stop that
+    // stopped its own timer - so every frame reads where focus actually is.
+    const pinned = this.#elements?.pinned() ?? null;
+    this.#focusInPinned = pinned !== null && pinned.contains(document.activeElement);
     this.#setScrollPadding(this.#focusInPinned ? "" : this.#stuckPadding);
     return stuckRect?.bottom ?? 0;
   }

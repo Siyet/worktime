@@ -127,6 +127,8 @@ make test      # run tests
 make e2e       # build, then run the Playwright suite against the binary
 ```
 
+The e2e suite runs in Chromium, and the Timer feed spec in WebKit as well: install both once with `cd web && npx playwright install chromium webkit`.
+
 ## License
 
 MIT

@@ -41,7 +41,7 @@ make build      # npm build + go build -> bin/worktime (frontend embedded via go
 ./bin/worktime --version # print linked application build metadata without opening the DB
 make test       # go test ./... + the vitest suite
 make test-hook  # the Claude Code hook (plain sh, covered by nothing else)
-make e2e        # builds the binary, then npx playwright test (e2e runs against bin/worktime!)
+make e2e        # builds the binary, then npx playwright test (e2e runs against bin/worktime!); needs `npx playwright install chromium webkit` once - the feed spec also runs in WebKit
 ```
 
 Packaged builds set all three build identity values, for example:

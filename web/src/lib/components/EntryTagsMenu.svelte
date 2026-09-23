@@ -2,6 +2,7 @@
   import { tick, untrack } from "svelte";
   import { updateEntry } from "../state/app.svelte";
   import { t } from "../i18n";
+  import { floatOutOfClip } from "../float-menu";
   import TagChips from "./TagChips.svelte";
   import TagPicker from "./TagPicker.svelte";
 
@@ -120,7 +121,7 @@
     {/if}
   </button>
   {#if open}
-    <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")}>
+    <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")} {@attach floatOutOfClip}>
       <TagPicker selected={draftTags} onchange={change} />
       <span class="menu-actions">
         <button type="button" onclick={() => cancelMenu(true)} disabled={saving}>{t("Cancel")}</button>

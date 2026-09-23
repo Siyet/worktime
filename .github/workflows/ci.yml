@@ -74,7 +74,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-fund --no-audit
         working-directory: web
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
         working-directory: web
       # The suite runs against the embedded build, so the binary has to be rebuilt
       # here or Playwright would test a stale UI.

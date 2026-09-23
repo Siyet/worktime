@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import { appState, projectByID, updateEntry } from "../state/app.svelte";
   import { t } from "../i18n";
+  import { floatOutOfClip } from "../float-menu";
 
   interface Props {
     entryID: string;
@@ -163,7 +164,14 @@
     {currentProject?.name ?? t("No project")}
   </button>
   {#if open}
-    <span class="entry-quick-menu project-menu" id={menuID} role="listbox" aria-label={t("Project")} aria-busy={saving}>
+    <span
+      class="entry-quick-menu project-menu"
+      id={menuID}
+      role="listbox"
+      aria-label={t("Project")}
+      aria-busy={saving}
+      {@attach floatOutOfClip}
+    >
       {#each options as option, index (option.id)}
         <button
           id={optionID(option.id)}

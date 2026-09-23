@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { descriptionKey, displayEntryDescription, entryDurationMs, sessionTag } from "./format";
+import { descriptionKey, displayEntryDescription, entryDurationMs, formatDay, sessionTag } from "./format";
 import type { TimeEntry } from "./types";
 
 function makeEntry(overrides: Partial<TimeEntry> = {}): TimeEntry {
@@ -61,5 +61,18 @@ describe("entryDurationMs", () => {
 describe("sessionTag", () => {
   it("matches the eight hex characters the server puts into entry names", () => {
     expect(sessionTag("AB12CD34-1111-2222-3333-444444444444")).toBe("ab12cd34");
+  });
+});
+
+describe("formatDay", () => {
+  const julyThird = new Date(2026, 6, 3, 12).getTime();
+
+  it("leaves the year out for the current year", () => {
+    expect(formatDay(julyThird, 2026)).not.toContain("2026");
+  });
+
+  it("spells the year out for any other year", () => {
+    expect(formatDay(julyThird, 2027)).toContain("2026");
+    expect(formatDay(new Date(2025, 11, 31, 12).getTime(), 2026)).toContain("2025");
   });
 });

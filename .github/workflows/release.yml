@@ -91,7 +91,7 @@ jobs:
           bash integrations/claude-code/wt-hook_test.sh
           dash integrations/claude-code/wt-statusline_test.sh
           bash integrations/claude-code/wt-statusline_test.sh
-          (cd web && npx playwright install --with-deps chromium)
+          (cd web && npx playwright install --with-deps chromium webkit)
           make build
           (cd web && npx playwright test)
 

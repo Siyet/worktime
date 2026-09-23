@@ -52,22 +52,21 @@ export interface TaskSuggestion {
   tags: string[];
 }
 
-/** How far back suggestions look: exactly what the Timer page itself shows. */
+/** How far back suggestions look: the last week of calendar days. */
 export const SUGGESTION_WINDOW_DAYS = 7;
 const MAX_SUGGESTIONS = 8;
 
 // suggestionWindowStart is the single definition of that window's lower edge: midnight
-// of the day SUGGESTION_WINDOW_DAYS-1 back. Every surface derives it from here so the
-// feed and the suggestions that claim to mirror it cannot drift apart.
+// of the day SUGGESTION_WINDOW_DAYS-1 back. Every surface that suggests - the start
+// form and the entry editor - derives it from here, so they cannot drift apart.
 //
-// It cuts at a day boundary rather than a rolling 168 hours because the feed groups its
-// results into calendar day cards - a rolling cut leaves the oldest card holding only
-// what happened after the current time of day. It also changes once a day rather than
-// once a second, which keeps the ticker out of every scan over the entry table.
-// Days are stepped through the Date constructor rather than by subtracting fixed
-// milliseconds: a DST day is 23 or 25 hours long, so a fixed subtraction lands the
-// window edge at 01:00 or at 23:00 the previous day for a week after each change -
-// which silently drops an hour of entries out of the feed, or grows an eighth card.
+// It cuts at a day boundary rather than a rolling 168 hours: a rolling cut would offer
+// only the part of the oldest day that happened after the current time of day. It
+// also changes once a day rather than once a second, which keeps the ticker out of
+// every scan over the entry table. Days are stepped through the Date constructor
+// rather than by subtracting fixed milliseconds: a DST day is 23 or 25 hours long, so
+// a fixed subtraction lands the window edge at 01:00 or at 23:00 the previous day for
+// a week after each change - which silently drops an hour of entries from the window.
 export function suggestionWindowStart(nowMs: number): number {
   const today = new Date(localDateISO(nowMs) + "T00:00");
   return new Date(today.getFullYear(), today.getMonth(), today.getDate() - (SUGGESTION_WINDOW_DAYS - 1)).getTime();
@@ -166,13 +165,13 @@ export function wallClockMs(entries: TimeEntry[], now: number): number {
   return total;
 }
 
-// taskSuggestions offers what the page already shows: everything since cutoff plus
-// anything still running. The instance has more than ten thousand entries, and a
-// suggestion from a year ago helps nobody.
+// taskSuggestions offers recent work: everything since cutoff plus anything still
+// running. The instance has more than ten thousand entries, and a suggestion from a
+// year ago helps nobody - even though the feed below the form now scrolls back to it.
 //
-// The caller passes the cutoff rather than "now" so that the suggestions and the feed
-// they claim to mirror cannot drift apart, and so that neither has to be recomputed
-// every second just to keep a window edge fresh.
+// The caller passes the cutoff rather than "now" so that every surface that suggests
+// uses the same window, and so that none has to be recomputed every second just to
+// keep a window edge fresh.
 export function taskSuggestions(entries: TimeEntry[], query: string, cutoff: number): TaskSuggestion[] {
   const needle = descriptionKey(query);
   if (needle === "") return [];

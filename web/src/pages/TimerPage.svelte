@@ -48,6 +48,8 @@
   import EntryEditor from "../lib/components/EntryEditor.svelte";
   import GroupEditor from "../lib/components/GroupEditor.svelte";
   import PinnedStrip from "../lib/components/PinnedStrip.svelte";
+  import DayRuler from "../lib/components/DayRuler.svelte";
+  import type { RulerTarget } from "../lib/ruler";
   import EntryProjectMenu from "../lib/components/EntryProjectMenu.svelte";
   import EntryTagsMenu from "../lib/components/EntryTagsMenu.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
@@ -106,6 +108,39 @@
     scroller.probeRange === null ? [] : days.slice(scroller.probeRange.first, scroller.probeRange.last + 1),
   );
   const currentYear = $derived(Number(todayISO.slice(0, 4)));
+
+  // The day ruler: wide windows with a mouse, and only once there is a day
+  // before today to navigate to.
+  const RULER_MEDIA = "(min-width: 85rem) and (hover: hover) and (pointer: fine)";
+  let rulerRoom = $state(false);
+  $effect(() => {
+    const query = window.matchMedia(RULER_MEDIA);
+    const update = () => (rulerRoom = query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  });
+  const showRuler = $derived(rulerRoom && (days.at(-1)?.iso ?? todayISO) < todayISO);
+
+  // Where a jump from the ruler landed: its card flashes a ring for a moment.
+  let landedISO = $state<string | null>(null);
+  let landedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function jumpTo(target: RulerTarget): Promise<void> {
+    clearTimeout(landedTimer);
+    landedISO = null;
+    if (target === "top") {
+      scroller.revealTop();
+      return;
+    }
+    await scroller.reveal(target);
+    // A frame apart, so a second jump to the same day restarts the ring.
+    await tick();
+    landedISO = target;
+    landedTimer = setTimeout(() => (landedISO = null), 1200);
+  }
+
+  $effect(() => () => clearTimeout(landedTimer));
 
   let feedElement = $state<HTMLElement | null>(null);
   let sentinelElement = $state<HTMLElement | null>(null);
@@ -642,6 +677,10 @@
   />
 {/if}
 
+{#if showRuler}
+  <DayRuler {days} timeOff={appState.timeOff} {todayISO} visible={scroller.visible} onjump={jumpTo} />
+{/if}
+
 <!-- One day of the feed, in a wrapper that is measured as a whole, margin
      included. -->
 {#snippet dayCard(day: FeedDay)}
@@ -651,7 +690,7 @@
   {@const groups = groupDayEntries(day.entries)}
   {@const tracked = dayTotal(groups)}
   {@const wall = wallClockMs(day.entries, 0)}
-  <div class="day" data-key={day.iso} {@attach scroller.observeDay}>
+  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} {@attach scroller.observeDay}>
     <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
       <div class="row" data-anchor>
         <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
@@ -787,6 +826,28 @@
      so the measured height is exactly the space the day takes up. */
   .day {
     display: flow-root;
+  }
+
+  /* Where a jump from the day ruler landed: a ring that fades on the card. */
+  .day.landed > .card {
+    animation: landed 1.2s ease-out;
+  }
+
+  @keyframes landed {
+    from {
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+
+    to {
+      box-shadow: 0 0 0 2px transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .day.landed > .card {
+      animation: none;
+      box-shadow: 0 0 0 2px var(--accent);
+    }
   }
 
   .item {

@@ -41,6 +41,7 @@ import {
   type FeedDay,
   type FeedWindowKeys,
 } from "./feed";
+import type { FeedSpot } from "./ruler";
 
 /** How long after the reader's last scroll or scrolling input the page counts as idle. */
 const IDLE_MS = 250;
@@ -62,6 +63,19 @@ const PAGE_REPEAT_MS = 1000;
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
 /** Where Space presses a control instead of scrolling the page (a link lets it scroll). */
 const PRESSES_SPACE = `button, summary, [role=button], ${KEEPS_PAGE_KEYS}`;
+/** A panel that scrolls itself - the day ruler: the wheel and keys there do not scroll the page. */
+const OWN_SCROLL = "[data-own-scroll]";
+/** A day card's bottom margin, until one is measured: the gap between two cards. */
+const DAY_GAP = 16;
+
+/** What of the feed is on screen, for the day ruler. */
+export interface FeedVisible {
+  /** At the reading line: the strip's bottom while it is stuck, else the window's top. */
+  top: FeedSpot;
+  bottom: FeedSpot;
+  /** The day at the reading line; null above the feed. */
+  current: string | null;
+}
 
 interface Anchor {
   element: Element;
@@ -100,6 +114,8 @@ export class FeedScroller {
   stuck = $state(false);
   /** True while stale days above the window wait to be measured again. */
   measuring = $state(false);
+  /** What of the feed is on screen, updated in the frame that plans the window. */
+  visible = $state<FeedVisible | null>(null);
 
   #days: () => FeedDay[];
   /** Last measurement per day; survives the day being unmounted. */
@@ -114,6 +130,8 @@ export class FeedScroller {
   #scrolledAt = 0;
   /** Where our own last correction scrolled to, so its scroll event is not the reader's. */
   #ownScrollTarget: number | null = null;
+  /** Where the scroller last put the page, unrounded: WebKit keeps whole pixels. */
+  #placedAt: number | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
@@ -124,6 +142,7 @@ export class FeedScroller {
   /** Where the last page key is scrolling to, so a quick repeat continues from there. */
   #page: { target: number; at: number } | null = null;
   #observer: ResizeObserver | null = null;
+  #dayGap: number | null = null;
 
   constructor(days: () => FeedDay[]) {
     this.#days = days;
@@ -217,8 +236,32 @@ export class FeedScroller {
     if (day === null) return;
     this.#anchor = null;
     const line = this.#stuckLine();
-    window.scrollTo({ top: day.getBoundingClientRect().top + window.scrollY - line, behavior: "instant" });
+    this.#place(day.getBoundingClientRect().top + window.scrollY - line);
     this.schedule();
+  }
+
+  /** The top of the page: the start form, the running timers and today. */
+  revealTop(): void {
+    this.#anchor = null;
+    this.#place(0);
+    this.schedule();
+  }
+
+  #place(top: number): void {
+    this.#placedAt = top;
+    window.scrollTo({ top, behavior: "instant" });
+  }
+
+  // Where the page is, as far as the next correction is concerned. WebKit drops
+  // the fraction of every scroll position, so a correction measured from the
+  // page's own scrollY would lose up to a pixel each time, and a day that is
+  // remeasured ten times would end up several pixels off. While the page is
+  // still where the scroller put it, give or take that fraction, the position
+  // it meant counts instead.
+  #scrollBase(): number {
+    const actual = window.scrollY;
+    const placed = this.#placedAt;
+    return placed !== null && Number.isInteger(actual) && Math.abs(actual - placed) < 1 ? placed : actual;
   }
 
   #onScroll = (): void => {
@@ -234,6 +277,7 @@ export class FeedScroller {
 
   #onReaderInput = (event: Event): void => {
     if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
+    if (event.target instanceof Element && event.target.closest(OWN_SCROLL) !== null) return;
     // Any other scroll moves the page away from where the last page step was
     // heading, so the next page key starts from wherever the page is.
     if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
@@ -338,6 +382,7 @@ export class FeedScroller {
     const gapAbove = offsets[probe?.first ?? next.first] ?? 0;
     const gapTop = probe === null ? 0 : (offsets[next.first] ?? 0) - (offsets[probe.last + 1] ?? 0);
     const gapBottom = (offsets[next.loaded] ?? 0) - (offsets[next.last + 1] ?? 0);
+    this.#updateVisible(feed, days, offsets, next.loaded, feedTop);
 
     const keys = windowKeys(days, next);
     if (keys.first !== this.keys.first || keys.last !== this.keys.last || keys.frontier !== this.keys.frontier) {
@@ -356,6 +401,51 @@ export class FeedScroller {
     // unmounts they cause against this position.
     this.#anchor = this.#findAnchor(feed, line);
   };
+
+  // Where the reading line and the window's bottom fall in the feed, from the
+  // same offsets the window is planned with, so days that are not mounted count
+  // at the height their gap gives them. Written only when it changed.
+  #updateVisible(feed: HTMLElement, days: FeedDay[], offsets: number[], loaded: number, feedTop: number): void {
+    const scrollY = window.scrollY;
+    const feedDocTop = feedTop + scrollY;
+    const gap = this.#measureDayGap(feed);
+    const spot = (docY: number): FeedSpot => {
+      const offset = docY - feedDocTop;
+      if (offset < 0 || loaded === 0) {
+        return { iso: null, fraction: feedDocTop > 0 ? Math.min(1, Math.max(0, docY / feedDocTop)) : 1, gap: false, next: days[0]?.iso ?? null };
+      }
+      let low = 0;
+      let high = loaded - 1;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if ((offsets[middle] ?? 0) <= offset) low = middle;
+        else high = middle - 1;
+      }
+      const start = offsets[low] ?? 0;
+      const height = (offsets[low + 1] ?? start) - start;
+      const card = Math.max(0, height - gap);
+      const into = offset - start;
+      const next = days[low + 1]?.iso ?? null;
+      if (into < card) return { iso: days[low]!.iso, fraction: into / card, gap: false, next };
+      const fraction = height > card ? Math.min(1, (into - card) / (height - card)) : 1;
+      return { iso: days[low]!.iso, fraction, gap: true, next };
+    };
+    const top = spot(scrollY + this.#readingLine());
+    const bottom = spot(scrollY + window.innerHeight);
+    const visible: FeedVisible = { top, bottom, current: top.iso };
+    if (this.visible === null || !sameVisible(this.visible, visible)) this.visible = visible;
+  }
+
+  // A day wrapper holds its card's bottom margin; the difference is the gap
+  // between two cards. Measured once, on the first mounted day.
+  #measureDayGap(feed: HTMLElement): number {
+    if (this.#dayGap !== null) return this.#dayGap;
+    const card = feed.querySelector<HTMLElement>(":scope > .day > .card");
+    if (card === null) return DAY_GAP;
+    const wrapper = card.parentElement!.getBoundingClientRect().height;
+    this.#dayGap = Math.max(0, wrapper - card.getBoundingClientRect().height);
+    return this.#dayGap;
+  }
 
   // The next stale days above the window, or null once there are none.
   #staleSpan(days: FeedDay[], first: number, width: number): { first: number; last: number } | null {
@@ -473,9 +563,9 @@ export class FeedScroller {
     if (Math.abs(correction) < 0.5) return;
     // The correction cancels a smooth page step; the next key starts afresh.
     this.#page = null;
-    const target = window.scrollY + correction;
+    const target = this.#scrollBase() + correction;
     this.#ownScrollTarget = target;
-    window.scrollTo({ top: target, behavior: "instant" });
+    this.#place(target);
   }
 
   #pinnedRect(): DOMRect | null {
@@ -572,4 +662,17 @@ export class FeedScroller {
     if (padding === "") root.removeProperty("--pinned-offset");
     else root.setProperty("--pinned-offset", padding);
   }
+}
+
+function sameSpot(left: FeedSpot, right: FeedSpot): boolean {
+  return (
+    left.iso === right.iso &&
+    left.gap === right.gap &&
+    left.next === right.next &&
+    Math.abs(left.fraction - right.fraction) < 1e-4
+  );
+}
+
+function sameVisible(left: FeedVisible, right: FeedVisible): boolean {
+  return left.current === right.current && sameSpot(left.top, right.top) && sameSpot(left.bottom, right.bottom);
 }

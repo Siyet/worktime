@@ -48,6 +48,8 @@
   import EntryEditor from "../lib/components/EntryEditor.svelte";
   import GroupEditor from "../lib/components/GroupEditor.svelte";
   import PinnedStrip from "../lib/components/PinnedStrip.svelte";
+  import DayRuler from "../lib/components/DayRuler.svelte";
+  import type { RulerTarget } from "../lib/ruler";
   import EntryProjectMenu from "../lib/components/EntryProjectMenu.svelte";
   import EntryTagsMenu from "../lib/components/EntryTagsMenu.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
@@ -106,6 +108,76 @@
     scroller.probeRange === null ? [] : days.slice(scroller.probeRange.first, scroller.probeRange.last + 1),
   );
   const currentYear = $derived(Number(todayISO.slice(0, 4)));
+
+  // The day ruler: wide windows with a mouse, and only once there is a day
+  // before today to navigate to.
+  const RULER_MEDIA = "(min-width: 85rem) and (hover: hover) and (pointer: fine)";
+  let rulerRoom = $state(false);
+  $effect(() => {
+    const query = window.matchMedia(RULER_MEDIA);
+    const update = () => (rulerRoom = query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  });
+  const showRuler = $derived(rulerRoom && (days.at(-1)?.iso ?? todayISO) < todayISO);
+
+  // Where a jump from the ruler landed: its card flashes a ring for a moment.
+  let landedISO = $state<string | null>(null);
+  let landedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // A mouse jump also moves focus to where it landed, as an in-page link does:
+  // Tab goes on from the day, the arrow keys scroll the page rather than the
+  // ruler, and a field typed in before the jump lets go of the next Space.
+  async function jumpTo(target: RulerTarget, takeFocus: boolean): Promise<void> {
+    clearTimeout(landedTimer);
+    landedISO = null;
+    if (target === "top") {
+      scroller.revealTop();
+      if (takeFocus && topLanding !== null && startForm !== null) focusLanded(topLanding, startForm);
+      return;
+    }
+    await scroller.reveal(target);
+    const day = feedElement?.querySelector<HTMLElement>(`:scope > .day[data-key="${target}"]`) ?? null;
+    if (takeFocus && day !== null) focusLanded(day);
+    // A frame apart, so a second jump to the same day restarts the ring.
+    await tick();
+    landedISO = target;
+    landedTimer = setTimeout(() => (landedISO = null), 1200);
+  }
+
+  // Focus where a jump landed: a day, or the mark above the start form. WebKit
+  // starts Tab over from the top of the page when focus is on an element outside
+  // the tab order, so Tab from there is taken to the first control of what
+  // landed here, as the ruler does after Enter.
+  let topLanding = $state<HTMLElement | null>(null);
+
+  function focusLanded(landing: HTMLElement, controls: HTMLElement = landing): void {
+    if (document.activeElement === landing) return;
+    // Focusable only while it holds the landing, so a click on a card does not
+    // focus the card.
+    const lent = !landing.hasAttribute("tabindex");
+    if (lent) landing.tabIndex = -1;
+    const onkeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.shiftKey || event.target !== landing) return;
+      const control = controls.querySelector<HTMLElement>(`:is(button, [href], input, [tabindex="0"])`);
+      if (control === null) return;
+      event.preventDefault();
+      control.focus();
+    };
+    landing.addEventListener("keydown", onkeydown);
+    landing.addEventListener(
+      "blur",
+      () => {
+        landing.removeEventListener("keydown", onkeydown);
+        if (lent) landing.removeAttribute("tabindex");
+      },
+      { once: true },
+    );
+    landing.focus({ preventScroll: true });
+  }
+
+  $effect(() => () => clearTimeout(landedTimer));
 
   let feedElement = $state<HTMLElement | null>(null);
   let sentinelElement = $state<HTMLElement | null>(null);
@@ -594,6 +666,9 @@
   </div>
 {/if}
 
+<!-- Where focus goes after a mouse jump to the top of the page. WebKit scrolls
+     no page for the arrow keys while a form itself has focus. -->
+<div class="top-landing" tabindex="-1" bind:this={topLanding}></div>
 <form class="card row" bind:this={startForm} onsubmit={submitStart}>
   <DescriptionInput
     bind:value={description}
@@ -642,6 +717,17 @@
   />
 {/if}
 
+{#if showRuler}
+  <DayRuler
+    {days}
+    timeOff={appState.timeOff}
+    {todayISO}
+    visible={scroller.visible}
+    scrolledAt={() => scroller.scrolledAt}
+    onjump={jumpTo}
+  />
+{/if}
+
 <!-- One day of the feed, in a wrapper that is measured as a whole, margin
      included. -->
 {#snippet dayCard(day: FeedDay)}
@@ -651,7 +737,7 @@
   {@const groups = groupDayEntries(day.entries)}
   {@const tracked = dayTotal(groups)}
   {@const wall = wallClockMs(day.entries, 0)}
-  <div class="day" data-key={day.iso} {@attach scroller.observeDay}>
+  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} {@attach scroller.observeDay}>
     <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
       <div class="row" data-anchor>
         <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
@@ -787,6 +873,35 @@
      so the measured height is exactly the space the day takes up. */
   .day {
     display: flow-root;
+  }
+
+  /* Focused only as the place a jump landed, which its ring (or the top of the
+     page) already shows. */
+  .day:focus,
+  .top-landing:focus {
+    outline: none;
+  }
+
+  /* Where a jump from the day ruler landed: a ring that fades on the card. */
+  .day.landed > .card {
+    animation: landed 1.2s ease-out;
+  }
+
+  @keyframes landed {
+    from {
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+
+    to {
+      box-shadow: 0 0 0 2px transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .day.landed > .card {
+      animation: none;
+      box-shadow: 0 0 0 2px var(--accent);
+    }
   }
 
   .item {

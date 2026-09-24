@@ -268,6 +268,15 @@ const ru: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} записей шли одновременно, по часам это {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} по часам, {tracked} затрекано - параллельная работа считается один раз",
+  Days: "Дни",
+  Today: "Сегодня",
+  "No entries": "Нет записей",
+  "no entries": "нет записей",
+  "1 entry": "1 запись",
+  "jumps to the top": "переход в начало",
+  "jumps to {day}": "переход: {day}",
+  "{month}, go to the newest day with entries": "{month}, перейти к последнему дню с записями",
+  "{month}, no entries, {jump}": "{month}, нет записей, {jump}",
 };
 
 const es: Dictionary = {
@@ -530,6 +539,15 @@ const es: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} registros se solaparon; en reloj son {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} en reloj, {tracked} registrados - el trabajo en paralelo se cuenta una vez",
+  Days: "Días",
+  Today: "Hoy",
+  "No entries": "Sin registros",
+  "no entries": "sin registros",
+  "1 entry": "1 registro",
+  "jumps to the top": "va al principio",
+  "jumps to {day}": "va a {day}",
+  "{month}, go to the newest day with entries": "{month}, ir al día más reciente con registros",
+  "{month}, no entries, {jump}": "{month}, sin registros, {jump}",
 };
 
 const de: Dictionary = {
@@ -791,6 +809,15 @@ const de: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} Einträge überschnitten sich; nach der Uhr sind das {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} nach der Uhr, {tracked} erfasst - parallele Arbeit zählt einmal",
+  Days: "Tage",
+  Today: "Heute",
+  "No entries": "Keine Einträge",
+  "no entries": "keine Einträge",
+  "1 entry": "1 Eintrag",
+  "jumps to the top": "springt nach oben",
+  "jumps to {day}": "springt zu {day}",
+  "{month}, go to the newest day with entries": "{month}, zum neuesten Tag mit Einträgen",
+  "{month}, no entries, {jump}": "{month}, keine Einträge, {jump}",
 };
 
 const fr: Dictionary = {
@@ -1054,6 +1081,15 @@ const fr: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} entrées se chevauchaient ; à l'horloge cela fait {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} à l'horloge, {tracked} suivies - le travail en parallèle est compté une fois",
+  Days: "Jours",
+  Today: "Aujourd'hui",
+  "No entries": "Aucune entrée",
+  "no entries": "aucune entrée",
+  "1 entry": "1 entrée",
+  "jumps to the top": "va en haut",
+  "jumps to {day}": "va à {day}",
+  "{month}, go to the newest day with entries": "{month}, aller au jour le plus récent avec des entrées",
+  "{month}, no entries, {jump}": "{month}, aucune entrée, {jump}",
 };
 
 const zh: Dictionary = {
@@ -1312,6 +1348,15 @@ const zh: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} 条记录同时进行，按时钟计为 {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "按时钟 {wall}，记录 {tracked} - 并行的工作只计一次",
+  Days: "日期",
+  Today: "今天",
+  "No entries": "没有记录",
+  "no entries": "没有记录",
+  "1 entry": "1 条记录",
+  "jumps to the top": "跳到顶部",
+  "jumps to {day}": "跳到 {day}",
+  "{month}, go to the newest day with entries": "{month}，跳到最近有记录的一天",
+  "{month}, no entries, {jump}": "{month}，没有记录，{jump}",
 };
 
 const dictionaries: Record<Exclude<Locale, "en">, Dictionary> = { ru, es, de, fr, zh };

@@ -41,14 +41,15 @@ import {
   type FeedDay,
   type FeedWindowKeys,
 } from "./feed";
+import type { FeedSpot } from "./ruler";
 
 /** How long after the reader's last scroll or scrolling input the page counts as idle. */
 const IDLE_MS = 250;
 
 /** Keys that scroll the page; any other key leaves the reader idle. */
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
-/** The scroll keys the scroller pages with itself while running timers are pinned. */
-const PAGE_KEYS = new Set(["PageUp", "PageDown", " "]);
+/** The scroll keys the scroller takes itself: a page step, and the ends of the page. */
+const PAGE_KEYS = new Set(["PageUp", "PageDown", " ", "Home", "End"]);
 
 /** Input that may start a scroll before the first scroll event reports it. */
 const READER_INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydown"] as const;
@@ -57,11 +58,30 @@ const READER_INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydo
 const PAGE_OVERLAP = 40;
 /** A page key pressed within this long of the last one continues from its target. */
 const PAGE_REPEAT_MS = 1000;
+/** How long after a jump a scroll nobody asked for is taken back, and how recent a scroll counts as the page still moving. */
+const JUMP_HOLD_MS = 200;
+/** The most such a scroll moves: the tail of a smooth scroll is a frame's worth, a drag is not. */
+const JUMP_TAIL_PX = 150;
+/** How long a key's step is carried on through corrections; one that old has stalled. */
+const PAGE_CARRY_MS = 2000;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
-/** Where Space presses a control instead of scrolling the page (a link lets it scroll). */
+/** Where Space presses a control instead of scrolling the page (a link, or a day focused after a jump, lets it scroll). */
 const PRESSES_SPACE = `button, summary, [role=button], ${KEEPS_PAGE_KEYS}`;
+/** A panel that scrolls itself - the day ruler: the wheel and keys there do not scroll the page. */
+const OWN_SCROLL = "[data-own-scroll]";
+/** A day card's bottom margin, until one is measured: the gap between two cards. */
+const DAY_GAP = 16;
+
+/** What of the feed is on screen, for the day ruler. */
+export interface FeedVisible {
+  /** At the reading line: the strip's bottom while it is stuck, else the window's top. */
+  top: FeedSpot;
+  bottom: FeedSpot;
+  /** The day at the reading line; null above the feed. */
+  current: string | null;
+}
 
 interface Anchor {
   element: Element;
@@ -100,6 +120,8 @@ export class FeedScroller {
   stuck = $state(false);
   /** True while stale days above the window wait to be measured again. */
   measuring = $state(false);
+  /** What of the feed is on screen, updated in the frame that plans the window. */
+  visible = $state<FeedVisible | null>(null);
 
   #days: () => FeedDay[];
   /** Last measurement per day; survives the day being unmounted. */
@@ -114,6 +136,12 @@ export class FeedScroller {
   #scrolledAt = 0;
   /** Where our own last correction scrolled to, so its scroll event is not the reader's. */
   #ownScrollTarget: number | null = null;
+  /** Where the scroller last put the page, unrounded: WebKit keeps whole pixels. */
+  #placedAt: number | null = null;
+  /** The page's scroll position as a scroll event, a placement or a captured anchor last saw it. */
+  #seenScroll: number | null = null;
+  /** Where the last jump put the page, and when; corrections keep it current. */
+  #jump: { top: number; at: number } | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
@@ -124,9 +152,18 @@ export class FeedScroller {
   /** Where the last page key is scrolling to, so a quick repeat continues from there. */
   #page: { target: number; at: number } | null = null;
   #observer: ResizeObserver | null = null;
+  #dayGap: number | null = null;
 
   constructor(days: () => FeedDay[]) {
     this.#days = days;
+  }
+
+  /**
+   * When the reader last scrolled the page (performance.now), not counting the
+   * scroller's own corrections or input inside a panel that scrolls itself.
+   */
+  get scrolledAt(): number {
+    return this.#scrolledAt;
   }
 
   /** The mounted range, resolved from the keys against the current days. */
@@ -217,11 +254,59 @@ export class FeedScroller {
     if (day === null) return;
     this.#anchor = null;
     const line = this.#stuckLine();
-    window.scrollTo({ top: day.getBoundingClientRect().top + window.scrollY - line, behavior: "instant" });
+    this.#jumpTo(day.getBoundingClientRect().top + window.scrollY - line);
     this.schedule();
   }
 
+  /** The top of the page: the start form, the running timers and today. */
+  revealTop(): void {
+    this.#anchor = null;
+    this.#jumpTo(0);
+    this.schedule();
+  }
+
+  // A jump while the page is still moving - a key's smooth step, a fling - cuts
+  // that scroll short, and Chromium, which runs it off the main thread, can still
+  // move the page a frame later; the reader did nothing, so #onScroll takes that
+  // back. A key's step under way goes where the jump went instead: carried on
+  // after a correction, it would take the page back.
+  #jumpTo(top: number): void {
+    const now = performance.now();
+    const moving = this.#page !== null || now - this.#scrolledAt < JUMP_HOLD_MS;
+    this.#page = null;
+    this.#place(top);
+    this.#jump = moving ? { top: this.#scrollBase(), at: now } : null;
+  }
+
+  #place(top: number): void {
+    this.#placedAt = top;
+    window.scrollTo({ top, behavior: "instant" });
+    this.#seenScroll = this.#scrollBase();
+  }
+
+  // Where the page is, as far as the next correction is concerned. WebKit drops
+  // the fraction of every scroll position, so a correction measured from the
+  // page's own scrollY would lose up to a pixel each time, and a day that is
+  // remeasured ten times would end up several pixels off. While the page is
+  // still where the scroller put it, give or take that fraction, the position
+  // it meant counts instead.
+  #scrollBase(): number {
+    const actual = window.scrollY;
+    const placed = this.#placedAt;
+    return placed !== null && Number.isInteger(actual) && Math.abs(actual - placed) < 1 ? placed : actual;
+  }
+
   #onScroll = (): void => {
+    // The scroll a jump cut short, moving the page a frame later (see #jumpTo).
+    const jump = this.#jump;
+    const own = this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1;
+    const moved = Math.abs(window.scrollY - (jump?.top ?? 0));
+    if (jump !== null && !own && performance.now() - jump.at < JUMP_HOLD_MS && moved >= 1 && moved < JUMP_TAIL_PX) {
+      this.#ownScrollTarget = jump.top;
+      this.#place(jump.top);
+      return;
+    }
+    this.#seenScroll = this.#scrollBase();
     if (this.#page !== null && Math.abs(window.scrollY - this.#page.target) < 1) this.#page = null;
     if (this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1) {
       this.#ownScrollTarget = null;
@@ -234,6 +319,9 @@ export class FeedScroller {
 
   #onReaderInput = (event: Event): void => {
     if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
+    if (event.target instanceof Element && event.target.closest(OWN_SCROLL) !== null) return;
+    // The reader is scrolling on from the jump.
+    this.#jump = null;
     // Any other scroll moves the page away from where the last page step was
     // heading, so the next page key starts from wherever the page is.
     if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
@@ -259,39 +347,55 @@ export class FeedScroller {
   // would carry the next unread rows beneath the strip. So the step is taken here,
   // in every engine, whenever the page itself is what the key would scroll. Also
   // before the strip sticks: the step that sticks it must not bury rows either.
+  // With no strip at all too: a correction landing while the page is on its way
+  // - the days above a far jump being measured, for seconds - cancels a smooth
+  // scroll, and one taken here is carried on (see #keepAnchor) where the
+  // browser's own would stop dead. Home and End are jumps, instant like the
+  // ruler's: a smooth scroll over years of days would be restarted from rest by
+  // every correction on the way, and End would chase a bottom that keeps growing.
   #onKeydown = (event: KeyboardEvent): void => {
-    const pinned = this.#elements?.pinned() ?? null;
-    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || pinned === null) return;
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || this.#elements === null) return;
     const direction =
-      event.key === "PageDown" || (event.key === " " && !event.shiftKey)
+      event.key === "PageDown" || event.key === "End" || (event.key === " " && !event.shiftKey)
         ? 1
-        : event.key === "PageUp" || (event.key === " " && event.shiftKey)
+        : event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)
           ? -1
           : 0;
     if (direction === 0) return;
+    const pinned = this.#elements.pinned();
     const active = document.activeElement;
     const nothingFocused = active === null || active === document.body || active === document.documentElement;
     // Space presses a focused control; page keys belong to fields, dialogs and
     // an open overlay of the strip while it can still scroll that way.
     if (!nothingFocused) {
-      if (event.key === " " || active.closest(KEEPS_PAGE_KEYS) !== null) return;
-      const overlay = pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
+      if ((event.key === " " && active.closest(PRESSES_SPACE) !== null) || active.closest(KEEPS_PAGE_KEYS) !== null) return;
+      const overlay = pinned !== null && pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
       if (overlay !== null) {
         const room = direction > 0 ? overlay.scrollHeight - overlay.clientHeight - overlay.scrollTop : overlay.scrollTop;
         if (room > 1) return;
       }
     }
     event.preventDefault();
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    if (event.key === "Home" || event.key === "End") {
+      this.#anchor = null;
+      this.#jumpTo(event.key === "Home" ? 0 : bottom);
+      this.schedule();
+      return;
+    }
+    const now = performance.now();
     const visible = window.innerHeight - this.#stuckLine();
     const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
-    const now = performance.now();
     const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
-    const bottom = document.documentElement.scrollHeight - window.innerHeight;
     const target = Math.min(bottom, Math.max(0, from + direction * step));
     this.#page = { target, at: now };
+    this.#stepPage(target);
+  };
+
+  #stepPage(target: number): void {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: target, behavior: reduced ? "instant" : "smooth" });
-  };
+  }
 
   #update = (): void => {
     this.#frame = 0;
@@ -314,6 +418,11 @@ export class FeedScroller {
         this.#releaseCard();
       }
     }
+    // A scroll that no wheel, key or touch announced - a scrollbar drag, Safari's
+    // status-bar tap - holds the card only from its first frame, and a sync merge
+    // can land in that same frame: held first, the card absorbs it below instead
+    // of a correction cancelling the scroll.
+    if (this.#heldCard === null && this.stuck && this.#pinnedRect() !== null) this.#holdCard();
     // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.
@@ -323,12 +432,20 @@ export class FeedScroller {
     const feedTop = feed.getBoundingClientRect().top;
     const current = resolveWindow(days, this.keys);
     const heightOf = (day: FeedDay) => this.#heights.get(day.iso)?.height ?? null;
+    const heights = days.slice(0, current.loaded).map(heightOf);
+    // The viewport in the terms of the offsets about to be planned with, which
+    // are not always the ones the page was laid out with: measuring a day moves
+    // the estimate every unmeasured day above it stands in for, and after a far
+    // jump that is a thousand days moving a few pixels each. Planned from the page
+    // alone, the window would leave the day the reader is at; this way the gaps
+    // written from the new offsets move that day, and the anchor takes it back.
+    const drift = this.#drift(feed, days, dayOffsets(heights), feedTop);
     const next = planFeedWindow({
       window: current,
       total: days.length,
-      heights: days.slice(0, current.loaded).map(heightOf),
-      viewTop: -feedTop,
-      viewBottom: window.innerHeight - feedTop,
+      heights,
+      viewTop: drift - feedTop,
+      viewBottom: drift + window.innerHeight - feedTop,
     });
     // Gaps come from the heights of the next window: days that are about to be
     // mounted leave the gap in the same flush that mounts them.
@@ -338,6 +455,7 @@ export class FeedScroller {
     const gapAbove = offsets[probe?.first ?? next.first] ?? 0;
     const gapTop = probe === null ? 0 : (offsets[next.first] ?? 0) - (offsets[probe.last + 1] ?? 0);
     const gapBottom = (offsets[next.loaded] ?? 0) - (offsets[next.last + 1] ?? 0);
+    this.#updateVisible(feed, days, offsets, next.loaded, feedTop - drift);
 
     const keys = windowKeys(days, next);
     if (keys.first !== this.keys.first || keys.last !== this.keys.last || keys.frontier !== this.keys.frontier) {
@@ -355,7 +473,68 @@ export class FeedScroller {
     // microtask after this callback, so the ResizeObserver compares the mounts and
     // unmounts they cause against this position.
     this.#anchor = this.#findAnchor(feed, line);
+    this.#seenScroll = this.#scrollBase();
   };
+
+  // Where the reading line and the window's bottom fall in the feed, from the
+  // same offsets the window is planned with, so days that are not mounted count
+  // at the height their gap gives them. Written only when it changed.
+  #updateVisible(feed: HTMLElement, days: FeedDay[], offsets: number[], loaded: number, feedTop: number): void {
+    const scrollY = window.scrollY;
+    const feedDocTop = feedTop + scrollY;
+    const gap = this.#measureDayGap(feed);
+    const spot = (docY: number): FeedSpot => {
+      const offset = docY - feedDocTop;
+      if (offset < 0 || loaded === 0) {
+        return { iso: null, fraction: feedDocTop > 0 ? Math.min(1, Math.max(0, docY / feedDocTop)) : 1, gap: false, next: days[0]?.iso ?? null };
+      }
+      let low = 0;
+      let high = loaded - 1;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if ((offsets[middle] ?? 0) <= offset) low = middle;
+        else high = middle - 1;
+      }
+      const start = offsets[low] ?? 0;
+      const height = (offsets[low + 1] ?? start) - start;
+      const card = Math.max(0, height - gap);
+      const into = offset - start;
+      const next = days[low + 1]?.iso ?? null;
+      if (into < card) return { iso: days[low]!.iso, fraction: into / card, gap: false, next };
+      const fraction = height > card ? Math.min(1, (into - card) / (height - card)) : 1;
+      return { iso: days[low]!.iso, fraction, gap: true, next };
+    };
+    const top = spot(scrollY + this.#readingLine());
+    const bottom = spot(scrollY + window.innerHeight);
+    // In the gap after a card the reader is looking at the next one: a jump puts
+    // a card's top within a pixel of the line, on either side of it.
+    const current = top.gap && top.next !== null ? top.next : top.iso;
+    const visible: FeedVisible = { top, bottom, current };
+    if (this.visible === null || !sameVisible(this.visible, visible)) this.visible = visible;
+  }
+
+  // How far a mounted day's planned offset is from where the page has it: the
+  // day at the reading line, or else the first one mounted.
+  #drift(feed: HTMLElement, days: FeedDay[], offsets: number[], feedTop: number): number {
+    const anchored = this.#anchor?.day;
+    const day = anchored?.isConnected ? anchored : feed.querySelector(":scope > .day");
+    const key = day instanceof HTMLElement ? day.dataset.key : undefined;
+    if (day == null || key === undefined) return 0;
+    const index = resolveSpan(days, key, key).first;
+    if (days[index]?.iso !== key || index >= offsets.length - 1) return 0;
+    return offsets[index]! - (day.getBoundingClientRect().top - feedTop);
+  }
+
+  // A day wrapper holds its card's bottom margin; the difference is the gap
+  // between two cards. Measured once, on the first mounted day.
+  #measureDayGap(feed: HTMLElement): number {
+    if (this.#dayGap !== null) return this.#dayGap;
+    const card = feed.querySelector<HTMLElement>(":scope > .day > .card");
+    if (card === null) return DAY_GAP;
+    const wrapper = card.parentElement!.getBoundingClientRect().height;
+    this.#dayGap = Math.max(0, wrapper - card.getBoundingClientRect().height);
+    return this.#dayGap;
+  }
 
   // The next stale days above the window, or null once there are none.
   #staleSpan(days: FeedDay[], first: number, width: number): { first: number; last: number } | null {
@@ -471,11 +650,35 @@ export class FeedScroller {
     anchor.dayTop += shift;
     anchor.line = line;
     if (Math.abs(correction) < 0.5) return;
-    // The correction cancels a smooth page step; the next key starts afresh.
-    this.#page = null;
-    const target = window.scrollY + correction;
+    const target = this.#correctionBase() + correction;
     this.#ownScrollTarget = target;
-    window.scrollTo({ top: target, behavior: "instant" });
+    this.#place(target);
+    if (this.#jump !== null) this.#jump.top = this.#scrollBase();
+    // The correction cancels a key's smooth step under way: it goes on from
+    // here, to the same place in the feed - unless it is so old it has stalled,
+    // when carrying it on would move the page by itself.
+    const page = this.#page;
+    if (page === null) return;
+    if (performance.now() - page.at > PAGE_CARRY_MS) {
+      this.#page = null;
+      return;
+    }
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    page.target = Math.min(bottom, Math.max(0, page.target + correction));
+    if (Math.abs(window.scrollY - page.target) >= 1) this.#stepPage(page.target);
+  }
+
+  // Where a correction starts from. A layout that shortens the page under the
+  // reader - gaps rewritten after a far jump - has the browser pull the scroll up
+  // to the page's new end before any scroll event reports it. The end moved, not
+  // the reader, so that pull is part of what the correction undoes: it starts
+  // from where the page was.
+  #correctionBase(): number {
+    const base = this.#scrollBase();
+    const seen = this.#seenScroll;
+    if (seen === null || base >= seen - 0.5) return base;
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    return base >= bottom - 1 ? seen : base;
   }
 
   #pinnedRect(): DOMRect | null {
@@ -572,4 +775,17 @@ export class FeedScroller {
     if (padding === "") root.removeProperty("--pinned-offset");
     else root.setProperty("--pinned-offset", padding);
   }
+}
+
+function sameSpot(left: FeedSpot, right: FeedSpot): boolean {
+  return (
+    left.iso === right.iso &&
+    left.gap === right.gap &&
+    left.next === right.next &&
+    Math.abs(left.fraction - right.fraction) < 1e-4
+  );
+}
+
+function sameVisible(left: FeedVisible, right: FeedVisible): boolean {
+  return left.current === right.current && sameSpot(left.top, right.top) && sameSpot(left.bottom, right.bottom);
 }

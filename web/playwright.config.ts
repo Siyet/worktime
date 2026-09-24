@@ -13,7 +13,8 @@ export default defineConfig({
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     // The feed keeps the reader's place by hand because Safari has no scroll
-    // anchoring, so its specs run in WebKit as well.
-    { name: "webkit", testMatch: /feed\.spec\.ts/, use: { ...devices["Desktop Safari"], locale: "en-US" } },
+    // anchoring, so its specs - and the day ruler's, which jumps it - run in
+    // WebKit as well.
+    { name: "webkit", testMatch: /(feed|ruler)\.spec\.ts/, use: { ...devices["Desktop Safari"], locale: "en-US" } },
   ],
 });

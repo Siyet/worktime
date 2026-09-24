@@ -302,11 +302,11 @@ test.describe("day ruler", () => {
     const height = (selector: string) => page.locator(selector).first().evaluate((element) => element.getBoundingClientRect().height);
     expect(await height(".dr-li")).toBe(20);
     expect(await height(".dr-mhead")).toBe(28);
-    const second = page.locator(".dr-month").nth(1);
-    const track = await page.locator(".dr-track").evaluate((element) => element.getBoundingClientRect().top);
-    const monthTop = await second.evaluate((element) => element.getBoundingClientRect().top);
-    const rows = await page.locator(".dr-month").first().locator(".dr-li").count();
-    expect(monthTop - track).toBe(28 + rows * 20);
+    // A whole month, header and rows: the model's height for it. The first month
+    // is the current one, which never has a year row above it.
+    const month = page.locator(".dr-month").first();
+    const rows = await month.locator(".dr-li").count();
+    expect(await month.evaluate((element) => element.getBoundingClientRect().height)).toBe(28 + rows * 20);
     expect(await pageErrors(page)).toEqual([]);
   });
 

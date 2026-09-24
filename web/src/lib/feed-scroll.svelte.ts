@@ -457,7 +457,10 @@ export class FeedScroller {
     const held = this.#heldCard;
     if (absorb && !still && held !== null && held.isConnected) {
       const height = parseFloat(held.style.height) || 0;
-      const absorbed = Math.min(shift, height);
+      // Growing, the card must not push the strip's box back below its stick
+      // point: the strip would let go for a frame and the card would snap back
+      // with nothing to correct it. Only the room past that point is taken.
+      const absorbed = Math.max(Math.min(shift, height), -this.#stuckRoom());
       if (Math.abs(absorbed) >= 0.5) {
         held.style.height = `${height - absorbed}px`;
         shift -= absorbed;
@@ -473,6 +476,15 @@ export class FeedScroller {
     const target = window.scrollY + correction;
     this.#ownScrollTarget = target;
     window.scrollTo({ top: target, behavior: "instant" });
+  }
+
+  // How far the strip's box is past its natural place in the flow: how much the
+  // content above it could still grow before it would stop being stuck.
+  #stuckRoom(): number {
+    const pinned = this.#elements?.pinned() ?? null;
+    const sentinel = this.#elements?.sentinel() ?? null;
+    if (pinned === null || sentinel === null) return 0;
+    return Math.max(0, pinned.getBoundingClientRect().top - sentinel.getBoundingClientRect().top - 1);
   }
 
   #pinnedRect(): DOMRect | null {

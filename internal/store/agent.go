@@ -1363,11 +1363,14 @@ func tombstoneReplacedAgentEntry(ctx context.Context, transaction *sql.Tx, userI
 }
 
 // loadSessionTimeline reads every row of one session, deleted or not, in start
-// order.
+// order. The index is named because SQLite otherwise walks the user's whole
+// history in start order to get the sort for free - tens of milliseconds per
+// session for a large account - where one session is a handful of rows.
 func loadSessionTimeline(ctx context.Context, transaction *sql.Tx, userID, sessionID string) (*sessionTimeline, error) {
 	rows, err := transaction.QueryContext(ctx, `
 		SELECT id, started_at, stopped_at, deleted_at IS NOT NULL, server_seq, description, project_id, agent_paused_from
-		FROM time_entries WHERE user_id = ? AND agent_session_id = ?
+		FROM time_entries INDEXED BY idx_time_entries_agent_session
+		WHERE user_id = ? AND agent_session_id = ?
 		ORDER BY started_at, id`, userID, sessionID)
 	if err != nil {
 		return nil, err
@@ -1652,8 +1655,9 @@ func renameSessionEntries(ctx context.Context, transaction *sql.Tx, userID strin
 	if previousName == newName {
 		return 0, nil, nil
 	}
+	// The index is named for the same reason as in loadSessionTimeline.
 	rows, err := transaction.QueryContext(ctx, `
-		SELECT id, description FROM time_entries
+		SELECT id, description FROM time_entries INDEXED BY idx_time_entries_agent_session
 		WHERE user_id = ? AND agent_session_id = ? AND deleted_at IS NULL
 		ORDER BY started_at`, userID, session.ID)
 	if err != nil {

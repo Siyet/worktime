@@ -287,6 +287,29 @@ test.describe("day ruler", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
+  test("rows keep the model's height whatever the browser's font size", async ({ page, server, browserName }) => {
+    test.skip(browserName !== "chromium", "the default font size is set through the Chromium protocol");
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // A reader's larger default font: rem-sized rows would outgrow the model's
+    // offsets, and following the page would lose the day at the reading line.
+    const session = await page.context().newCDPSession(page);
+    await session.send("Page.setFontSizes", { fontSizes: { standard: 20, fixed: 16 } });
+    // 85rem is 1700px at that size.
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await open(page, server.url);
+    expect(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(20);
+    const height = (selector: string) => page.locator(selector).first().evaluate((element) => element.getBoundingClientRect().height);
+    expect(await height(".dr-li")).toBe(20);
+    expect(await height(".dr-mhead")).toBe(28);
+    const second = page.locator(".dr-month").nth(1);
+    const track = await page.locator(".dr-track").evaluate((element) => element.getBoundingClientRect().top);
+    const monthTop = await second.evaluate((element) => element.getBoundingClientRect().top);
+    const rows = await page.locator(".dr-month").first().locator(".dr-li").count();
+    expect(monthTop - track).toBe(28 + rows * 20);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
   test("a tick under the pointer grows and comes up to full strength", async ({ page, server }) => {
     await trackErrors(page);
     await seedHistory(server.url);

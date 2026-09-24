@@ -10,7 +10,8 @@ import { entryDurationMs } from "./format";
 import { wallClockMs } from "./tasks";
 import type { TimeOffKind } from "./types";
 
-/** One calendar day, in px - the --dr-pitch of the component. */
+/** One calendar day, in px - the --dr-pitch of the component, which is px too:
+ * in rem, a browser's larger default font would stretch the rows past the model. */
 export const RULER_PITCH = 20;
 /** A month header, and a past year's row above its months - --dr-head. */
 export const RULER_HEAD = 28;
@@ -156,7 +157,8 @@ export function buildRuler(
       month: cursor.getMonth(),
       date: cursor.getDate(),
       weekday,
-      // Every group's total, summed: the entries' durations.
+      // The header's two figures: clock time with parallel work counted once,
+      // and every entry's duration, summed.
       clockMs: day === undefined ? 0 : wallClockMs(day.entries, 0),
       trackedMs: day === undefined ? 0 : day.entries.reduce((sum, entry) => sum + entryDurationMs(entry, 0), 0),
       count: day?.entries.length ?? 0,

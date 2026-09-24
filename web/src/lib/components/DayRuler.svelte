@@ -694,10 +694,12 @@
 <style>
   .dr {
     /* Geometry. Every size is fixed, so every offset in the ruler is arithmetic
-       (lib/ruler.ts): nothing here is measured. */
+       (lib/ruler.ts): nothing here is measured. Rows and headers are px, the
+       model's RULER_PITCH and RULER_HEAD, whatever the browser's font size; the
+       type is rem and follows it. */
     --dr-w: min(11rem, calc(50% - 33.75rem));
-    --dr-pitch: 1.25rem;
-    --dr-head: 1.75rem;
+    --dr-pitch: 20px;
+    --dr-head: 28px;
     /* Ticks: 2px bars against the right edge, a Monday longer than a day and the
        1st longer still; a hovered one grows by --dr-tick-grow. The labels keep
        clear of the longest a tick can get. */
@@ -942,10 +944,11 @@
 
   .dr-day:global([data-vis])::before {
     background: var(--dr-lit);
-    opacity: 1;
+    opacity: 0.55;
   }
 
   .dr-day:global([aria-current])::before {
+    opacity: 1;
     box-shadow: 0 0 4px var(--dr-lit);
   }
 

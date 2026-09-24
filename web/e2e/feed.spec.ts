@@ -553,6 +553,37 @@ test.describe("pinned running timers", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
+  test("the card held during a scroll is never shown cut to its old height", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 60);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await seedServer(server.url, { entries: timers(3) });
+    await page.goto(server.url + "/#/");
+    await scrollUntilVisible(page, "Day 25 task 0");
+    await expectStrip(page, 3, false);
+    await seedServer(server.url, {
+      entries: [{ description: "Arrived mid-scroll", startedAt: Date.now() - 1_000, stoppedAt: null }],
+    });
+    // All the way back up in one scroll, with the timer arriving on the way.
+    const shownHeld = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      await frame();
+      await frame();
+      window.dispatchEvent(new Event("online"));
+      let shown = 0;
+      for (let count = 0; count < 600 && window.scrollY > 0; count++) {
+        await frame();
+        const card = document.querySelector<HTMLElement>(".running-full");
+        if (card !== null && getComputedStyle(card).visibility === "visible" && card.style.height !== "") shown += 1;
+      }
+      return shown;
+    });
+    expect(shownHeld).toBe(0);
+    await expect(runningCard(page).locator(".item")).toHaveCount(4);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
   test("Undo after Stop restarts the same row", async ({ page, request, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 40);

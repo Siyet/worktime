@@ -299,8 +299,12 @@ export class FeedScroller {
     if (elements === null) return;
     const days = this.#days();
     // Released before the correction below, so that it is the correction that
-    // absorbs whatever the held card grew or shrank by.
-    if (this.#heldCard !== null && (!this.stuck || this.#quietFor() >= IDLE_MS)) this.#releaseCard();
+    // absorbs whatever the held card grew or shrank by - and at the latest in the
+    // frame the page unsticks, read fresh rather than from the last frame, so the
+    // card never shows cut to its old height. A card that changed while held then
+    // takes its new height in view, as any change above the feed does once the
+    // strip lets go: stopping the reader's scroll to hide that would be worse.
+    if (this.#heldCard !== null && (this.#pinnedRect() === null || this.#quietFor() >= IDLE_MS)) this.#releaseCard();
     // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.

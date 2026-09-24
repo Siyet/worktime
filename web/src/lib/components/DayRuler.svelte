@@ -1146,6 +1146,7 @@
 
     .dr-day:global([data-vis])::before {
       background: Highlight;
+      opacity: 1;
     }
 
     .dr-day:global([aria-current])::before {

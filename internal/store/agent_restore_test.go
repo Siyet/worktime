@@ -35,15 +35,21 @@ func storedTimeEntry(t *testing.T, testStore *Store, userID, entryID string) Tim
 	return entry
 }
 
+// storedAgentMarker reads one of the server-only agent_* columns of a row.
+func storedAgentMarker(t *testing.T, testStore *Store, userID, entryID, column string) *int64 {
+	t.Helper()
+	var marker *int64
+	if err := testStore.db.QueryRow(
+		"SELECT "+column+" FROM time_entries WHERE id = ? AND user_id = ?", entryID, userID,
+	).Scan(&marker); err != nil {
+		t.Fatalf("read %s of %s: %v", column, entryID, err)
+	}
+	return marker
+}
+
 func storedAgentEnd(t *testing.T, testStore *Store, userID, entryID string) *int64 {
 	t.Helper()
-	var agentEnd *int64
-	if err := testStore.db.QueryRow(
-		"SELECT agent_end FROM time_entries WHERE id = ? AND user_id = ?", entryID, userID,
-	).Scan(&agentEnd); err != nil {
-		t.Fatalf("read agent_end of %s: %v", entryID, err)
-	}
-	return agentEnd
+	return storedAgentMarker(t, testStore, userID, entryID, "agent_end")
 }
 
 // runningSessionEntries lists the live running rows produced by one session.
@@ -114,11 +120,18 @@ func pushRunning(t *testing.T, testStore *Store, userID string, copied TimeEntry
 	t.Helper()
 	copied.StoppedAt = nil
 	copied.DeletedAt = nil
+	pushNewer(t, testStore, userID, copied)
+}
+
+// pushNewer pushes a device's copy of a row exactly as that device holds it,
+// newer than anything the server stored meanwhile.
+func pushNewer(t *testing.T, testStore *Store, userID string, copied TimeEntry) {
+	t.Helper()
 	copied.UpdatedAt = max(storedTimeEntry(t, testStore, userID, copied.ID).UpdatedAt, time.Now().UnixMilli()) + 1
 	if _, err := testStore.Sync(context.Background(), userID, SyncRequest{
 		Changes: SyncChanges{TimeEntries: []TimeEntry{copied}},
 	}); err != nil {
-		t.Fatalf("push running copy: %v", err)
+		t.Fatalf("push device copy: %v", err)
 	}
 }
 
@@ -393,8 +406,9 @@ func TestAgentUndoAfterHeartbeatTombstonesTheUntouchedReplacement(t *testing.T) 
 	}
 	assertTombstoned(t, testStore, user.ID, replacementID, cursor)
 	replacement := storedTimeEntry(t, testStore, user.ID, replacementID)
-	if agentEnd := storedAgentEnd(t, testStore, user.ID, replacementID); agentEnd == nil || *agentEnd != *replacement.DeletedAt {
-		t.Fatalf("a running row the server deletes records the tombstone as its end, agent_end %v", agentEnd)
+	if marker := storedAgentMarker(t, testStore, user.ID, replacementID, "agent_deleted_at"); marker == nil ||
+		*marker != *replacement.DeletedAt {
+		t.Fatalf("the tombstone must be recorded as the server's, agent_deleted_at %v", marker)
 	}
 	assertPulledFrom(t, testStore, user.ID, cursor, rowID, replacementID)
 
@@ -996,11 +1010,14 @@ func TestAgentLatePushWithSeveralLaterRowsClosesItAgain(t *testing.T) {
 	}
 }
 
-// The Stop was pushed, the agent came back long after, and only then the Undo
-// arrived. The replacement opened beyond the idle threshold is work of its own.
-func TestAgentUndoAfterTheAgentCameBackBeyondIdle(t *testing.T) {
+// The Stop was pushed, the agent came back two hours later, and only then the
+// Undo arrived. The replacement opened after a pause that began at the agent's
+// last heartbeat: had the row kept running, the idle split would have closed it
+// there, so it closes there - earlier than the user's own stop - and the
+// replacement is work of its own.
+func TestAgentUndoAfterTheAgentCameBackAfterAPause(t *testing.T) {
 	testStore := openTestStore(t)
-	user := testUser(t, testStore, "agent-undo-beyond-idle@test.local")
+	user := testUser(t, testStore, "agent-undo-after-pause@test.local")
 	base := time.Now().Add(-5 * time.Hour).UnixMilli()
 
 	sessionID := uuid.NewString()
@@ -1008,11 +1025,15 @@ func TestAgentUndoAfterTheAgentCameBackBeyondIdle(t *testing.T) {
 	testHeartbeat(t, testStore, user.ID, sessionID, base+60_000)
 	userStopsEntry(t, testStore, user.ID, rowID, base+120_000)
 	replacementID := *testHeartbeat(t, testStore, user.ID, sessionID, base+2*60*60_000).TimeEntryID
+	if pausedFrom := storedAgentMarker(t, testStore, user.ID, replacementID, "agent_paused_from"); pausedFrom == nil ||
+		*pausedFrom != base+60_000 {
+		t.Fatalf("a row opened after a pause records where the pause began, agent_paused_from %v", pausedFrom)
+	}
 	replacement := storedTimeEntry(t, testStore, user.ID, replacementID)
 	sessionBefore := getTestAgentSession(t, testStore, user.ID, sessionID)
 
 	userUndoesStop(t, testStore, user.ID, rowID)
-	assertClosedAt(t, testStore, user.ID, rowID, base+120_000)
+	assertClosedAt(t, testStore, user.ID, rowID, base+60_000)
 	assertUnchanged(t, testStore, user.ID, replacement)
 	assertSessionUnchanged(t, testStore, user.ID, sessionBefore)
 	assertSessionRunsOnly(t, testStore, user.ID, sessionID, replacementID)
@@ -1194,44 +1215,46 @@ func TestAgentRestoreNeverOrphansTheSessionRunningRow(t *testing.T) {
 	assertSessionRunsOnly(t, testStore, user.ID, sessionID, replacementID)
 }
 
-// The idle threshold the rule compares with is the store's, set from
-// WORKTIME_AGENT_IDLE: the same replacement two minutes after the stop is a
-// duplicate under the default ten minutes and work of its own under one minute.
-func TestAgentRestoreUsesTheStoreIdleThreshold(t *testing.T) {
-	tests := []struct {
-		name       string
-		options    []Option
-		tombstoned bool
-	}{
-		{name: "default threshold", tombstoned: true},
-		{name: "one minute threshold", options: []Option{WithAgentIdle(time.Minute)}},
+// The user stopped the row while a long tool call ran, and the heartbeat after
+// the tool came twenty minutes later - more than the idle threshold, but billed
+// as work because the gap began with a tool call, so the session records no
+// pause. The Undo must give the same rows whether that heartbeat reached the
+// server before it or after it: the tool run stays on the restored row.
+func TestAgentUndoAcrossALongToolRunGivesTheSameRowsInEitherOrder(t *testing.T) {
+	const minute = int64(60_000)
+	run := func(t *testing.T, heartbeatFirst bool) [][2]*int64 {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-undo-tool-run@test.local")
+		base := restoreTestBase()
+
+		sessionID := uuid.NewString()
+		rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+		testToolStart(t, testStore, user.ID, sessionID, base+minute)
+		userStopsEntry(t, testStore, user.ID, rowID, base+2*minute)
+		toolDone := base + 21*minute
+		if heartbeatFirst {
+			replacementID := *testHeartbeat(t, testStore, user.ID, sessionID, toolDone).TimeEntryID
+			if pausedFrom := storedAgentMarker(t, testStore, user.ID, replacementID, "agent_paused_from"); pausedFrom != nil {
+				t.Fatalf("a gap a tool run covers is no pause, agent_paused_from %d", *pausedFrom)
+			}
+			userUndoesStop(t, testStore, user.ID, rowID)
+		} else {
+			userUndoesStop(t, testStore, user.ID, rowID)
+			testHeartbeat(t, testStore, user.ID, sessionID, toolDone)
+		}
+		testHeartbeat(t, testStore, user.ID, sessionID, toolDone+minute)
+		testStop(t, testStore, user.ID, sessionID, toolDone+minute, "session_end")
+		return liveIntervals(t, testStore, user.ID, base)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			testStore, err := Open(t.TempDir()+"/idle.db", test.options...)
-			if err != nil {
-				t.Fatalf("open store: %v", err)
-			}
-			t.Cleanup(func() { testStore.Close() })
-			user := testUser(t, testStore, "agent-restore-idle@test.local")
-			base := restoreTestBase()
-
-			sessionID := uuid.NewString()
-			rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
-			userStopsEntry(t, testStore, user.ID, rowID, base+30_000)
-			replacementID := *testHeartbeat(t, testStore, user.ID, sessionID, base+150_000).TimeEntryID
-
-			cursor := currentSyncSeq(t, testStore)
-			userUndoesStop(t, testStore, user.ID, rowID)
-			if test.tombstoned {
-				assertTombstoned(t, testStore, user.ID, replacementID, cursor)
-				assertSessionRunsOnly(t, testStore, user.ID, sessionID, rowID)
-			} else {
-				assertClosedAt(t, testStore, user.ID, rowID, base+30_000)
-				assertSessionRunsOnly(t, testStore, user.ID, sessionID, replacementID)
-			}
-		})
+	undoFirst := run(t, false)
+	heartbeatFirst := run(t, true)
+	if !reflect.DeepEqual(heartbeatFirst, undoFirst) {
+		t.Fatalf("a heartbeat before the undo gave other rows:\n got %s\nwant %s",
+			formatIntervals(heartbeatFirst), formatIntervals(undoFirst))
+	}
+	if len(undoFirst) != 1 || undoFirst[0][1] == nil || *undoFirst[0][1] != 22*minute {
+		t.Fatalf("expected one row billing the tool run up to the stop at 22m, got %s", formatIntervals(undoFirst))
 	}
 }
 
@@ -1443,4 +1466,385 @@ func TestAgentRestoreRuleLeavesOtherWritesAlone(t *testing.T) {
 			t.Fatalf("the user's stop must stand: %+v", row)
 		}
 	})
+}
+
+// liveIntervals is what the feed shows of a user's rows: the live ones, in start
+// order, with times relative to base and a nil stop for a running row.
+func liveIntervals(t *testing.T, testStore *Store, userID string, base int64) [][2]*int64 {
+	t.Helper()
+	rows, err := testStore.db.Query(`
+		SELECT started_at, stopped_at FROM time_entries
+		WHERE user_id = ? AND deleted_at IS NULL ORDER BY started_at, id`, userID)
+	if err != nil {
+		t.Fatalf("list live rows: %v", err)
+	}
+	intervals := [][2]*int64{}
+	for rows.Next() {
+		var (
+			startedAt int64
+			stoppedAt *int64
+		)
+		if err := rows.Scan(&startedAt, &stoppedAt); err != nil {
+			rows.Close()
+			t.Fatalf("scan live row: %v", err)
+		}
+		start := startedAt - base
+		var stop *int64
+		if stoppedAt != nil {
+			offset := *stoppedAt - base
+			stop = &offset
+		}
+		intervals = append(intervals, [2]*int64{&start, stop})
+	}
+	if err := closeRows(rows); err != nil {
+		t.Fatalf("close live rows: %v", err)
+	}
+	return intervals
+}
+
+// The agent worked for five minutes and went quiet; twenty minutes later the
+// user stopped the forgotten timer, the agent came back three seconds after
+// that, and the user undid the Stop. The Undo says the timer kept running, and
+// a timer that kept running would have been split at the pause - so the rows
+// must be the same whether the agent's heartbeat reached the server before the
+// Undo or after it, and whether the row it opened was edited in between.
+func TestAgentUndoAroundAPauseGivesTheSameRowsInEitherOrder(t *testing.T) {
+	const minute = int64(60_000)
+	run := func(t *testing.T, order string) [][2]*int64 {
+		testStore := openTestStore(t)
+		user := testUser(t, testStore, "agent-undo-around-pause@test.local")
+		base := restoreTestBase()
+
+		sessionID := uuid.NewString()
+		rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+		workUntil(t, testStore, user.ID, sessionID, base, base+5*minute)
+		userStopsEntry(t, testStore, user.ID, rowID, base+25*minute)
+		resumed := base + 25*minute + 3_000
+		switch order {
+		case "undo before the heartbeat":
+			userUndoesStop(t, testStore, user.ID, rowID)
+			testHeartbeat(t, testStore, user.ID, sessionID, resumed)
+		case "heartbeat before the undo":
+			testHeartbeat(t, testStore, user.ID, sessionID, resumed)
+			userUndoesStop(t, testStore, user.ID, rowID)
+		case "heartbeat, edit of its row, undo":
+			replacementID := *testHeartbeat(t, testStore, user.ID, sessionID, resumed).TimeEntryID
+			renamed := storedTimeEntry(t, testStore, user.ID, replacementID)
+			renamed.Description = "Kept by hand"
+			pushEntry(t, testStore, user.ID, renamed)
+			userUndoesStop(t, testStore, user.ID, rowID)
+		}
+		testHeartbeat(t, testStore, user.ID, sessionID, resumed+minute)
+		testStop(t, testStore, user.ID, sessionID, resumed+minute, "session_end")
+		if closed := storedTimeEntry(t, testStore, user.ID, rowID); closed.StoppedAt == nil || *closed.StoppedAt != base+5*minute {
+			t.Fatalf("%s: the undone row must end where the pause began: %+v", order, closed)
+		}
+		return liveIntervals(t, testStore, user.ID, base)
+	}
+
+	undoFirst := run(t, "undo before the heartbeat")
+	for _, order := range []string{"heartbeat before the undo", "heartbeat, edit of its row, undo"} {
+		if got := run(t, order); !reflect.DeepEqual(got, undoFirst) {
+			t.Fatalf("%s gave other rows than an undo before the heartbeat:\n got %s\nwant %s",
+				order, formatIntervals(got), formatIntervals(undoFirst))
+		}
+	}
+	if len(undoFirst) != 2 {
+		t.Fatalf("expected the undone row and the row after the pause, got %s", formatIntervals(undoFirst))
+	}
+}
+
+func formatIntervals(intervals [][2]*int64) string {
+	parts := []string{}
+	for _, interval := range intervals {
+		stop := "running"
+		if interval[1] != nil {
+			stop = time.Duration(*interval[1] * int64(time.Millisecond)).String()
+		}
+		parts = append(parts, time.Duration(*interval[0]*int64(time.Millisecond)).String()+".."+stop)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// A replacement a restore made redundant, and a zero-minute technical row, are
+// tombstones the server wrote. A device that still shows such a row and writes
+// it - whatever it writes - gets the tombstone back, so the row is never billed
+// again next to the one that covers it.
+func TestAgentServerTombstoneSurvivesAStaleWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		// arrange returns the device's copy of the tombstoned row, the row that
+		// must stay the only live one, and the moment that row must end at (zero
+		// while it runs).
+		arrange func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) (TimeEntry, string, int64)
+		// write is what the device pushes.
+		write func(t *testing.T, testStore *Store, userID string, deviceCopy TimeEntry, base int64)
+	}{
+		{
+			name: "renamed copy of a closed replacement pushed running",
+			arrange: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) (TimeEntry, string, int64) {
+				userStopsEntry(t, testStore, userID, rowID, base+90_000)
+				replacementID := *testHeartbeat(t, testStore, userID, sessionID, base+95_000).TimeEntryID
+				deviceCopy := storedTimeEntry(t, testStore, userID, replacementID)
+				workUntil(t, testStore, userID, sessionID, base+95_000, base+8*60_000)
+				testStop(t, testStore, userID, sessionID, base+8*60_000, "session_end")
+				userUndoesStop(t, testStore, userID, rowID)
+				assertTombstoned(t, testStore, userID, replacementID, 0)
+				return deviceCopy, rowID, base + 8*60_000
+			},
+			write: func(t *testing.T, testStore *Store, userID string, deviceCopy TimeEntry, _ int64) {
+				deviceCopy.Description = "Renamed on the stale device"
+				pushRunning(t, testStore, userID, deviceCopy)
+			},
+		},
+		{
+			name: "stop of a running replacement",
+			arrange: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) (TimeEntry, string, int64) {
+				userStopsEntry(t, testStore, userID, rowID, base+30_000)
+				replacementID := *testHeartbeat(t, testStore, userID, sessionID, base+60_000).TimeEntryID
+				deviceCopy := storedTimeEntry(t, testStore, userID, replacementID)
+				userUndoesStop(t, testStore, userID, rowID)
+				assertTombstoned(t, testStore, userID, replacementID, 0)
+				return deviceCopy, rowID, 0
+			},
+			write: func(t *testing.T, testStore *Store, userID string, deviceCopy TimeEntry, base int64) {
+				stoppedAt := base + 45*60_000
+				deviceCopy.StoppedAt = &stoppedAt
+				pushNewer(t, testStore, userID, deviceCopy)
+			},
+		},
+		{
+			// The device pulled the stop hook's close but not the Undo that followed.
+			name: "renamed stopped copy of a closed replacement",
+			arrange: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) (TimeEntry, string, int64) {
+				userStopsEntry(t, testStore, userID, rowID, base+90_000)
+				replacementID := *testHeartbeat(t, testStore, userID, sessionID, base+95_000).TimeEntryID
+				workUntil(t, testStore, userID, sessionID, base+95_000, base+8*60_000)
+				testStop(t, testStore, userID, sessionID, base+8*60_000, "session_end")
+				deviceCopy := storedTimeEntry(t, testStore, userID, replacementID)
+				userUndoesStop(t, testStore, userID, rowID)
+				assertTombstoned(t, testStore, userID, replacementID, 0)
+				return deviceCopy, rowID, base + 8*60_000
+			},
+			write: func(t *testing.T, testStore *Store, userID string, deviceCopy TimeEntry, _ int64) {
+				deviceCopy.Description = "Renamed on the stale device"
+				pushNewer(t, testStore, userID, deviceCopy)
+			},
+		},
+		{
+			name: "rename of a zero-minute technical row",
+			arrange: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) (TimeEntry, string, int64) {
+				deviceCopy := storedTimeEntry(t, testStore, userID, rowID)
+				testStop(t, testStore, userID, sessionID, base+10_000, "session_end")
+				assertTombstoned(t, testStore, userID, rowID, 0)
+				return deviceCopy, "", 0
+			},
+			write: func(t *testing.T, testStore *Store, userID string, deviceCopy TimeEntry, _ int64) {
+				deviceCopy.Description = "Renamed on the stale device"
+				pushRunning(t, testStore, userID, deviceCopy)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-server-tombstone@test.local")
+			base := restoreTestBase()
+
+			sessionID := uuid.NewString()
+			rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+			deviceCopy, keptID, keptEnd := test.arrange(t, testStore, user.ID, sessionID, rowID, base)
+			tombstone := storedTimeEntry(t, testStore, user.ID, deviceCopy.ID)
+			sessionBefore := getTestAgentSession(t, testStore, user.ID, sessionID)
+
+			cursor := currentSyncSeq(t, testStore)
+			test.write(t, testStore, user.ID, deviceCopy, base)
+
+			stored := storedTimeEntry(t, testStore, user.ID, deviceCopy.ID)
+			if stored.DeletedAt == nil || *stored.DeletedAt != *tombstone.DeletedAt {
+				t.Fatalf("the server's tombstone must be put back: %+v", stored)
+			}
+			if stored.StoppedAt == nil && tombstone.StoppedAt != nil {
+				t.Fatalf("a copy pushed running must get its stop back too: %+v", stored)
+			}
+			assertPulledFrom(t, testStore, user.ID, cursor, deviceCopy.ID)
+			if keptID == "" {
+				if count := countUserEntries(t, testStore, user.ID); count != 0 {
+					t.Fatalf("nothing may come back, got %d live entries", count)
+				}
+				return
+			}
+			if count := countUserEntries(t, testStore, user.ID); count != 1 {
+				t.Fatalf("only the restored row may be live, got %d entries", count)
+			}
+			if keptEnd != 0 {
+				assertClosedAt(t, testStore, user.ID, keptID, keptEnd)
+			} else {
+				assertSessionOn(t, testStore, user.ID, sessionID, keptID)
+			}
+			// Only markers the push itself may set can differ: the device wrote the
+			// session's current row, which records an outside edit.
+			after := getTestAgentSession(t, testStore, user.ID, sessionID)
+			if !reflect.DeepEqual(after.TimeEntryID, sessionBefore.TimeEntryID) || after.Status != sessionBefore.Status {
+				t.Fatalf("the session must stay where it was:\n got %+v\nwant %+v", after, sessionBefore)
+			}
+		})
+	}
+}
+
+// Every row after the user's stop was zero-minute noise the server removed - one
+// row cut by a pause, one closed by the stop hook - and the session ended long
+// after the stop. A late Undo must not bill that pause: the removed rows still
+// record where it began.
+func TestAgentLateUndoDoesNotBillAPauseTheServerCleanedUp(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-late-undo-cleaned@test.local")
+	base := restoreTestBase()
+	const minute = int64(60_000)
+
+	sessionID := uuid.NewString()
+	rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+	testHeartbeat(t, testStore, user.ID, sessionID, base+60_000)
+	userStopsEntry(t, testStore, user.ID, rowID, base+90_000)
+	firstID := *testHeartbeat(t, testStore, user.ID, sessionID, base+96_000).TimeEntryID
+	secondID := *testHeartbeat(t, testStore, user.ID, sessionID, base+20*minute).TimeEntryID
+	testStop(t, testStore, user.ID, sessionID, base+20*minute+5_000, "session_end")
+	assertTombstoned(t, testStore, user.ID, firstID, 0)
+	assertTombstoned(t, testStore, user.ID, secondID, 0)
+
+	userUndoesStop(t, testStore, user.ID, rowID)
+	assertClosedAt(t, testStore, user.ID, rowID, base+90_000)
+	if running := runningSessionEntries(t, testStore, user.ID, sessionID); len(running) != 0 {
+		t.Fatalf("an ended session must leave nothing running, got %v", running)
+	}
+	if count := countUserEntries(t, testStore, user.ID); count != 1 {
+		t.Fatalf("expected only the undone row, got %d entries", count)
+	}
+}
+
+// The replacement a first Undo tombstoned is history, not work after a second
+// Stop: a second Stop and Undo of the same row settles exactly like the first.
+func TestAgentSecondStopAndUndoSettlesLikeTheFirst(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-second-undo@test.local")
+	base := restoreTestBase()
+
+	sessionID := uuid.NewString()
+	rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+	for cycle, stopAt := range []int64{base + 30_000, base + 120_000} {
+		userStopsEntry(t, testStore, user.ID, rowID, stopAt)
+		replacementID := *testHeartbeat(t, testStore, user.ID, sessionID, stopAt+30_000).TimeEntryID
+		cursor := currentSyncSeq(t, testStore)
+		userUndoesStop(t, testStore, user.ID, rowID)
+		assertTombstoned(t, testStore, user.ID, replacementID, cursor)
+		assertSessionRunsOnly(t, testStore, user.ID, sessionID, rowID)
+		if count := countUserEntries(t, testStore, user.ID); count != 1 {
+			t.Fatalf("cycle %d: expected only the restored row, got %d entries", cycle+1, count)
+		}
+	}
+}
+
+// A stale device renames the row the stop hook closed. The stop is the server's,
+// so it stands and the session is left exactly where the stop hook put it: the
+// rename is an outside edit of a finished row, not a restore to settle.
+func TestAgentStalePushAfterTheStopHookLeavesTheSessionAlone(t *testing.T) {
+	testStore := openTestStore(t)
+	user := testUser(t, testStore, "agent-stale-after-stop@test.local")
+	base := restoreTestBase()
+
+	sessionID := uuid.NewString()
+	rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+	deviceCopy := storedTimeEntry(t, testStore, user.ID, rowID)
+	testHeartbeat(t, testStore, user.ID, sessionID, base+60_000)
+	testStop(t, testStore, user.ID, sessionID, base+120_000, "session_end")
+	stopped := getTestAgentSession(t, testStore, user.ID, sessionID)
+
+	deviceCopy.Description = "Renamed on the stale device"
+	pushRunning(t, testStore, user.ID, deviceCopy)
+
+	assertClosedAt(t, testStore, user.ID, rowID, base+120_000)
+	after := getTestAgentSession(t, testStore, user.ID, sessionID)
+	if after.Status != agentStatusClosed || !reflect.DeepEqual(after.EndedAt, stopped.EndedAt) ||
+		!reflect.DeepEqual(after.TimeEntryID, stopped.TimeEntryID) || !reflect.DeepEqual(after.EntryServerSeq, stopped.EntryServerSeq) {
+		t.Fatalf("the session must stay as the stop hook left it:\n got %+v\nwant %+v", after, stopped)
+	}
+}
+
+// A row that was stopped - by the server or by the user - and then deleted by the
+// user comes back running only from a device that never saw either write: no
+// Undo produces it, because the Timer page undoes one step and a stopped row's
+// delete leaves it stopped. Such a push keeps its text, but the row gets its stop
+// and its tombstone back, and nothing else in the session moves.
+func TestAgentStaleRunningCopyOfADeletedRowStaysDeleted(t *testing.T) {
+	tests := []struct {
+		name string
+		// stop ends the row and returns where it must stay stopped.
+		stop func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) int64
+	}{
+		{
+			name: "closed by an idle split",
+			stop: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) int64 {
+				testHeartbeat(t, testStore, userID, sessionID, base+60_000)
+				testHeartbeat(t, testStore, userID, sessionID, base+2*60*60_000)
+				return base + 60_000
+			},
+		},
+		{
+			name: "closed by the stop hook",
+			stop: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) int64 {
+				workUntil(t, testStore, userID, sessionID, base, base+8*60_000)
+				testStop(t, testStore, userID, sessionID, base+8*60_000, "session_end")
+				return base + 8*60_000
+			},
+		},
+		{
+			name: "stopped by the user",
+			stop: func(t *testing.T, testStore *Store, userID, sessionID, rowID string, base int64) int64 {
+				userStopsEntry(t, testStore, userID, rowID, base+90_000)
+				testHeartbeat(t, testStore, userID, sessionID, base+95_000)
+				return base + 90_000
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testStore := openTestStore(t)
+			user := testUser(t, testStore, "agent-stale-deleted@test.local")
+			base := time.Now().Add(-5 * time.Hour).UnixMilli()
+
+			sessionID := uuid.NewString()
+			rowID := *startWorkingTestAgentSession(t, testStore, user.ID, sessionID, base).TimeEntryID
+			deviceCopy := storedTimeEntry(t, testStore, user.ID, rowID)
+			stoppedAt := test.stop(t, testStore, user.ID, sessionID, rowID, base)
+
+			deleted := storedTimeEntry(t, testStore, user.ID, rowID)
+			deletedAt := time.Now().UnixMilli()
+			deleted.DeletedAt = &deletedAt
+			pushEntry(t, testStore, user.ID, deleted)
+			before := userEntryShapes(t, testStore, user.ID)
+			sessionBefore := getTestAgentSession(t, testStore, user.ID, sessionID)
+
+			cursor := currentSyncSeq(t, testStore)
+			deviceCopy.Description = "Renamed on the stale device"
+			pushRunning(t, testStore, user.ID, deviceCopy)
+
+			stored := storedTimeEntry(t, testStore, user.ID, rowID)
+			if stored.DeletedAt == nil || *stored.DeletedAt != deletedAt || stored.StoppedAt == nil || *stored.StoppedAt != stoppedAt {
+				t.Fatalf("the row must get its stop at %d and its tombstone at %d back, got %+v", stoppedAt, deletedAt, stored)
+			}
+			assertPulledFrom(t, testStore, user.ID, cursor, rowID)
+			after := userEntryShapes(t, testStore, user.ID)
+			delete(before, rowID)
+			delete(after, rowID)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("no other row may move:\n got %+v\nwant %+v", after, before)
+			}
+			if session := getTestAgentSession(t, testStore, user.ID, sessionID); session.Status != sessionBefore.Status ||
+				!reflect.DeepEqual(session.EndedAt, sessionBefore.EndedAt) || !reflect.DeepEqual(session.TimeEntryID, sessionBefore.TimeEntryID) {
+				t.Fatalf("the session must stay where it was:\n got %+v\nwant %+v", session, sessionBefore)
+			}
+		})
+	}
 }

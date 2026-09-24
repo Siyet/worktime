@@ -218,34 +218,59 @@ an agent is working - splits its work in two rows rather than losing it.
 `stopped_at` cleared - several rows in one push when stops made in a quick
 burst are undone together - and an Undo of a delete clears `deleted_at`. A
 device that was offline can also push a row it still shows running after the
-server closed or split the session. By then the session may have let the row
-go, and reconciliation only walks sessions, so a running row no session points
-at would run forever. The same sync transaction therefore settles every agent
-row the push leaves running and not deleted whose stored version before the
-push was stopped or deleted. The rule runs once per row, after every pushed row
-is written, on the state the whole push left, so the order of rows inside a push
-never changes the outcome; several rows of one session are settled in
-`started_at` order, each seeing what the earlier ones decided.
+server closed or split the session, or write a row the server has removed in the
+meantime. By then the session may have let the row go, and reconciliation only
+walks sessions, so a running row no session points at would run forever. The
+same sync transaction therefore settles every row the push brings back after the
+server had ended it. This runs once per row, after every pushed row is written,
+on the state the whole push left, so the order of rows inside a push never
+changes the outcome; several rows of one session are settled in `started_at`
+order, each seeing what the earlier ones decided.
 
-The first question is who ended the row. Whenever the agent flow closes a row
-it records the `stopped_at` it wrote in the server-only column `agent_end`
-(migration 012; no DTO carries it, so the wire format is unchanged), and when it
-deletes a row that was still running it records the `deleted_at`. The row's
-previous end - its stop, or its tombstone if it was deleted while running - is
-compared with that value, so a rename by anyone keeps a server end, while a
-hand-edited `stopped_at` makes the end the user's. The rest depends on what the
-session billed after that end. "Later rows" are the session's live rows other
-than this one that start at or after it (rows of one session do not overlap);
-the "current row" is the one the session points at.
+The server remembers what it did to a row in three server-only columns
+(migration 012; no DTO carries them, so the wire format is unchanged). They are
+compared by value, so a rename by anyone keeps them, while a hand-edited
+`stopped_at` makes that stop the user's:
+
+- `agent_end` - the `stopped_at` the agent flow wrote when it closed the row: an
+  idle split, the stop hook, reconciliation, or one of the closes below.
+- `agent_deleted_at` - the `deleted_at` it wrote when it removed the row: a
+  zero-minute technical row, or a replacement an Undo made redundant.
+- `agent_paused_from` - set on a row the session opened after an idle pause: the
+  last billable moment before that pause, which is where an idle split closes
+  the row that ran until then.
+
+Nothing recorded who ended a row before migration 012, so the migration counts
+every agent row already stopped or deleted as ended by the server and copies
+its stop into `agent_end` and its tombstone into `agent_deleted_at`. That errs
+on the safe side: a server end taken for the user's would let a stale device
+reopen the row and bill the gap the server cut out, while a user's end taken for
+the server's costs only an Undo still in flight across the upgrade, which then
+keeps the stop. The backfill touches server-only columns, so clients pull
+nothing because of it.
+
+**A tombstone the server wrote stays.** Whatever a device pushes for such a row -
+a rename, a Stop, the row running again - the tombstone is put back, a row
+pushed running also gets its previous stop back, and the pushed name, project
+and tags are kept. A replacement the server removed is never billed a second
+time next to the row that covers it.
+
+**A row pushed running again** whose stored version was stopped, or deleted by
+the user, is settled by who ended it and what the session did after that.
+"Later rows" are the session's live rows other than this one that start at or
+after it (rows of one session do not overlap); the "current row" is the one the
+session points at. The first matching line of the table applies.
 
 | Previous end, and what the session did after it | What happens |
 |---|---|
-| Written by the server: an idle split, the stop hook, reconciliation, or this rule's own close | The end stands. The pushed name, project and tags are kept and the stop (or the tombstone) is put back; the session and every other row are left alone. A stale device cannot reopen a row across a pause the server cut. |
+| Stopped, then deleted - by anyone | Both are put back and the pushed name, project and tags kept; the session and every other row are left alone. No Undo produces a running copy of such a row - an Undo reverses one step, and deleting a stopped row leaves it stopped - so the copy comes from a device that saw neither write. |
+| The stop is the server's (it equals `agent_end`) | The stop stands. The pushed name, project and tags are kept and the stop is put back; the session and every other row are left alone. A stale device cannot reopen a row across a pause the server cut. |
 | The user's; the session is active and still on this row | Nothing; the next signal adopts the edit as usual. |
+| The user's; among the rows the session opened after this one - removed ones included - one opened after an idle pause before any live row did | The Undo says the row kept running, and a running row would have been split at that pause. Whether there was a pause is what `agent_paused_from` recorded when the session opened the row, by the session's own rules: a gap a running tool call covered is work, not a pause. So it is closed where the pause began, or at the user's end if that came first, and everything after is left alone. The same rows result whether the heartbeat that ended the pause reached the server before the Undo or after it, and whether the rows after the stop survived or were zero-minute noise the server removed. |
 | The user's; no later rows | The session takes the row back. While the session is active the row keeps running, and the session's own idle split, stop and reconciliation close it at its last activity, so idle time is not billed. When the session has ended the row is closed at the later of the user's end and the session's end - never before the user's own stop - and a resume continues it. |
-| The user's; the only later row is the current row, it opened within `WORKTIME_AGENT_IDLE` of the user's end, nobody edited it and this push did not write it | That replacement only duplicates the restored row's time: it is tombstoned and the session takes the row back as above. |
+| The user's; the only later row is the current row, nobody edited it and this push did not write it | With no pause before it, that replacement continued the restored row's work and only duplicates its time: it is removed (a server tombstone) and the session takes the row back as above. |
 | The same, but the replacement was touched - renamed, moved to a project (the agent's own `update_time_entry` included) or retagged, or written by this very push | The replacement stays as it is and the session stays on it. The restored row is closed where the replacement begins, never before the user's end: no overlap and no hole between them. |
-| The user's; anything else - the first later row opened beyond the idle threshold, several later rows, or a later row the session no longer points at, or a session still running a row that began before this one | What came after is work of its own: the row is closed again at the user's end, keeping the pushed edits. |
+| The user's; anything else - several later rows, a later row the session no longer points at, or a session still running a row that began before this one | What came after is work of its own: the row is closed again at the user's end, keeping the pushed edits. |
 
 When the session takes a row back the row counts as edited by the user, its
 project becomes the session's project for later segments, and it counts as
@@ -253,24 +278,33 @@ user-named only when its description is neither the session's current
 automatic name nor the session tag every row carries until a task is set. A
 restored row that arrives with that old tag - an Undo from a device that had not
 pulled `set_agent_task`'s rename yet - is renamed to the task name by the
-server, so later task renames keep reaching it. Every close the rule writes is
+server, so later task renames keep reaching it. The server keeps no history of
+task names, though: after two `set_agent_task` calls, a device that pulled only
+the first rename writes back a name the session no longer gives, which counts as
+the user's, and later task renames skip that row. Every close written here is
 recorded in `agent_end`, so replaying or re-pushing the same restore changes
 nothing, and every server-side write gets a fresh `server_seq` and an
 `updated_at` past the stored one, so other devices pull it and the pushing
-device's copy loses to it. The idle threshold is the store's, set with
-`store.WithAgentIdle` from `WORKTIME_AGENT_IDLE` (default `10m`).
+device's copy loses to it. The rule never measures gaps itself: every pause it
+honours is one the session's idle split decided and recorded, so `Sync` needs
+no idle threshold of its own.
 
-Two residual risks remain. A second device that still has a tombstoned
-replacement writes it with last-write-wins like any newer edit: renaming a copy
-it still shows running is harmless - the tombstone was the server's end and is
-put back - but stopping that copy, or editing one that was already closed when
-it was tombstoned (an ended session), resurrects the replacement as a finished
-row next to the restored one, and that time is counted twice until one of them
-is deleted. And rows closed before migration 012 carry no record, so they count
-as ended by the user; that differs only for an old split whose next segment
-opened inside the idle threshold (after a capped tool run) and is still the
-session's untouched current row, which a stale push of the older row would
-tombstone.
+**Order matters in one case.** The user stops a row after the agent's last
+heartbeat and undoes the stop while the session is silent. If the Undo lands
+first, the session is still on the row and takes it back running, and
+reconciliation then closes it at the last heartbeat. If reconciliation lands
+first, the session has ended, and the Undo closes the row at the later of the
+user's stop and the session's end - the user's stop. The two outcomes differ by
+the time between the last heartbeat and the user's stop: time the user watched
+the row run, but the agent did nothing in. That stretch is bounded by
+`WORKTIME_AGENT_GRACE` plus one reconciliation interval, because once
+reconciliation has run the row is no longer running for the user to stop.
+
+A Stop from a stale device is not a restore and is not settled: when the device
+stops a row the server already closed, its stop replaces the server's by
+last-write-wins and bills the idle tail the server had cut. Telling that apart
+from a deliberate edit of the end would need the version the device edited, which
+the wire format does not carry.
 
 ## Setup
 

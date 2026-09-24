@@ -66,9 +66,7 @@ func main() {
 		log.Fatalf("recover interrupted update: %v", err)
 	}
 
-	// Sync needs the agent idle threshold: a write that sets an agent row running
-	// again is judged against it (docs/agent-tracking.md, "Undo and restarts").
-	dataStore, err := store.Open(cfg.DBPath, store.WithAgentIdle(cfg.AgentIdle))
+	dataStore, err := store.Open(cfg.DBPath)
 	if err != nil {
 		if bootstrapping {
 			if rollbackErr := appupdate.RollbackStartup(dataDirectory); rollbackErr != nil {

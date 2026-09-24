@@ -511,6 +511,48 @@ test.describe("pinned running timers", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
+  test("a timer that arrives while the page scrolls lets the scroll finish", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 60);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await seedServer(server.url, { entries: timers(1) });
+    await page.goto(server.url + "/#/");
+    await scrollUntilVisible(page, "Day 45 task 0");
+    await expectStrip(page, 1, false);
+    // On the server already; the page only learns of it once the scroll is under way.
+    await seedServer(server.url, {
+      entries: [{ description: "Arrived mid-scroll", startedAt: Date.now() - 1_000, stoppedAt: null }],
+    });
+    const outcome = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const target = window.scrollY - 5000;
+      window.scrollTo({ top: target, behavior: "smooth" });
+      await frame();
+      await frame();
+      window.dispatchEvent(new Event("online"));
+      let last = Number.NaN;
+      let still = 0;
+      let count = 0;
+      let grewAt = -1;
+      while (still < 6 && count < 900) {
+        await frame();
+        count += 1;
+        if (grewAt < 0 && document.querySelectorAll(".pinbar > ul > li").length === 2) grewAt = count;
+        still = window.scrollY === last ? still + 1 : 0;
+        last = window.scrollY;
+      }
+      return { target, rest: window.scrollY, grewAt, restedAt: count - 6 };
+    });
+    // The timer arrived while the page was still moving...
+    expect(outcome.grewAt).toBeGreaterThan(0);
+    expect(outcome.grewAt).toBeLessThan(outcome.restedAt);
+    // ...and the scroll still went all the way.
+    expect(Math.abs(outcome.rest - outcome.target)).toBeLessThanOrEqual(2);
+    // Still again, the hidden card takes its real height and the strip is right.
+    await expectStrip(page, 2, false);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
   test("Undo after Stop restarts the same row", async ({ page, request, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 40);

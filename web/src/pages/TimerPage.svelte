@@ -159,7 +159,12 @@
 
   $effect(() => {
     if (feedElement === null) return;
-    return scroller.start({ feed: feedElement, sentinel: () => sentinelElement, pinned: () => pinnedElement });
+    return scroller.start({
+      feed: feedElement,
+      sentinel: () => sentinelElement,
+      pinned: () => pinnedElement,
+      card: () => fullCardElement,
+    });
   });
 
   // New data can move or resize the mounted days; the scroller replans on the

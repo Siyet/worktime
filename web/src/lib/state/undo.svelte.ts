@@ -16,6 +16,8 @@ export const undoState = $state({ deleted: null as TimeEntry | null, stopped: []
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let lastStopAt = 0;
+/** Timers whose stop is still being written: a double click must not stop one twice. */
+const stopping = new Set<string>();
 
 function openWindow(): void {
   if (timer) clearTimeout(timer);
@@ -41,13 +43,19 @@ export async function deleteEntryWithUndo(entry: TimeEntry): Promise<void> {
 // copy: it keeps its original start, and for an agent row the server hands the
 // session back to it (see docs/agent-tracking.md).
 export async function stopTimerWithUndo(entry: TimeEntry): Promise<void> {
-  if (entry.stopped_at !== null) return;
+  if (entry.stopped_at !== null || stopping.has(entry.id)) return;
   const snapshot = $state.snapshot(entry) as TimeEntry;
-  await stopTimer(entry.id);
+  stopping.add(entry.id);
+  try {
+    await stopTimer(entry.id);
+  } finally {
+    stopping.delete(entry.id);
+  }
   const burst = performance.now() - lastStopAt < BURST_MS;
   lastStopAt = performance.now();
+  const earlier = burst ? undoState.stopped.filter((stopped) => stopped.id !== entry.id) : [];
   undoState.deleted = null;
-  undoState.stopped = burst ? [...undoState.stopped, snapshot] : [snapshot];
+  undoState.stopped = [...earlier, snapshot];
   openWindow();
 }
 

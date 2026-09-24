@@ -1,17 +1,21 @@
 // Undo state for deleting an entry and for stopping timers. Lives at module
 // level so the toast can be mounted in the app shell: in-app navigation must not
 // dismiss the 8-second undo window, only the timer or an explicit action does.
-// A delete is undoable on its own; stops add up while the window is open, since
-// the line below a stopped one slides up under the same thumb or key, and a
-// second quick press must not leave the first stop without a way back.
+// One action is undoable at a time, and a newer delete or stop replaces the last
+// - except a stop right after a stop: the line below a stopped one slides up
+// under the same thumb or key, so a second press moments later is the same
+// slip, and one Undo brings both back.
 import type { TimeEntry } from "../types";
 import { deleteEntry, restoreEntry, stopTimer, updateEntry } from "./app.svelte";
 
 const UNDO_WINDOW_MS = 8000;
+/** How soon after a stop another one still counts as the same press. */
+const BURST_MS = 1500;
 
 export const undoState = $state({ deleted: null as TimeEntry | null, stopped: [] as TimeEntry[] });
 
 let timer: ReturnType<typeof setTimeout> | null = null;
+let lastStopAt = 0;
 
 function openWindow(): void {
   if (timer) clearTimeout(timer);
@@ -40,8 +44,10 @@ export async function stopTimerWithUndo(entry: TimeEntry): Promise<void> {
   if (entry.stopped_at !== null) return;
   const snapshot = $state.snapshot(entry) as TimeEntry;
   await stopTimer(entry.id);
+  const burst = performance.now() - lastStopAt < BURST_MS;
+  lastStopAt = performance.now();
   undoState.deleted = null;
-  undoState.stopped = [...undoState.stopped, snapshot];
+  undoState.stopped = burst ? [...undoState.stopped, snapshot] : [snapshot];
   openWindow();
 }
 

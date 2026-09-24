@@ -158,9 +158,6 @@ test.describe("feed paging", () => {
     await seedHistory(server.url, 60);
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.goto(server.url + "/#/");
-    // Without the browser's own anchoring - Safari has none, and it would hide a
-    // missing correction in Chromium.
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 30 task 0");
 
     // A mounted day above the viewport gains rows through a sync.
@@ -230,7 +227,6 @@ test.describe("feed paging", () => {
     await seedHistory(server.url, 40);
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 20 task 0");
 
     // The row the scroller holds is the first one crossing the top edge, so that
@@ -350,7 +346,6 @@ test.describe("pinned running timers", () => {
     await seedHistory(server.url, 40);
     await page.setViewportSize({ width: 1200, height: 900 });
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await page.getByPlaceholder("What are you working on?").fill("Pinned work");
     await page.getByRole("button", { name: "Start" }).click();
     await expect(runningCard(page)).toBeVisible();
@@ -459,7 +454,6 @@ test.describe("pinned running timers", () => {
     await trackErrors(page);
     await seedHistory(server.url, 40);
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 20 task 0");
     // The reader has been still for a moment: only then does the strip push
     // their row down rather than lie over it.
@@ -491,7 +485,6 @@ test.describe("pinned running timers", () => {
       })),
     });
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 20 task 0");
     const groupLine = (task: string) => page.locator(".feed .group-line").filter({ hasText: task });
 
@@ -570,6 +563,17 @@ test.describe("pinned running timers", () => {
     await toast.getByRole("button", { name: "Undo" }).click();
     await expect(stripLines(page)).toHaveCount(3);
     await expect(toast).toHaveCount(0);
+
+    // Stops made deliberately, a moment apart, are separate: Undo takes back
+    // only the last one.
+    await tap(page, first);
+    await expect(stripLines(page)).toHaveCount(2);
+    await page.waitForTimeout(1_700);
+    await tap(page, first);
+    await expect(stripLines(page)).toHaveCount(1);
+    await expect(toast).not.toContainText("timers");
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(stripLines(page)).toHaveCount(2);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -579,7 +583,6 @@ test.describe("pinned running timers", () => {
     await page.setViewportSize({ width: 1200, height: 900 });
     await seedServer(server.url, { entries: timers(4) });
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 20 task 0");
     await expectStrip(page, 4, false);
     const stops = strip(page).getByRole("button", { name: "Stop" });
@@ -652,6 +655,31 @@ test.describe("pinned running timers", () => {
       await settle(page);
       expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
     }
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a session of an expanded group hands focus to its group's line", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    const now = Date.now();
+    await seedServer(server.url, {
+      entries: [
+        { description: "Pair task", startedAt: now - 60_000, stoppedAt: null },
+        { description: "Pair task", startedAt: now - 2 * 60_000, stoppedAt: null },
+        ...timers(2, now - 2 * 60_000),
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    const card = runningCard(page);
+    await card.locator(".group-row").click();
+    await expect(card.locator(".item.member")).toHaveCount(2);
+    await card.locator(".item.member").last().getByRole("button", { name: "Stop" }).focus();
+
+    await page.evaluate(() => window.scrollTo(0, 1500));
+    await expect(strip(page)).toHaveClass(/stuck/);
+    const twin = await strip(page).locator(".pin-toggle").getAttribute("data-twin");
+    await expect.poll(() => focusedTwin(page)).toEqual({ twin, inStrip: true, inCard: false });
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -784,6 +812,11 @@ test.describe("pinned running timers under a thumb", () => {
     const stop = (await strip(page).getByRole("button", { name: "Stop" }).first().boundingBox())!;
     expect([Math.round(stop.width), Math.round(stop.height)]).toEqual([44, 44]);
 
+    // A phone's toolbar collapsing changes only the height: the strip stays put.
+    await page.setViewportSize({ width: 390, height: 440 });
+    await settle(page);
+    await expectStrip(page, 4, true);
+
     // Landscape on a phone is short: one line and "+N more".
     await page.setViewportSize({ width: 740, height: 360 });
     await expect(stripLines(page)).toHaveCount(1);
@@ -832,6 +865,19 @@ test.describe("pinned running timers under a thumb", () => {
     await page.keyboard.press("Escape");
     await expect(moreOverlay).toHaveCount(0);
     await expect(more).toBeFocused();
+
+    // A keyboard Stop inside a group's overlay that leaves one session behind
+    // hands focus to that session's own line; the group comes back collapsed.
+    await tap(page, toggle);
+    await groupOverlay.getByRole("button", { name: "Stop" }).first().focus();
+    await page.keyboard.press("Enter");
+    await expect(groupOverlay).toHaveCount(0);
+    const review = stripLines(page).filter({ hasText: "Review pull request" });
+    await expect(review.locator(".pin-stop")).toBeFocused();
+    await seedServer(server.url, { entries: [{ description: "Review pull request", startedAt: Date.now() - 1_000, stoppedAt: null }] });
+    await triggerSync(page);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(strip(page).locator(".pin-overlay")).toHaveCount(0);
 
     // Leaving the feed for the top of the page closes whatever is open.
     await tap(page, more);
@@ -915,7 +961,6 @@ test.describe("feed after a width change", () => {
     await seedHistory(server.url, 120);
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.goto(server.url + "/#/");
-    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
     await scrollUntilVisible(page, "Day 90 task 0");
 
     await page.setViewportSize({ width: 400, height: 800 });

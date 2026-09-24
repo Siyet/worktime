@@ -174,8 +174,11 @@ test.describe("day ruler", () => {
 
   test("appears only on a wide window, and only once there is a day before today", async ({ page, server }) => {
     await trackErrors(page);
+    // Today's, whatever the time of day: an hour back would be yesterday before 1 am.
+    const now = Date.now();
+    const midnight = new Date(now).setHours(0, 0, 0, 0);
     await seedServer(server.url, {
-      entries: [{ description: "Only today", startedAt: Date.now() - HOUR, stoppedAt: Date.now() - HOUR / 2 }],
+      entries: [{ description: "Only today", startedAt: Math.max(midnight, now - HOUR), stoppedAt: now }],
     });
     await page.goto(server.url + "/#/");
     await expect(page.locator(".feed .item")).toHaveCount(1);
@@ -189,13 +192,21 @@ test.describe("day ruler", () => {
     // Below 85rem there is no room for it beside the column: not rendered at all.
     await page.setViewportSize({ width: 1300, height: 900 });
     await expect(ruler(page)).toHaveCount(0);
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // Up to 88rem it fits without the times, which stay in the tooltip.
+    const time = ruler(page).locator(".dr-dur").first();
+    await page.setViewportSize({ width: 1380, height: 900 });
     await expect(ruler(page)).toBeVisible();
-    // It sits in the margin, clear of the cards.
-    const cards = (await page.locator(".feed .card").first().boundingBox())!;
-    const nav = (await ruler(page).boundingBox())!;
-    expect(nav.x).toBeGreaterThanOrEqual(cards.x + cards.width + 8);
-    expect(nav.x + nav.width).toBeLessThanOrEqual(1440);
+    await expect(time).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(time).toBeVisible();
+    // It sits in the margin, clear of the cards, at every width it is shown at.
+    for (const width of [1380, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const cards = (await page.locator(".feed .card").first().boundingBox())!;
+      const nav = (await ruler(page).boundingBox())!;
+      expect(nav.x).toBeGreaterThanOrEqual(cards.x + cards.width + 8);
+      expect(nav.x + nav.width).toBeLessThanOrEqual(width);
+    }
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -219,9 +230,23 @@ test.describe("day ruler", () => {
       return date.getDay() !== 1 && date.getDate() !== 1;
     })!;
     const first = [...Array(40).keys()].map((index) => index + 1).find((offset) => new Date(dayNine(-offset)).getDate() === 1)!;
-    expect(await tick(plain)).toBe(6);
-    expect(await tick(monday)).toBe(11);
-    expect(await tick(first)).toBe(17);
+    expect(await tick(plain)).toBe(12);
+    expect(await tick(monday)).toBe(20);
+    expect(await tick(first)).toBe(28);
+    // Every tick ends flush with the right edge of the window - at the page's
+    // scrollbar gutter, where the platform reserves one.
+    const edge = (offset: number) =>
+      row(page, offset).evaluate((button) => button.getBoundingClientRect().right - parseFloat(getComputedStyle(button, "::before").right));
+    const windowEdge = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position: fixed; right: 0; width: 0; height: 0";
+      document.body.append(probe);
+      const right = probe.getBoundingClientRect().right;
+      probe.remove();
+      return right;
+    });
+    expect(windowEdge).toBeGreaterThan(page.viewportSize()!.width - 20);
+    for (const offset of [plain, monday, first]) expect(await edge(offset)).toBe(windowEdge);
 
     const band = (offset: number) => row(page, offset).locator("xpath=..").getAttribute("data-band");
     expect(await band(nearest(1, true))).toBe("weekend");
@@ -239,6 +264,69 @@ test.describe("day ruler", () => {
     await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 2 entries/);
     await expect(page.locator(".dr-day.today")).toHaveAccessibleName(/20m, 1 entry$/);
     await expect(row(page, SICK)).toHaveAccessibleName(/sick leave/);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a day with work in parallel shows the header's clock time, the figure before the slash", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // Inside the day's first entry: 40 more minutes tracked, not one more on the clock.
+    const weekday = recordedFrom(1);
+    await seedServer(server.url, {
+      entries: [{ description: "In parallel", startedAt: dayNine(-weekday) + 10 * 60_000, stoppedAt: dayNine(-weekday) + 50 * 60_000 }],
+    });
+    await open(page, server.url);
+    const header = page.locator(`.feed > .day[data-key="${isoDay(dayNine(-weekday))}"] .card > .row`);
+    await expect(header.locator(".wall")).toHaveText("1h 30m");
+    await expect(header.locator(".tracked")).toHaveText("2h 10m");
+    await expect(row(page, weekday).locator(".dr-dur")).toHaveText("1h 30m");
+    // The tooltip and the name add the header's second figure.
+    await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 2h 10m tracked - work that ran in parallel is counted once, 3 entries/);
+    await row(page, weekday).hover();
+    await expect(page.locator(".dr-tip .ts")).toHaveText(["1h 30m · 3 entries", "2h 10m tracked - work that ran in parallel is counted once"]);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("rows keep the model's height whatever the browser's font size", async ({ page, server, browserName }) => {
+    test.skip(browserName !== "chromium", "the default font size is set through the Chromium protocol");
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // A reader's larger default font: rem-sized rows would outgrow the model's
+    // offsets, and following the page would lose the day at the reading line.
+    const session = await page.context().newCDPSession(page);
+    await session.send("Page.setFontSizes", { fontSizes: { standard: 20, fixed: 16 } });
+    // 85rem is 1700px at that size.
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await open(page, server.url);
+    expect(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(20);
+    const height = (selector: string) => page.locator(selector).first().evaluate((element) => element.getBoundingClientRect().height);
+    expect(await height(".dr-li")).toBe(20);
+    expect(await height(".dr-mhead")).toBe(28);
+    // A whole month, header and rows: the model's height for it. The first month
+    // is the current one, which never has a year row above it.
+    const month = page.locator(".dr-month").first();
+    const rows = await month.locator(".dr-li").count();
+    expect(await month.evaluate((element) => element.getBoundingClientRect().height)).toBe(28 + rows * 20);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a tick under the pointer grows and comes up to full strength", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    await open(page, server.url);
+    const target = row(page, nearest(20, false));
+    const tick = () =>
+      target.evaluate((button) => {
+        const style = getComputedStyle(button, "::before");
+        return { width: parseFloat(style.width), opacity: Number(style.opacity) };
+      });
+    const rest = await tick();
+    expect(rest.opacity).toBeLessThan(1);
+    await target.hover();
+    // Past the transition: it settles 10px longer, at full opacity.
+    await expect.poll(tick).toEqual({ width: rest.width + 10, opacity: 1 });
+    await pointAtFeed(page);
+    await expect.poll(tick).toEqual(rest);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -486,9 +574,11 @@ test.describe("day ruler", () => {
     const scroller = page.locator(".dr-scroll");
     const scrollTop = () => scroller.evaluate((element) => element.scrollTop);
     const inView = async () => {
-      const box = (await page.locator(".dr-thumb").boundingBox())!;
+      const lit = page.locator(".dr-day[data-vis]");
+      const first = (await lit.first().boundingBox())!;
+      const last = (await lit.last().boundingBox())!;
       const frame = (await scroller.boundingBox())!;
-      return box.y >= frame.y && box.y + box.height <= frame.y + frame.height;
+      return first.y >= frame.y && last.y + last.height <= frame.y + frame.height;
     };
 
     // Deep in the feed - a jump, then the reader scrolling on from there.
@@ -523,10 +613,10 @@ test.describe("day ruler", () => {
     for (const iso of shown) expect(marked).toContain(iso);
     // The day at the reading line is where the reader is.
     await expect(page.locator(".dr-day[aria-current='location']")).toHaveAttribute("data-iso", atLine!);
-    // The page scroll brought the thumb into the ruler's view.
+    // The page scroll brought the lit ticks into the ruler's view.
     expect(await inView()).toBe(true);
 
-    // The reader takes the ruler back to today: the chip says the thumb is below.
+    // The reader takes the ruler back to today: the chip says the lit ticks are below.
     const frame = (await scroller.boundingBox())!;
     await page.mouse.move(frame.x + frame.width / 2, frame.y + 200);
     await page.mouse.wheel(0, -20_000);
@@ -548,7 +638,7 @@ test.describe("day ruler", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
-  test("the wheel over the ruler scrolls the ruler, never the page, and the chip brings the thumb back", async ({ page, server }) => {
+  test("the wheel over the ruler scrolls the ruler, never the page, and the chip brings the lit ticks back", async ({ page, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 2);
     await open(page, server.url);
@@ -560,7 +650,7 @@ test.describe("day ruler", () => {
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
     await settle(page);
     expect(await page.evaluate(() => window.scrollY)).toBe(before);
-    // The thumb is up at today: the chip points up and scrolls the ruler back.
+    // The lit ticks are up at today: the chip points up and scrolls the ruler back.
     const chip = page.locator(".dr-return");
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("▲");
@@ -586,7 +676,7 @@ test.describe("day ruler", () => {
 
     await page.keyboard.press("End");
     expect(await focused()).toBe(isoDay(dayNine(-OLDEST)));
-    // Far from the thumb, and no chip over the rows focus moves to.
+    // Far from the lit ticks, and no chip over the rows focus moves to.
     await expect(page.locator(".dr-return")).toHaveCount(0);
     await page.keyboard.press("PageUp");
     expect(await focusCovered(page)).toBe(false);
@@ -701,7 +791,7 @@ test.describe("day ruler", () => {
     await trackErrors(page);
     await seedHistory(server.url);
     // Late January, with a screenful of January days: the history reaches back
-    // into a past year, and the thumb stays up in January.
+    // into a past year, and the lit ticks stay up in January.
     const year = new Date().getFullYear() + 1;
     const january = [];
     for (let date = 4; date <= 19; date++) {
@@ -788,7 +878,7 @@ test.describe("day ruler", () => {
     await settle(page);
     expect(await scrollTop()).toBe(explored);
 
-    // The next page scroll brings the thumb back into view.
+    // The next page scroll brings the lit ticks back into view.
     await page.evaluate(() => window.scrollBy(0, 200));
     await settle(page);
     expect(await scrollTop()).toBeLessThan(explored);

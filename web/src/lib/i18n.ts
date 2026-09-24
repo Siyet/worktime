@@ -268,6 +268,8 @@ const ru: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} записей шли одновременно, по часам это {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} по часам, {tracked} затрекано - параллельная работа считается один раз",
+  "{tracked} tracked - work that ran in parallel is counted once":
+    "{tracked} затрекано - параллельная работа считается один раз",
   Days: "Дни",
   Today: "Сегодня",
   "No entries": "Нет записей",
@@ -539,6 +541,8 @@ const es: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} registros se solaparon; en reloj son {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} en reloj, {tracked} registrados - el trabajo en paralelo se cuenta una vez",
+  "{tracked} tracked - work that ran in parallel is counted once":
+    "{tracked} registrados - el trabajo en paralelo se cuenta una vez",
   Days: "Días",
   Today: "Hoy",
   "No entries": "Sin registros",
@@ -809,6 +813,8 @@ const de: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} Einträge überschnitten sich; nach der Uhr sind das {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} nach der Uhr, {tracked} erfasst - parallele Arbeit zählt einmal",
+  "{tracked} tracked - work that ran in parallel is counted once":
+    "{tracked} erfasst - parallele Arbeit zählt einmal",
   Days: "Tage",
   Today: "Heute",
   "No entries": "Keine Einträge",
@@ -1081,6 +1087,8 @@ const fr: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} entrées se chevauchaient ; à l'horloge cela fait {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "{wall} à l'horloge, {tracked} suivies - le travail en parallèle est compté une fois",
+  "{tracked} tracked - work that ran in parallel is counted once":
+    "{tracked} suivies - le travail en parallèle est compté une fois",
   Days: "Jours",
   Today: "Aujourd'hui",
   "No entries": "Aucune entrée",
@@ -1348,6 +1356,8 @@ const zh: Dictionary = {
   "{n} entries overlapped; on the clock this is {wall}": "{n} 条记录同时进行，按时钟计为 {wall}",
   "{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once":
     "按时钟 {wall}，记录 {tracked} - 并行的工作只计一次",
+  "{tracked} tracked - work that ran in parallel is counted once":
+    "记录 {tracked} - 并行的工作只计一次",
   Days: "日期",
   Today: "今天",
   "No entries": "没有记录",

@@ -7,12 +7,14 @@
 // lib/components/DayRuler.svelte; design/components/day-ruler.html is the spec.
 import type { FeedDay } from "./feed";
 import { entryDurationMs } from "./format";
+import { wallClockMs } from "./tasks";
 import type { TimeOffKind } from "./types";
 
-/** One calendar day, in px - the --dr-pitch of the component. */
-export const RULER_PITCH = 16;
+/** One calendar day, in px - the --dr-pitch of the component, which is px too:
+ * in rem, a browser's larger default font would stretch the rows past the model. */
+export const RULER_PITCH = 20;
 /** A month header, and a past year's row above its months - --dr-head. */
-export const RULER_HEAD = 24;
+export const RULER_HEAD = 28;
 
 export type RulerBand = TimeOffKind | "weekend";
 /** Where a click lands: a day of the feed, or the top of the page. */
@@ -26,7 +28,9 @@ export interface RulerRow {
   date: number;
   /** 0 is Sunday, as Date.getDay. */
   weekday: number;
-  /** The day header's own figure: every finished entry's duration, summed. */
+  /** The day header's first figure: clock time, work that ran in parallel counted once. */
+  clockMs: number;
+  /** The day header's second figure: every finished entry's duration, summed. */
   trackedMs: number;
   count: number;
   off: TimeOffKind | null;
@@ -71,8 +75,6 @@ export interface RulerModel {
   monthByKey: Map<string, RulerMonth>;
   /** The track's height. */
   height: number;
-  /** Where the spine ends: the oldest day's tick. */
-  spineEnd: number;
 }
 
 /**
@@ -137,7 +139,6 @@ export function buildRuler(
     byISO: new Map(),
     monthByKey: new Map(),
     height: 0,
-    spineEnd: 0,
   };
   const oldest = days.at(-1)?.iso;
   if (oldest === undefined) return empty;
@@ -156,7 +157,9 @@ export function buildRuler(
       month: cursor.getMonth(),
       date: cursor.getDate(),
       weekday,
-      // Every group's total, summed: the entries' durations.
+      // The header's two figures: clock time with parallel work counted once,
+      // and every entry's duration, summed.
+      clockMs: day === undefined ? 0 : wallClockMs(day.entries, 0),
       trackedMs: day === undefined ? 0 : day.entries.reduce((sum, entry) => sum + entryDurationMs(entry, 0), 0),
       count: day?.entries.length ?? 0,
       off: kind,
@@ -234,16 +237,15 @@ export function buildRuler(
     byISO: new Map(rows.map((row) => [row.iso, row])),
     monthByKey: new Map(months.map((each) => [each.key, each])),
     height: offset,
-    spineEnd: rows.at(-1)!.top + RULER_PITCH / 2,
   };
 }
 
 // rulerOffset maps a place in the feed onto the ruler's track, continuously: a
 // fraction of a day's card is that fraction of its row, the gap after it spans
 // the empty rows (and any header) down to the next recorded day, and the space
-// above the feed spans today's row down to the feed's first day. So the thumb
-// glides with the page and crosses a weekend as the feed crosses the gap
-// between Friday and Monday.
+// above the feed spans today's row down to the feed's first day. So the span
+// of lit ticks moves with the page and crosses a weekend as the feed crosses the
+// gap between Friday and Monday.
 export function rulerOffset(model: RulerModel, spot: FeedSpot): number {
   const first = model.rows[0]?.top ?? 0;
   const topOf = (iso: string | null, fallback: number) => (iso === null ? fallback : (model.byISO.get(iso)?.top ?? fallback));

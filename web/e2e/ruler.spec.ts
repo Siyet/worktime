@@ -95,6 +95,25 @@ async function settle(page: Page): Promise<void> {
   }
 }
 
+// A wheel scroll is animated in some engines - WebKit on Linux among them - and
+// goes on for a while after the position first passes a threshold. What is
+// measured against the ruler waits for it to come to rest.
+async function rulerAtRest(page: Page): Promise<void> {
+  const scroller = page.locator(".dr-scroll");
+  let last: number | null = null;
+  await expect
+    .poll(
+      async () => {
+        const now = await scroller.evaluate((element) => element.scrollTop);
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { intervals: [150] },
+    )
+    .toBe(true);
+}
+
 function ruler(page: Page) {
   return page.getByRole("navigation", { name: "Days" });
 }
@@ -312,6 +331,14 @@ test.describe("day ruler", () => {
         const row = rows.find((each) => each.getBoundingClientRect().bottom > line)!;
         return { text: row.textContent, offset: row.getBoundingClientRect().top - line };
       });
+    // The same row, however far it moved - null once it is not mounted.
+    const offsetOf = (text: string | null) =>
+      page.evaluate((text) => {
+        const line = document.querySelector(".pinbar.stuck")?.getBoundingClientRect().bottom ?? 0;
+        const rows = [...document.querySelectorAll<HTMLElement>(".feed > .day [data-anchor]")];
+        const row = rows.find((each) => each.textContent === text);
+        return row === undefined ? null : row.getBoundingClientRect().top - line;
+      }, text);
     await row(page, nearest(600, false)).click();
     await pointAtFeed(page);
     await page.mouse.wheel(0, 700);
@@ -320,9 +347,9 @@ test.describe("day ruler", () => {
     const scrolled = await atLine();
     await page.waitForTimeout(3_000);
     await settle(page);
-    const later = await atLine();
-    expect(later.text).toBe(scrolled.text);
-    expect(Math.abs(later.offset - scrolled.offset)).toBeLessThanOrEqual(1.5);
+    const later = await offsetOf(scrolled.text);
+    expect(later, `row "${scrolled.text}" at ${scrolled.offset} is gone`).not.toBeNull();
+    expect(Math.abs(later! - scrolled.offset), `row "${scrolled.text}" moved from ${scrolled.offset} to ${later}`).toBeLessThanOrEqual(1.5);
 
     // Home and End while the days above a far jump are still being measured
     // go straight to the ends of the page - End to the end it had then.
@@ -332,9 +359,18 @@ test.describe("day ruler", () => {
     await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 1_500 }).toBe(0);
     await row(page, nearest(500, false)).click();
     await page.waitForTimeout(700);
-    const end = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+    // Read straight after the scroller's own handler, before any frame corrects
+    // the page for the days above being measured.
+    await page.evaluate(() => {
+      const record = (event: KeyboardEvent) => {
+        if (event.key !== "End") return;
+        (window as unknown as { endGap: number }).endGap = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+        window.removeEventListener("keydown", record);
+      };
+      window.addEventListener("keydown", record);
+    });
     await page.keyboard.press("End");
-    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 1_500 }).toBeGreaterThanOrEqual(end - 2);
+    expect(await page.evaluate(() => (window as unknown as { endGap: number }).endGap)).toBeLessThanOrEqual(2);
     // More history loads below, and the days above are measured - the page's
     // scroll position moves with the corrections, but what the reader sees
     // does not: End does not chase the growing bottom.
@@ -342,9 +378,9 @@ test.describe("day ruler", () => {
     const ended = await atLine();
     await page.waitForTimeout(1_000);
     await settle(page);
-    const after = await atLine();
-    expect(after.text).toBe(ended.text);
-    expect(Math.abs(after.offset - ended.offset)).toBeLessThanOrEqual(1.5);
+    const after = await offsetOf(ended.text);
+    expect(after, `row "${ended.text}" at ${ended.offset} is gone`).not.toBeNull();
+    expect(Math.abs(after! - ended.offset), `row "${ended.text}" moved from ${ended.offset} to ${after}`).toBeLessThanOrEqual(1.5);
 
     // The oldest day: the page ends before it reaches the line, and it stays put.
     const oldest = page.locator(".dr-day").last();
@@ -620,6 +656,7 @@ test.describe("day ruler", () => {
     await page.mouse.move(point.x, point.y);
     await page.mouse.wheel(0, 320);
     await expect.poll(() => page.locator(".dr-scroll").evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+    await rulerAtRest(page);
     await settle(page);
     const under = await page.evaluate(({ x, y }) => {
       const stop = document.elementFromPoint(x, y)?.closest<HTMLElement>(".dr-day, .dr-mbtn");
@@ -734,6 +771,7 @@ test.describe("day ruler", () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     for (let step = 0; step < 6; step++) await page.mouse.wheel(0, 400);
     await expect.poll(scrollTop).toBeGreaterThan(1500);
+    await rulerAtRest(page);
     await pointAtFeed(page);
     await settle(page);
     const explored = await scrollTop();
@@ -769,6 +807,7 @@ test.describe("day ruler", () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.wheel(0, 1200);
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(800);
+    await rulerAtRest(page);
     await settle(page);
     const watched = row(page, recordedFrom(40));
     const before = (await watched.boundingBox())!.y;

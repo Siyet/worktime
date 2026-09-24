@@ -1130,6 +1130,9 @@ test.describe("feed after a width change", () => {
     await blur(page);
     await page.keyboard.press("Home");
     await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 10_000 }).toBe(0);
+    // Home is a jump: the days it left are mounted until the scroller's next
+    // frame, and a row found among them would be unmounted under the helper.
+    await settle(page);
 
     await scrollUntilVisible(page, "Day 90 task 0");
     await page.setViewportSize({ width: 1200, height: 800 });

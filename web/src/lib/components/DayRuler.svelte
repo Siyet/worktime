@@ -32,18 +32,23 @@
     timeOff: TimeOff[];
     todayISO: string;
     visible: FeedVisible | null;
+    /** When the reader last scrolled the page (performance.now). */
+    scrolledAt: () => number;
     /** Jumps the feed; resolves once the target is on screen. */
     onjump: (target: RulerTarget) => Promise<void> | void;
   }
 
-  let { days, timeOff, todayISO, visible, onjump }: Props = $props();
+  let { days, timeOff, todayISO, visible, scrolledAt, onjump }: Props = $props();
 
   /** Hover intent before the first tooltip; after that it follows the pointer. */
   const TIP_DELAY_MS = 250;
   const TIP_HIDE_MS = 120;
   const STOPS = ".dr-day, .dr-mbtn";
 
-  const model = $derived(buildRuler(days, expandTimeOff(timeOff), todayISO));
+  // Each model is built against the last one, so the rows that stayed the same
+  // are the same objects and do not re-render.
+  let lastModel: RulerModel | undefined;
+  const model = $derived.by(() => (lastModel = buildRuler(days, expandTimeOff(timeOff), todayISO, lastModel)));
   const currentYear = $derived(Number(todayISO.slice(0, 4)));
 
   // Intl formatters for the UI's formatting locale, built once per locale.
@@ -64,7 +69,8 @@
 
   let thumb = $state<{ top: number; bottom: number } | null>(null);
   let more = $state(false);
-  let chip = $state<{ up: boolean; top: number | null; label: string } | null>(null);
+  /** `cover` hides the part of a row between the stuck headers and the chip. */
+  let chip = $state<{ up: boolean; top: number | null; cover: number; label: string } | null>(null);
   let tip = $state<{ title: string; lines: { text: string; time?: string; kind?: TimeOffKind }[] } | null>(null);
 
   // Plain fields: the reader's use of the ruler and the marks on its rows. The
@@ -72,6 +78,9 @@
   // rebuild clears and sets them again.
   let hover = false;
   let keyboard = false;
+  /** When the reader left the ruler: it stays where they left it until the page scrolls. */
+  let parkedAt: number | null = null;
+  let pointer: { x: number; y: number } | null = null;
   let tipButton: HTMLElement | null = null;
   let tipWarm = false;
   let tipTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,10 +120,14 @@
   function dayLabel(row: RulerRow): string {
     const full = formats.full.format(dateOfISO(row.iso));
     let label = row.today ? `${t("Today")}, ${full}` : capitalise(full);
-    if (row.count > 0) label += `, ${formatDurationShort(row.trackedMs)}, ${t("{n} entries", { n: row.count })}`;
-    if (row.off !== null) label += `, ${kindLabel(row.off).toLocaleLowerCase()}`;
-    if (row.count === 0 && row.off === null) label += `, ${t("No entries").toLocaleLowerCase()}`;
+    if (row.count > 0) label += `, ${formatDurationShort(row.trackedMs)}, ${entriesLabel(row.count)}`;
+    if (row.off !== null) label += `, ${kindLabel(row.off)}`;
+    if (row.count === 0 && row.off === null) label += `, ${t("no entries")}`;
     return label;
+  }
+
+  function entriesLabel(count: number): string {
+    return count === 1 ? t("1 entry") : t("{n} entries", { n: count });
   }
 
   function monthLabel(month: RulerMonth): string {
@@ -175,20 +188,34 @@
         if (tabStop !== null && !tabStop.isConnected) tabStop = null;
         markedModel = current;
       }
+      // Every read of the scroller, and its scroll, before the marks change any
+      // style: one layout a frame, not one per read.
+      const view = viewOf();
       if (range === null || current.rows.length === 0) {
         thumb = null;
       } else {
         const top = rulerOffset(current, range.top);
         const bottom = Math.max(top + 4, rulerOffset(current, range.bottom));
         thumb = { top, bottom };
+        if (view !== null && following()) view.scrollTop = follow(false, view);
         const first = rowFrom(current, top);
         const at = range.current === null ? 0 : (current.byISO.get(range.current)?.index ?? 0);
         mark(first, Math.max(first, rowUntil(current, bottom)), at);
-        if (!hover && !keyboard) follow(false);
       }
-      updateChrome();
+      if (view !== null) updateChrome(view);
     });
   });
+
+  interface View {
+    scrollTop: number;
+    height: number;
+    scrollHeight: number;
+  }
+
+  function viewOf(): View | null {
+    const element = scroller;
+    return element === null ? null : { scrollTop: element.scrollTop, height: element.clientHeight, scrollHeight: element.scrollHeight };
+  }
 
   // The visible range and the day at the reading line, marked by hand: toggling
   // a class on thousands of rows reactively would rerun every row each frame.
@@ -212,6 +239,16 @@
     if (!keyboard) setTabStop(buttonAt(current));
   }
 
+  // Following pauses while the reader uses the ruler, and once they leave it
+  // resumes with the first page scroll: until then the ruler stays where they
+  // left it, whatever a sync or midnight changes.
+  function following(): boolean {
+    if (hover || keyboard) return false;
+    if (parkedAt !== null && scrolledAt() <= parkedAt) return false;
+    parkedAt = null;
+    return true;
+  }
+
   // Headers stuck at the top of the ruler at a track offset: a month's, and a
   // past year's above it.
   function stuckHeight(offset: number): number {
@@ -223,43 +260,61 @@
   // Always instant: in lock-step with the page, and a long smooth scroll of
   // dates in the corner of the eye pulls attention from the feed. Only the
   // chip, clicked while looking at the ruler, animates a short distance.
-  function follow(fromChip: boolean): void {
+  // Returns where the ruler is scrolled to.
+  function follow(fromChip: boolean, view: View | null = viewOf()): number {
     const element = scroller;
-    if (element === null || thumb === null) return;
-    const height = element.clientHeight;
-    const scrollTop = element.scrollTop;
+    if (element === null || view === null || thumb === null) return view?.scrollTop ?? 0;
+    const { height, scrollTop } = view;
     const heads = stuckHeight(thumb.top);
     const bandTop = heads + 0.15 * (height - heads);
     const bandBottom = 0.8 * height;
     let target = scrollTop;
     if (fromChip || thumb.top < scrollTop + bandTop) target = thumb.top - bandTop;
     else if (thumb.bottom > scrollTop + bandBottom) target = Math.min(thumb.bottom - bandBottom, thumb.top - bandTop);
-    target = Math.min(Math.max(0, target), element.scrollHeight - height);
-    if (Math.abs(target - scrollTop) < 0.5) return;
+    target = Math.min(Math.max(0, target), view.scrollHeight - height);
+    if (Math.abs(target - scrollTop) < 0.5) return scrollTop;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const smooth = fromChip && Math.abs(target - scrollTop) <= 3 * height && !reduced;
     element.scrollTo({ top: target, behavior: smooth ? "smooth" : "instant" });
+    // A smooth scroll is still where it was; its scroll events update the chrome.
+    return smooth ? scrollTop : target;
   }
 
   // The fade at the bottom while there is more below, and the chip that says
-  // where the thumb went once the reader scrolled the ruler away from it.
-  function updateChrome(): void {
-    const element = scroller;
-    if (element === null) return;
-    more = element.scrollTop + element.clientHeight < element.scrollHeight - 1;
-    if (thumb === null || model.rows.length === 0) {
+  // where the thumb went once the reader scrolled the ruler away from it. The
+  // chip is for the pointer: it would cover the row keyboard focus moves to,
+  // and focus lands on the current day anyway.
+  function updateChrome(view: View | null = viewOf()): void {
+    if (view === null) return;
+    const { scrollTop, height } = view;
+    const hasMore = scrollTop + height < view.scrollHeight - 1;
+    if (hasMore !== more) more = hasMore;
+    if (thumb === null || model.rows.length === 0 || keyboard) {
       chip = null;
       return;
     }
-    const heads = stuckHeight(element.scrollTop + RULER_HEAD);
-    const up = thumb.bottom < element.scrollTop + heads;
-    const down = thumb.top > element.scrollTop + element.clientHeight - 8;
+    const heads = stuckHeight(scrollTop + RULER_HEAD);
+    const up = thumb.bottom < scrollTop + heads;
+    const down = thumb.top > scrollTop + height - 8;
     if (!up && !down) {
       chip = null;
       return;
     }
+    // Up, over the first whole row under the stuck headers, the part of a row
+    // (and any header) above it covered, so it never shows half a label.
+    let top: number | null = null;
+    let cover = 0;
+    if (up) {
+      const line = scrollTop + heads;
+      const row = model.rows[rowFrom(model, line)]!;
+      const whole = row.top >= line - 0.5 ? row : (model.rows[row.index + 1] ?? row);
+      top = Math.max(heads, whole.top - scrollTop);
+      cover = top - heads;
+    }
     const current = model.rows[Math.max(0, marked.current)];
-    chip = { up, top: up ? heads : null, label: current === undefined ? "" : shortLabel(current.iso) };
+    const label = current === undefined ? "" : shortLabel(current.iso);
+    if (chip !== null && chip.up === up && chip.top === top && chip.cover === cover && chip.label === label) return;
+    chip = { up, top, cover, label };
   }
 
   // --- stops, focus and keys ----------------------------------------------------
@@ -298,6 +353,15 @@
   function onclick(event: MouseEvent): void {
     const button = stopOf(event.target);
     if (button !== null) void jump(button);
+  }
+
+  // A click jumps without taking focus, as in Safari, so the page keys go on
+  // scrolling the page; once the reader is in the ruler with the keyboard, a
+  // click moves focus along. The decorative chip never takes it.
+  function onmousedown(event: MouseEvent): void {
+    if (!(event.target instanceof Element)) return;
+    const chipped = event.target.closest(".dr-return") !== null;
+    if (chipped || (stopOf(event.target) !== null && !nav?.contains(document.activeElement))) event.preventDefault();
   }
 
   // Focus stays clear of the stuck headers and the bottom fade.
@@ -382,22 +446,29 @@
     const button = stopOf(event.target);
     keyboard = button !== null && button.matches(":focus-visible");
     if (keyboard && button !== null) showTip(button);
+    updateChrome();
   }
 
   function onfocusout(event: FocusEvent): void {
     if (nav !== null && event.relatedTarget instanceof Node && nav.contains(event.relatedTarget)) return;
     keyboard = false;
+    parkedAt = performance.now();
     if (!hover) hideTip(false);
+    updateChrome();
   }
 
   // --- tooltip ----------------------------------------------------------------
 
   function onpointerenter(): void {
     hover = true;
+    // Back within the hide delay: the tooltip stays.
+    clearTimeout(tipTimer);
   }
 
   function onpointerleave(): void {
     hover = false;
+    pointer = null;
+    parkedAt = performance.now();
     clearTimeout(tipTimer);
     tipTimer = setTimeout(() => {
       if (!keyboard) hideTip(false);
@@ -405,8 +476,13 @@
   }
 
   function onpointermove(event: PointerEvent): void {
-    const button = stopOf(event.target);
+    pointer = { x: event.clientX, y: event.clientY };
+    pointAt(stopOf(event.target));
+  }
+
+  function pointAt(button: HTMLElement | null): void {
     if (button === null) {
+      clearTimeout(tipTimer);
       if (tipWarm) hideTip(true);
       return;
     }
@@ -434,9 +510,12 @@
       const date = dateOfISO(row.iso);
       const day = row.year === currentYear ? formats.tipDay.format(date) : formats.full.format(date);
       const lines: { text: string; time?: string; kind?: TimeOffKind }[] = [];
-      if (row.count > 0) lines.push({ time: formatDurationShort(row.trackedMs), text: `· ${t("{n} entries", { n: row.count })}` });
+      if (row.count > 0) lines.push({ time: formatDurationShort(row.trackedMs), text: `· ${entriesLabel(row.count)}` });
       if (row.off !== null) lines.push({ kind: row.off, text: kindLabel(row.off) });
-      if (row.count === 0) lines.push({ text: (row.off === null ? `${t("No entries")} · ` : "") + whereTo(row.target, false) });
+      if (row.count === 0) {
+        const where = whereTo(row.target, false);
+        lines.push({ text: row.off === null ? `${t("No entries")} · ${where}` : capitalise(where) });
+      }
       tip = { title: row.today ? `${t("Today")}, ${day}` : capitalise(day), lines };
     } else return;
     void tick().then(() => placeTip(button));
@@ -463,6 +542,8 @@
 
   function onscroll(): void {
     updateChrome();
+    // Chromium sends no pointermove when the rows scroll under a resting pointer.
+    if (hover && !keyboard && pointer !== null) pointAt(stopOf(document.elementFromPoint(pointer.x, pointer.y)));
     if (tipButton !== null && tip !== null) placeTip(tipButton);
   }
 
@@ -472,6 +553,7 @@
   function listen(element: HTMLElement): () => void {
     const listeners: [string, EventListener][] = [
       ["click", onclick as EventListener],
+      ["mousedown", onmousedown as EventListener],
       ["keydown", onkeydown as EventListener],
       ["focusin", onfocusin as EventListener],
       ["focusout", onfocusout as EventListener],
@@ -564,6 +646,7 @@
         class="dr-return"
         class:down={!chip.up}
         style:top={chip.top === null ? undefined : `${chip.top}px`}
+        style:--dr-cover="{chip.cover}px"
         tabindex="-1"
         aria-hidden="true"
         onclick={(event) => {
@@ -948,6 +1031,17 @@
 
   .dr-return.down {
     bottom: 0.25rem;
+  }
+
+  /* The part of a row between the stuck headers and the chip. */
+  .dr-return::before {
+    content: "";
+    position: absolute;
+    left: -3px;
+    right: -3px;
+    bottom: calc(100% + 1px);
+    height: var(--dr-cover, 0px);
+    background: var(--bg);
   }
 
   /* To the left of the ruler, the only side with room. */

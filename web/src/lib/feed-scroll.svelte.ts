@@ -132,6 +132,8 @@ export class FeedScroller {
   #ownScrollTarget: number | null = null;
   /** Where the scroller last put the page, unrounded: WebKit keeps whole pixels. */
   #placedAt: number | null = null;
+  /** The page's scroll position as a scroll event, a placement or a captured anchor last saw it. */
+  #seenScroll: number | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
@@ -146,6 +148,14 @@ export class FeedScroller {
 
   constructor(days: () => FeedDay[]) {
     this.#days = days;
+  }
+
+  /**
+   * When the reader last scrolled the page (performance.now), not counting the
+   * scroller's own corrections or input inside a panel that scrolls itself.
+   */
+  get scrolledAt(): number {
+    return this.#scrolledAt;
   }
 
   /** The mounted range, resolved from the keys against the current days. */
@@ -250,6 +260,7 @@ export class FeedScroller {
   #place(top: number): void {
     this.#placedAt = top;
     window.scrollTo({ top, behavior: "instant" });
+    this.#seenScroll = this.#scrollBase();
   }
 
   // Where the page is, as far as the next correction is concerned. WebKit drops
@@ -265,6 +276,7 @@ export class FeedScroller {
   }
 
   #onScroll = (): void => {
+    this.#seenScroll = this.#scrollBase();
     if (this.#page !== null && Math.abs(window.scrollY - this.#page.target) < 1) this.#page = null;
     if (this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1) {
       this.#ownScrollTarget = null;
@@ -367,12 +379,20 @@ export class FeedScroller {
     const feedTop = feed.getBoundingClientRect().top;
     const current = resolveWindow(days, this.keys);
     const heightOf = (day: FeedDay) => this.#heights.get(day.iso)?.height ?? null;
+    const heights = days.slice(0, current.loaded).map(heightOf);
+    // The viewport in the terms of the offsets about to be planned with, which
+    // are not always the ones the page was laid out with: measuring a day moves
+    // the estimate every unmeasured day above it stands in for, and after a far
+    // jump that is a thousand days moving a few pixels each. Planned from the page
+    // alone, the window would leave the day the reader is at; this way the gaps
+    // written from the new offsets move that day, and the anchor takes it back.
+    const drift = this.#drift(feed, days, dayOffsets(heights), feedTop);
     const next = planFeedWindow({
       window: current,
       total: days.length,
-      heights: days.slice(0, current.loaded).map(heightOf),
-      viewTop: -feedTop,
-      viewBottom: window.innerHeight - feedTop,
+      heights,
+      viewTop: drift - feedTop,
+      viewBottom: drift + window.innerHeight - feedTop,
     });
     // Gaps come from the heights of the next window: days that are about to be
     // mounted leave the gap in the same flush that mounts them.
@@ -382,7 +402,7 @@ export class FeedScroller {
     const gapAbove = offsets[probe?.first ?? next.first] ?? 0;
     const gapTop = probe === null ? 0 : (offsets[next.first] ?? 0) - (offsets[probe.last + 1] ?? 0);
     const gapBottom = (offsets[next.loaded] ?? 0) - (offsets[next.last + 1] ?? 0);
-    this.#updateVisible(feed, days, offsets, next.loaded, feedTop);
+    this.#updateVisible(feed, days, offsets, next.loaded, feedTop - drift);
 
     const keys = windowKeys(days, next);
     if (keys.first !== this.keys.first || keys.last !== this.keys.last || keys.frontier !== this.keys.frontier) {
@@ -400,6 +420,7 @@ export class FeedScroller {
     // microtask after this callback, so the ResizeObserver compares the mounts and
     // unmounts they cause against this position.
     this.#anchor = this.#findAnchor(feed, line);
+    this.#seenScroll = this.#scrollBase();
   };
 
   // Where the reading line and the window's bottom fall in the feed, from the
@@ -432,8 +453,23 @@ export class FeedScroller {
     };
     const top = spot(scrollY + this.#readingLine());
     const bottom = spot(scrollY + window.innerHeight);
-    const visible: FeedVisible = { top, bottom, current: top.iso };
+    // In the gap after a card the reader is looking at the next one: a jump puts
+    // a card's top within a pixel of the line, on either side of it.
+    const current = top.gap && top.next !== null ? top.next : top.iso;
+    const visible: FeedVisible = { top, bottom, current };
     if (this.visible === null || !sameVisible(this.visible, visible)) this.visible = visible;
+  }
+
+  // How far a mounted day's planned offset is from where the page has it: the
+  // day at the reading line, or else the first one mounted.
+  #drift(feed: HTMLElement, days: FeedDay[], offsets: number[], feedTop: number): number {
+    const anchored = this.#anchor?.day;
+    const day = anchored?.isConnected ? anchored : feed.querySelector(":scope > .day");
+    const key = day instanceof HTMLElement ? day.dataset.key : undefined;
+    if (day == null || key === undefined) return 0;
+    const index = resolveSpan(days, key, key).first;
+    if (days[index]?.iso !== key || index >= offsets.length - 1) return 0;
+    return offsets[index]! - (day.getBoundingClientRect().top - feedTop);
   }
 
   // A day wrapper holds its card's bottom margin; the difference is the gap
@@ -563,9 +599,22 @@ export class FeedScroller {
     if (Math.abs(correction) < 0.5) return;
     // The correction cancels a smooth page step; the next key starts afresh.
     this.#page = null;
-    const target = this.#scrollBase() + correction;
+    const target = this.#correctionBase() + correction;
     this.#ownScrollTarget = target;
     this.#place(target);
+  }
+
+  // Where a correction starts from. A layout that shortens the page under the
+  // reader - gaps rewritten after a far jump - has the browser pull the scroll up
+  // to the page's new end before any scroll event reports it. The end moved, not
+  // the reader, so that pull is part of what the correction undoes: it starts
+  // from where the page was.
+  #correctionBase(): number {
+    const base = this.#scrollBase();
+    const seen = this.#seenScroll;
+    if (seen === null || base >= seen - 0.5) return base;
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    return base >= bottom - 1 ? seen : base;
   }
 
   #pinnedRect(): DOMRect | null {

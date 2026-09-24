@@ -124,6 +124,31 @@ async function pointAtFeed(page: Page): Promise<void> {
   await page.mouse.move(400, 500);
 }
 
+function current(page: Page) {
+  return page.locator(".dr-day[aria-current='location']");
+}
+
+// Whether something is drawn over the focused element's centre.
+async function focusCovered(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const focus = document.activeElement as HTMLElement;
+    const rect = focus.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return hit === null || !focus.contains(hit);
+  });
+}
+
+// The tooltip's title for a day in en-US: the year only outside the current one.
+function tipTitle(iso: string): string {
+  const date = new Date(iso + "T12:00");
+  return date.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
 test.describe("day ruler", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -192,6 +217,7 @@ test.describe("day ruler", () => {
     await expect(row(page, weekday).locator(".dr-dur")).toHaveText("1h 30m");
     await expect(row(page, nearest(1, true)).locator(".dr-dur")).toHaveCount(0);
     await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 2 entries/);
+    await expect(page.locator(".dr-day.today")).toHaveAccessibleName(/20m, 1 entry$/);
     await expect(row(page, SICK)).toHaveAccessibleName(/sick leave/);
     expect(await pageErrors(page)).toEqual([]);
   });
@@ -216,6 +242,50 @@ test.describe("day ruler", () => {
     await page.waitForTimeout(500);
     const later = await landing(page, target);
     expect(Math.abs(later.day - later.line)).toBeLessThanOrEqual(1.5);
+    // The ruler says the reader is at the landed day, not at the one above it.
+    await expect(current(page)).toHaveAttribute("data-iso", isoDay(dayNine(-target)));
+    // The click took no focus: the page keys still scroll the page.
+    expect(await page.evaluate(() => document.activeElement?.closest("nav.dr") != null)).toBe(false);
+    const scrollY = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press("PageDown");
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollY + 100);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("the first jump far back after loading lands on the day and stays there", async ({ page, server }) => {
+    test.slow();
+    await trackErrors(page);
+    // Two and a half years of days two to nine entries tall. Measuring the day a
+    // jump mounts moves the estimate every unmeasured day above it stands in for,
+    // hundreds of them: the window must stay on the day through that, and
+    // through the days above it being measured afterwards.
+    const entries = [];
+    for (let offset = 1; offset <= 900; offset++) {
+      if (weekend(-offset)) continue;
+      const count = 2 + ((offset * 7) % 8);
+      for (let index = 0; index < count; index++) {
+        const start = dayNine(-offset) + index * 45 * 60_000;
+        entries.push({ description: `Day ${offset} task ${index}`, startedAt: start, stoppedAt: start + 40 * 60_000 });
+      }
+    }
+    await seedServer(server.url, { entries, timeOff: [] });
+    await open(page, server.url);
+    const target = nearest(400, false);
+    const iso = isoDay(dayNine(-target));
+    await row(page, target).click();
+    const day = page.locator(`.feed > .day[data-key="${iso}"]`);
+    await expect(day).toHaveClass(/landed/);
+    await settle(page);
+    let landed = await landing(page, target);
+    expect(Math.abs(landed.day - landed.line)).toBeLessThanOrEqual(1.5);
+    await expect(current(page)).toHaveAttribute("data-iso", iso);
+    // The days above are measured while the reader is idle; the day stays put.
+    await page.waitForTimeout(3_000);
+    await settle(page);
+    await expect(day).toBeVisible();
+    landed = await landing(page, target);
+    expect(Math.abs(landed.day - landed.line)).toBeLessThanOrEqual(1.5);
+    await expect(current(page)).toHaveAttribute("data-iso", iso);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -231,6 +301,7 @@ test.describe("day ruler", () => {
     await settle(page);
     const landed = await landing(page, friday);
     expect(Math.abs(landed.day - landed.line)).toBeLessThanOrEqual(1.5);
+    await expect(current(page)).toHaveAttribute("data-iso", isoDay(dayNine(-friday)));
 
     // Today is the top of the page: the start form and the running timers.
     await page.locator(".dr-day.today").click();
@@ -353,6 +424,12 @@ test.describe("day ruler", () => {
 
     await page.keyboard.press("End");
     expect(await focused()).toBe(isoDay(dayNine(-OLDEST)));
+    // Far from the thumb, and no chip over the rows focus moves to.
+    await expect(page.locator(".dr-return")).toHaveCount(0);
+    await page.keyboard.press("PageUp");
+    expect(await focusCovered(page)).toBe(false);
+    await page.keyboard.press("Shift+PageUp");
+    expect(await focusCovered(page)).toBe(false);
     await page.keyboard.press("Home");
     expect(await focused()).toBe(isoDay(Date.now()));
     // On the 1st, the next stop down is the previous month's header.
@@ -379,6 +456,8 @@ test.describe("day ruler", () => {
     const day = page.locator(`.feed > .day[data-key="${isoDay(dayNine(-target))}"]`);
     await expect(day).toHaveClass(/landed/);
     expect(await focused()).toBe(isoDay(dayNine(-target)));
+    await settle(page);
+    await expect(current(page)).toHaveAttribute("data-iso", isoDay(dayNine(-target)));
     await page.keyboard.press("Tab");
     expect(await day.evaluate((element) => element.contains(document.activeElement))).toBe(true);
     expect(await pageErrors(page)).toEqual([]);
@@ -392,13 +471,7 @@ test.describe("day ruler", () => {
     await row(page, weekday).hover();
     const tip = page.locator(".dr-tip");
     await expect(tip).toBeVisible();
-    const date = new Date(dayNine(-weekday));
-    const full = date.toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
-    });
+    const full = tipTitle(isoDay(dayNine(-weekday)));
     await expect(tip).toContainText(full);
     await expect(tip).toContainText("1h 30m");
     await expect(tip).toContainText("2 entries");
@@ -407,9 +480,94 @@ test.describe("day ruler", () => {
     await row(page, saturday).hover();
     await expect(tip).toContainText("No entries");
     await expect(tip).toContainText("jumps to");
+    // Leaving and coming straight back keeps it.
+    await row(page, weekday).hover();
+    await expect(tip).toContainText(full);
+    await pointAtFeed(page);
+    await row(page, weekday).hover();
+    await page.waitForTimeout(400);
+    await expect(tip).toContainText(full);
+
+    // The rows scroll under the resting pointer: it describes the row now under it.
+    const box = (await row(page, weekday).boundingBox())!;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel(0, 320);
+    await expect.poll(() => page.locator(".dr-scroll").evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+    await settle(page);
+    const under = await page.evaluate(({ x, y }) => {
+      const stop = document.elementFromPoint(x, y)?.closest<HTMLElement>(".dr-day, .dr-mbtn");
+      return { iso: stop?.dataset.iso ?? null, month: stop?.dataset.month ?? null };
+    }, point);
+    if (under.iso !== null) await expect(tip.locator(".tt")).toHaveText(new RegExp(tipTitle(under.iso)));
+    else if (under.month !== null) {
+      const [year, month] = under.month.split("-").map(Number);
+      const name = new Date(year!, month! - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      await expect(tip.locator(".tt")).toHaveText(name);
+    }
+
     // Leaving the ruler hides it.
     await pointAtFeed(page);
     await expect(tip).toHaveCount(0);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a ruler the reader scrolled away stays there through a sync, until the page scrolls", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    await open(page, server.url);
+    const scroller = page.locator(".dr-scroll");
+    const scrollTop = () => scroller.evaluate((element) => element.scrollTop);
+    const box = (await scroller.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let step = 0; step < 6; step++) await page.mouse.wheel(0, 400);
+    await expect.poll(scrollTop).toBeGreaterThan(1500);
+    await pointAtFeed(page);
+    await settle(page);
+    const explored = await scrollTop();
+
+    // A sync changes an old day and rebuilds the rows; the ruler stays put.
+    const saturday = nearest(100, true);
+    await seedServer(server.url, {
+      entries: [{ description: "Old weekend fix", startedAt: dayNine(-saturday), stoppedAt: dayNine(-saturday) + 45 * 60_000 }],
+    });
+    await triggerSync(page);
+    await expect(row(page, saturday)).toHaveClass(/rec/);
+    await settle(page);
+    expect(await scrollTop()).toBe(explored);
+
+    // The next page scroll brings the thumb back into view.
+    await page.evaluate(() => window.scrollBy(0, 200));
+    await settle(page);
+    expect(await scrollTop()).toBeLessThan(explored);
+    await expect(page.locator(".dr-return")).toHaveCount(0);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("midnight adds a row at the top and the rows under the reader stay put", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // New Year's Eve: the next day is a new month and a new year as well.
+    const year = new Date().getFullYear();
+    await page.clock.setFixedTime(new Date(year, 11, 31, 23, 59, 50));
+    await open(page, server.url);
+    await expect(page.locator(".dr-day").first()).toHaveAttribute("data-iso", `${year}-12-31`);
+    const scroller = page.locator(".dr-scroll");
+    const box = (await scroller.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 1200);
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(800);
+    await settle(page);
+    const watched = row(page, recordedFrom(40));
+    const before = (await watched.boundingBox())!.y;
+
+    await page.clock.setFixedTime(new Date(year + 1, 0, 1, 0, 0, 5));
+    await expect(page.locator(".dr-day").first()).toHaveAttribute("data-iso", `${year + 1}-01-01`);
+    await expect(page.locator(".dr-day").first()).toHaveClass(/today/);
+    await expect(page.locator(`.dr-mbtn[data-month="${year + 1}-01"]`)).toHaveCount(1);
+    await expect(page.locator(".dr-yhead", { hasText: String(year) })).toHaveCount(1);
+    await settle(page);
+    expect(Math.abs((await watched.boundingBox())!.y - before)).toBeLessThanOrEqual(0.5);
     expect(await pageErrors(page)).toEqual([]);
   });
 

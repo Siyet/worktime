@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { feedDays } from "./feed";
 import { expandTimeOff } from "./report";
 import { RULER_HEAD, RULER_PITCH, buildRuler, rowFrom, rowUntil, rulerOffset, stepMonth, type RulerModel } from "./ruler";
@@ -182,6 +182,39 @@ describe("buildRuler", () => {
     const august = model.monthByKey.get("2026-08")!;
     expect(august.recorded).toBe(false);
     expect(august.target).toBe("2026-07-30");
+  });
+});
+
+describe("buildRuler against the previous model", () => {
+  it("keeps the rows that did not change, so only a changed day re-renders", () => {
+    const before = ruler(history, TODAY);
+    const after = buildRuler(feedDays([...history, entry("2026-09-22", 11, 25)]), new Map(), TODAY, before);
+    const changed = after.rows.filter((row) => row !== before.byISO.get(row.iso)).map((row) => row.iso);
+    expect(changed).toEqual(["2026-09-22"]);
+    expect(after.byISO.get("2026-09-22")!.trackedMs).toBe(25 * MINUTE);
+    // The months hold the same objects as the rows.
+    expect(after.months.flatMap((month) => month.rows)).toEqual(after.rows);
+    for (const [index, row] of after.months.flatMap((month) => month.rows).entries()) expect(row).toBe(after.rows[index]);
+    // Nothing changed at all: every row is the previous one.
+    const again = buildRuler(feedDays(history), new Map(), TODAY, before);
+    expect(again.rows.every((row) => row === before.byISO.get(row.iso))).toBe(true);
+  });
+});
+
+describe("buildRuler in a zone that skipped a day", () => {
+  beforeAll(() => {
+    vi.stubEnv("TZ", "Pacific/Apia");
+  });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("steps over the day Samoa never had", () => {
+    // Guards the test itself: without the zone switch the 30th exists.
+    expect(localDay(entry("2011-12-30", 12, 10))).toBe("2011-12-31");
+    const model = ruler([entry("2012-01-01", 9, 30), entry("2011-12-29", 9, 30)], "2012-01-01");
+    expect(model.rows.map((row) => row.iso)).toEqual(["2012-01-01", "2011-12-31", "2011-12-29"]);
+    expect(model.rows.map((row) => row.weekday)).toEqual([0, 6, 4]);
   });
 });
 

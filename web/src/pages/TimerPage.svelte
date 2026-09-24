@@ -678,7 +678,14 @@
 {/if}
 
 {#if showRuler}
-  <DayRuler {days} timeOff={appState.timeOff} {todayISO} visible={scroller.visible} onjump={jumpTo} />
+  <DayRuler
+    {days}
+    timeOff={appState.timeOff}
+    {todayISO}
+    visible={scroller.visible}
+    scrolledAt={() => scroller.scrolledAt}
+    onjump={jumpTo}
+  />
 {/if}
 
 <!-- One day of the feed, in a wrapper that is measured as a whole, margin

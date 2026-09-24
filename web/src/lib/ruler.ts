@@ -6,7 +6,7 @@
 // stays testable under vitest's node environment. The component that draws it is
 // lib/components/DayRuler.svelte; design/components/day-ruler.html is the spec.
 import type { FeedDay } from "./feed";
-import { groupDayEntries } from "./tasks";
+import { entryDurationMs } from "./format";
 import type { TimeOffKind } from "./types";
 
 /** One calendar day, in px - the --dr-pitch of the component. */
@@ -102,12 +102,33 @@ export function dateOfISO(iso: string): Date {
   return new Date(year!, month! - 1, day!, 12);
 }
 
+// The local day before, at noon. A day a zone skipped - Samoa went from 29 to 31
+// December 2011 - does not exist there, and stepping back into it lands on the
+// same day again.
+function dayBefore(date: Date): Date {
+  const iso = isoOf(date);
+  for (let back = 1; ; back += 1) {
+    const previous = new Date(date.getFullYear(), date.getMonth(), date.getDate() - back, 12);
+    if (isoOf(previous) < iso) return previous;
+  }
+}
+
+function sameRow(left: RulerRow, right: RulerRow): boolean {
+  for (const key of Object.keys(left) as (keyof RulerRow)[]) {
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
+}
+
 // buildRuler lays out every calendar day from today (or a newer recorded day, if
-// the clock went back) down to the oldest day with a finished entry.
+// the clock went back) down to the oldest day with a finished entry. A row that
+// came out the same as in the previous model is that model's own object, so a
+// sync that changes one day re-renders one row, not years of them.
 export function buildRuler(
   days: readonly FeedDay[],
   off: ReadonlyMap<string, TimeOffKind>,
   todayISO: string,
+  previous?: RulerModel,
 ): RulerModel {
   const empty: RulerModel = {
     rows: [],
@@ -125,8 +146,7 @@ export function buildRuler(
   const newestISO = days[0]!.iso > todayISO ? days[0]!.iso : todayISO;
 
   const rows: RulerRow[] = [];
-  const cursor = dateOfISO(newestISO);
-  for (let iso = newestISO; iso >= oldest; cursor.setDate(cursor.getDate() - 1), iso = isoOf(cursor)) {
+  for (let cursor = dateOfISO(newestISO), iso = newestISO; iso >= oldest; cursor = dayBefore(cursor), iso = isoOf(cursor)) {
     const day = recorded.get(iso);
     const weekday = cursor.getDay();
     const kind = off.get(iso) ?? null;
@@ -136,7 +156,8 @@ export function buildRuler(
       month: cursor.getMonth(),
       date: cursor.getDate(),
       weekday,
-      trackedMs: day === undefined ? 0 : groupDayEntries(day.entries).reduce((sum, group) => sum + group.totalMs, 0),
+      // Every group's total, summed: the entries' durations.
+      trackedMs: day === undefined ? 0 : day.entries.reduce((sum, entry) => sum + entryDurationMs(entry, 0), 0),
       count: day?.entries.length ?? 0,
       off: kind,
       band: kind ?? (weekday === 0 || weekday === 6 ? "weekend" : null),
@@ -165,7 +186,8 @@ export function buildRuler(
   let offset = 0;
   let year: RulerYear | null = null;
   let month: RulerMonth | null = null;
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    let row = rows[index]!;
     if (year === null || year.year !== row.year) {
       year = { year: row.year, past: row.past, top: offset, months: [] };
       years.push(year);
@@ -192,6 +214,8 @@ export function buildRuler(
     }
     row.top = offset;
     offset += RULER_PITCH;
+    const before = previous?.byISO.get(row.iso);
+    if (before !== undefined && sameRow(before, row)) row = rows[index] = before;
     month.rows.push(row);
     month.height += RULER_PITCH;
   }

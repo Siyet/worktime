@@ -103,6 +103,7 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		}
 		nextSeq++
 	}
+	now := time.Now().UnixMilli()
 	for _, entry := range request.Changes.TimeEntries {
 		// agent_session_id is server-owned: a literal NULL on insert and absent from
 		// the update list, so a pushed value cannot claim a foreign session.
@@ -127,8 +128,16 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 				return SyncResponse{}, err
 			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
-		} else if err := recordAcceptedAgentEntryMutation(ctx, transaction, userID, entry); err != nil {
-			return SyncResponse{}, err
+		} else {
+			if err := recordAcceptedAgentEntryMutation(ctx, transaction, userID, entry); err != nil {
+				return SyncResponse{}, err
+			}
+			// The block reserved above covers the pushed rows only. Rows the rule
+			// writes on its own take fresh values past that block through
+			// allocateServerSeq, so no value is shared and every write is pulled.
+			if err := reclaimRestoredAgentEntry(ctx, transaction, userID, entry, now); err != nil {
+				return SyncResponse{}, err
+			}
 		}
 		nextSeq++
 	}

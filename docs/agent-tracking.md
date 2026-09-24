@@ -213,6 +213,26 @@ session decides by the row's state:
 This is why stopping an agent's row by hand - including `stop_all_timers` while
 an agent is working - splits its work in two rows rather than losing it.
 
+**Undo and restarts.** The Timer page's Undo after Stop writes the same row
+back with `stopped_at` cleared, and an offline client can push a row it still
+has running after the server closed or split the session. By then the session
+may already have let the row go, and reconciliation only walks sessions, so a
+running row no session points at would run forever. The sync write that makes
+an agent row running again therefore settles its session in the same
+transaction, by state alone, so every order of Stop, Undo, heartbeat and stop
+hook ends the same way:
+
+| Session state when the running row arrives | What happens |
+|---|---|
+| Active, already on this row | Nothing new; the next signal adopts the edit as usual. |
+| Active, on another row or none | The session takes the row back immediately. A replacement it still owns untouched is tombstoned - the restored row covers its time; one the user edited is kept and closed at that moment. |
+| Ended (stop hook or reconciliation) | The row is closed at the session's end and the session points at it again, so resuming continues it. An untouched replacement is tombstoned; an edited one is left alone. |
+
+The restored row counts as edited by the user (and as user-named if its
+description is not the automatic one), and its project carries into later
+segments. Every server-side write gets its own `server_seq`, so other devices
+pull the result.
+
 ## Setup
 
 The short way: **Settings -> Connect an agent** downloads a setup prompt for

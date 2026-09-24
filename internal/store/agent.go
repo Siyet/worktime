@@ -28,7 +28,9 @@ package store
 // visibly different rows. Ownership of the row is tracked through server_seq:
 // when it no longer matches what the session wrote last, the row was changed
 // outside the agent flow and the session either adopts it (a live row, edited)
-// or lets it go and opens a new one (deleted, or stopped by the user).
+// or lets it go and opens a new one (deleted, or stopped by the user). A row the
+// user sets running again is taken back by its session in the same sync write
+// (see reclaimRestoredAgentEntry), so a let-go row can never run unowned.
 
 import (
 	"context"
@@ -787,6 +789,147 @@ func resolveAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, 
 // already stopped rows are left exactly as they are.
 func detachAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session *AgentSession, now int64) error {
 	_, _, err := closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, session.LastHeartbeatAt, now)
+	return err
+}
+
+// reclaimRestoredAgentEntry runs inside Sync after an accepted write that leaves
+// an agent row running: the Timer page's Undo after Stop, any other restart of a
+// stopped row, or an offline client pushing a row it still believes is running.
+// By then the session may already have let that row go - a heartbeat after the
+// user's stop opens a replacement, the stop hook or reconciliation closes the
+// session - and nothing would ever close the row again. Reconciliation walks
+// sessions, not entries, so a running row no session points at is an orphan: it
+// runs forever and double counts next to the replacement. The rule looks only at
+// the state the write produced, so every order of Stop, Undo, heartbeat and stop
+// hook, and every replay, converges on the same outcome:
+//
+//   - an active session that already points at the row changes nothing here;
+//     the next signal adopts the outside edit as usual.
+//   - an active session that points elsewhere takes the row back as the write is
+//     applied, not on the next heartbeat, and releases what it held until now.
+//   - an ended session takes the row back closed at its end, because nothing
+//     after that moment was tracked, and releases what it held as well.
+//
+// The restored row is an outside write, so the session records it as edited and
+// as user-named when the description is not the automatic one, and carries the
+// row's project into later segments, as recordAcceptedAgentEntryMutation does
+// for the current row.
+func reclaimRestoredAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, pushed TimeEntry, now int64) error {
+	// The accepted write stored exactly the pushed stopped_at and deleted_at, so
+	// the ordinary push of a stopped or deleted row needs no query at all.
+	if pushed.StoppedAt != nil || pushed.DeletedAt != nil {
+		return nil
+	}
+	// agent_session_id is server-owned and never pushed, so it comes from the row.
+	var (
+		sessionID   *string
+		projectID   *string
+		description string
+		stoppedAt   *int64
+		deletedAt   *int64
+		serverSeq   int64
+	)
+	err := transaction.QueryRowContext(ctx, `
+		SELECT agent_session_id, project_id, description, stopped_at, deleted_at, server_seq
+		FROM time_entries WHERE id = ? AND user_id = ?`, pushed.ID, userID).
+		Scan(&sessionID, &projectID, &description, &stoppedAt, &deletedAt, &serverSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sessionID == nil || stoppedAt != nil || deletedAt != nil {
+		return nil
+	}
+	session, err := getAgentSession(ctx, transaction, userID, *sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	ended := session.Status == agentStatusClosed
+	if !ended && session.TimeEntryID != nil && *session.TimeEntryID == pushed.ID {
+		return nil
+	}
+
+	// Anything the session held is released at the moment it stops being the
+	// session's row: now for a live session, its end for an ended one.
+	releaseAt := now
+	ownedSeq := serverSeq
+	if ended {
+		releaseAt = session.LastHeartbeatAt
+		if session.EndedAt != nil {
+			releaseAt = *session.EndedAt
+		}
+		// closeAgentEntry clamps to started_at, so an end before the row's start
+		// leaves an empty row rather than a negative one.
+		seq, closed, err := closeAgentEntry(ctx, transaction, userID, &pushed.ID, releaseAt, now)
+		if err != nil {
+			return err
+		}
+		if closed {
+			ownedSeq = seq
+		}
+	}
+
+	userNamed := description != agentEntryDescription(session)
+	if _, err := transaction.ExecContext(ctx, `
+		UPDATE agent_sessions
+		SET time_entry_id = ?, entry_server_seq = ?, entry_user_edited = 1, entry_user_named = ?,
+		    project_id = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		pushed.ID, ownedSeq, userNamed, projectID, now, session.ID, userID); err != nil {
+		return err
+	}
+
+	if session.TimeEntryID == nil || *session.TimeEntryID == pushed.ID {
+		return nil
+	}
+	return releaseReplacedAgentEntry(ctx, transaction, userID, session, releaseAt, now)
+}
+
+// releaseReplacedAgentEntry settles the row a session held before it took a
+// restored row back. A replacement the session still owns untouched - server_seq
+// is the value the session wrote and no outside edit was ever recorded for it -
+// only duplicates time the restored row already covers, so it is tombstoned. The
+// edit flag matters as much as the seq: a heartbeat that adopts an edited row
+// records the row's new seq as its own, and only the flag still remembers that
+// the user touched it. A touched row keeps its content, but is closed at closeAt
+// if it still runs, because no session will point at it anymore. Deleted and
+// already stopped rows are left exactly as they are.
+func releaseReplacedAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, closeAt, now int64) error {
+	var (
+		serverSeq int64
+		deletedAt *int64
+	)
+	err := transaction.QueryRowContext(ctx, `
+		SELECT server_seq, deleted_at FROM time_entries WHERE id = ? AND user_id = ?`,
+		*session.TimeEntryID, userID).Scan(&serverSeq, &deletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if deletedAt != nil {
+		return nil
+	}
+	if session.EntryServerSeq != nil && *session.EntryServerSeq == serverSeq && !session.EntryUserEdited {
+		tombstoneSeq, err := allocateServerSeq(transaction, 1)
+		if err != nil {
+			return err
+		}
+		_, err = transaction.ExecContext(ctx, `
+			UPDATE time_entries
+			SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
+			WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
+			now, now, tombstoneSeq, *session.TimeEntryID, userID, serverSeq)
+		return err
+	}
+	_, _, err = closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, closeAt, now)
 	return err
 }
 

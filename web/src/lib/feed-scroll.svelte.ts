@@ -61,7 +61,7 @@ const PAGE_REPEAT_MS = 1000;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
-/** Where Space presses a control instead of scrolling the page (a link lets it scroll). */
+/** Where Space presses a control instead of scrolling the page (a link, or a day focused after a jump, lets it scroll). */
 const PRESSES_SPACE = `button, summary, [role=button], ${KEEPS_PAGE_KEYS}`;
 /** A panel that scrolls itself - the day ruler: the wheel and keys there do not scroll the page. */
 const OWN_SCROLL = "[data-own-scroll]";
@@ -330,7 +330,7 @@ export class FeedScroller {
     // Space presses a focused control; page keys belong to fields, dialogs and
     // an open overlay of the strip while it can still scroll that way.
     if (!nothingFocused) {
-      if (event.key === " " || active.closest(KEEPS_PAGE_KEYS) !== null) return;
+      if ((event.key === " " && active.closest(PRESSES_SPACE) !== null) || active.closest(KEEPS_PAGE_KEYS) !== null) return;
       const overlay = pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
       if (overlay !== null) {
         const room = direction > 0 ? overlay.scrollHeight - overlay.clientHeight - overlay.scrollTop : overlay.scrollTop;

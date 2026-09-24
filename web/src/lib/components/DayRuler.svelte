@@ -34,8 +34,8 @@
     visible: FeedVisible | null;
     /** When the reader last scrolled the page (performance.now). */
     scrolledAt: () => number;
-    /** Jumps the feed; resolves once the target is on screen. */
-    onjump: (target: RulerTarget) => Promise<void> | void;
+    /** Jumps the feed; resolves once the target is on screen. `takeFocus` moves focus there. */
+    onjump: (target: RulerTarget, takeFocus: boolean) => Promise<void> | void;
   }
 
   let { days, timeOff, todayISO, visible, scrolledAt, onjump }: Props = $props();
@@ -307,9 +307,12 @@
     if (up) {
       const line = scrollTop + heads;
       const row = model.rows[rowFrom(model, line)]!;
-      const whole = row.top >= line - 0.5 ? row : (model.rows[row.index + 1] ?? row);
+      const next = model.rows[row.index + 1];
+      const whole = row.top >= line - 0.5 || next === undefined ? row : next;
       top = Math.max(heads, whole.top - scrollTop);
-      cover = top - heads;
+      // The last row of a month is under its header, which the month's end
+      // pushes up: then the next month's header shows, uncovered, above the chip.
+      if (whole === next && next.top === row.top + RULER_PITCH) cover = top - heads;
     }
     const current = model.rows[Math.max(0, marked.current)];
     const label = current === undefined ? "" : shortLabel(current.iso);
@@ -342,17 +345,20 @@
     return (monthOf(button) ?? rowOf(button))?.target;
   }
 
-  async function jump(button: HTMLElement): Promise<void> {
+  async function jump(button: HTMLElement, takeFocus: boolean): Promise<void> {
     const target = targetOf(button);
     if (target === undefined) return;
     setTabStop(button);
     lastJump = { button, iso: target === "top" ? null : target };
-    await onjump(target);
+    await onjump(target, takeFocus);
   }
 
+  // A mouse click (detail counts the clicks; Enter and Space give 0) from
+  // outside the ruler takes focus to where it lands. Keyboard focus in the ruler
+  // stays there, and Tab moves on into the landed day.
   function onclick(event: MouseEvent): void {
     const button = stopOf(event.target);
-    if (button !== null) void jump(button);
+    if (button !== null) void jump(button, event.detail > 0 && !(nav?.contains(document.activeElement) ?? false));
   }
 
   // A click jumps without taking focus, as in Safari, so the page keys go on
@@ -476,6 +482,9 @@
   }
 
   function onpointermove(event: PointerEvent): void {
+    // WebKit reports a resting pointer as moving when the rows scroll under it;
+    // while the keyboard pages, the tooltip is the focused row's.
+    if (keyboard && pointer !== null && pointer.x === event.clientX && pointer.y === event.clientY) return;
     pointer = { x: event.clientX, y: event.clientY };
     pointAt(stopOf(event.target));
   }

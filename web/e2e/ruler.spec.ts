@@ -244,11 +244,26 @@ test.describe("day ruler", () => {
     expect(Math.abs(later.day - later.line)).toBeLessThanOrEqual(1.5);
     // The ruler says the reader is at the landed day, not at the one above it.
     await expect(current(page)).toHaveAttribute("data-iso", isoDay(dayNine(-target)));
-    // The click took no focus: the page keys still scroll the page.
-    expect(await page.evaluate(() => document.activeElement?.closest("nav.dr") != null)).toBe(false);
-    const scrollY = await page.evaluate(() => window.scrollY);
+    // Focus went where the click landed, as an in-page link takes it: the keys
+    // scroll the page, never the ruler, and Tab goes on from the day.
+    expect(await day.evaluate((element) => element === document.activeElement)).toBe(true);
+    const scrollY = () => page.evaluate(() => window.scrollY);
+    const rulerTop = () => page.locator(".dr-scroll").evaluate((element) => element.scrollTop);
+    const ruled = await rulerTop();
+    let before = await scrollY();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(scrollY).toBeGreaterThan(before);
+    before = await scrollY();
     await page.keyboard.press("PageDown");
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollY + 100);
+    await expect.poll(scrollY).toBeGreaterThan(before + 100);
+    before = await scrollY();
+    await page.keyboard.press("End");
+    await expect.poll(scrollY).toBeGreaterThan(before + 100);
+    expect(await rulerTop()).toBe(ruled);
+    await row(page, target).click();
+    await expect(day).toHaveClass(/landed/);
+    await page.keyboard.press("Tab");
+    expect(await day.evaluate((element) => element !== document.activeElement && element.contains(document.activeElement))).toBe(true);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -293,6 +308,9 @@ test.describe("day ruler", () => {
     await trackErrors(page);
     await seedHistory(server.url, 2);
     await open(page, server.url);
+    // Something typed in the start form, focus still there.
+    const description = page.getByRole("combobox", { name: "Description" });
+    await description.fill("half a thought");
     // A weekend day has no card: it lands on the next older day with entries.
     const sunday = [...Array(14).keys()].map((index) => index + 10).find((offset) => new Date(dayNine(-offset)).getDay() === 0)!;
     await row(page, sunday).click();
@@ -302,6 +320,11 @@ test.describe("day ruler", () => {
     const landed = await landing(page, friday);
     expect(Math.abs(landed.day - landed.line)).toBeLessThanOrEqual(1.5);
     await expect(current(page)).toHaveAttribute("data-iso", isoDay(dayNine(-friday)));
+    // The field let go: the next Space scrolls the page instead of typing.
+    const landedAt = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(landedAt + 100);
+    await expect(description).toHaveValue("half a thought");
 
     // Today is the top of the page: the start form and the running timers.
     await page.locator(".dr-day.today").click();
@@ -509,6 +532,82 @@ test.describe("day ruler", () => {
     // Leaving the ruler hides it.
     await pointAtFeed(page);
     await expect(tip).toHaveCount(0);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("the keyboard's tooltip stays on the focused day with the pointer resting on the ruler", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    await open(page, server.url);
+    await page.getByRole("combobox", { name: "Description" }).focus();
+    for (let step = 0; step < 60; step++) {
+      if (await page.evaluate(() => document.activeElement?.closest("nav.dr") !== null)) break;
+      await page.keyboard.press("Tab");
+    }
+    const box = (await page.locator(".dr-scroll").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(400);
+    const title = page.locator(".dr-tip .tt");
+    for (let step = 0; step < 3; step++) {
+      await page.keyboard.press("PageDown");
+      await settle(page);
+      const focused = await page.evaluate(() => (document.activeElement as HTMLElement).dataset.iso!);
+      await expect(title).toHaveText(tipTitle(focused));
+    }
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("the chip never covers a month or a year header scrolling in", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // Late January, with a screenful of January days: the history reaches back
+    // into a past year, and the thumb stays up in January.
+    const year = new Date().getFullYear() + 1;
+    const january = [];
+    for (let date = 4; date <= 19; date++) {
+      const day = new Date(year, 0, date, 9).getTime();
+      if ([0, 6].includes(new Date(day).getDay())) continue;
+      january.push({ description: `January ${date} early`, startedAt: day, stoppedAt: day + 30 * 60_000 });
+      january.push({ description: `January ${date} late`, startedAt: day + HOUR, stoppedAt: day + HOUR + 30 * 60_000 });
+    }
+    await seedServer(server.url, { entries: january });
+    await page.clock.setFixedTime(new Date(year, 0, 20, 12));
+    await open(page, server.url);
+    // The feed at the top, the ruler scrolled so that a month's last row sits
+    // half under the stuck header: the chip shows, and the next month's header
+    // (and a past year's row) must stay in view above it.
+    const covered = (month: string, heads: number) =>
+      page.evaluate(({ key, heads }) => {
+        const scroller = document.querySelector<HTMLElement>(".dr-scroll")!;
+        const section = document.querySelector(`.dr-mbtn[data-month="${key}"]`)!.closest(".dr-month")!;
+        const block = section.parentElement!.classList.contains("past") && section === section.parentElement!.querySelector(".dr-month")
+          ? section.parentElement!
+          : section;
+        const origin = scroller.getBoundingClientRect().top;
+        scroller.scrollTop = block.getBoundingClientRect().top - origin + scroller.scrollTop - 16 - heads + 8;
+        return new Promise<{ chip: boolean; hidden: string[] }>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const heads = [...block.querySelectorAll<HTMLElement>(":scope > .dr-yhead, .dr-mhead")].slice(0, 2);
+              const hidden = heads
+                .filter((head) => {
+                  const rect = head.getBoundingClientRect();
+                  if (rect.bottom <= origin + 24) return false;
+                  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                  return hit === null || !head.contains(hit);
+                })
+                .map((head) => head.textContent!.trim());
+              resolve({ chip: document.querySelector(".dr-return") !== null, hidden });
+            }),
+          ),
+        );
+      }, { key: month, heads });
+    // A past year's month sticks under its year's row: two headers.
+    for (const [key, heads] of [[`${year - 1}-12`, 24], [`${year - 1}-11`, 48]] as const) {
+      const outcome = await covered(key, heads);
+      expect(outcome.chip, key).toBe(true);
+      expect(outcome.hidden, key).toEqual([]);
+    }
     expect(await pageErrors(page)).toEqual([]);
   });
 

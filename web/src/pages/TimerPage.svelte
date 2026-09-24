@@ -126,18 +126,41 @@
   let landedISO = $state<string | null>(null);
   let landedTimer: ReturnType<typeof setTimeout> | undefined;
 
-  async function jumpTo(target: RulerTarget): Promise<void> {
+  // A mouse jump also moves focus to where it landed, as an in-page link does:
+  // Tab goes on from the day, the arrow keys scroll the page rather than the
+  // ruler, and a field typed in before the jump lets go of the next Space.
+  async function jumpTo(target: RulerTarget, takeFocus: boolean): Promise<void> {
     clearTimeout(landedTimer);
     landedISO = null;
     if (target === "top") {
       scroller.revealTop();
+      if (takeFocus && document.activeElement instanceof HTMLElement) document.activeElement.blur();
       return;
     }
     await scroller.reveal(target);
+    const day = feedElement?.querySelector<HTMLElement>(`:scope > .day[data-key="${target}"]`) ?? null;
+    if (takeFocus && day !== null) focusLanded(day);
     // A frame apart, so a second jump to the same day restarts the ring.
     await tick();
     landedISO = target;
     landedTimer = setTimeout(() => (landedISO = null), 1200);
+  }
+
+  // WebKit starts Tab over from the top of the page when focus is on an element
+  // outside the tab order, so Tab from a landed day is taken to its first
+  // control here, as the ruler does after Enter.
+  function focusLanded(day: HTMLElement): void {
+    if (document.activeElement === day) return;
+    const onkeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.shiftKey || event.target !== day) return;
+      const control = day.querySelector<HTMLElement>(`:is(button, [href], input, [tabindex="0"])`);
+      if (control === null) return;
+      event.preventDefault();
+      control.focus();
+    };
+    day.addEventListener("keydown", onkeydown);
+    day.addEventListener("blur", () => day.removeEventListener("keydown", onkeydown), { once: true });
+    day.focus({ preventScroll: true });
   }
 
   $effect(() => () => clearTimeout(landedTimer));
@@ -697,7 +720,7 @@
   {@const groups = groupDayEntries(day.entries)}
   {@const tracked = dayTotal(groups)}
   {@const wall = wallClockMs(day.entries, 0)}
-  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} {@attach scroller.observeDay}>
+  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} tabindex="-1" {@attach scroller.observeDay}>
     <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
       <div class="row" data-anchor>
         <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
@@ -833,6 +856,11 @@
      so the measured height is exactly the space the day takes up. */
   .day {
     display: flow-root;
+  }
+
+  /* Focused only as the place a jump landed, which its ring already shows. */
+  .day:focus {
+    outline: none;
   }
 
   /* Where a jump from the day ruler landed: a ring that fades on the card. */

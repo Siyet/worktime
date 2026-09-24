@@ -103,9 +103,10 @@ function row(page: Page, offsetDays: number) {
   return page.locator(`.dr-day[data-iso="${isoDay(dayNine(-offsetDays))}"]`);
 }
 
-async function open(page: Page, serverURL: string): Promise<void> {
+// `timeout` for a first sync big enough to take a while on a CI runner.
+async function open(page: Page, serverURL: string, timeout?: number): Promise<void> {
   await page.goto(serverURL + "/#/");
-  await expect(page.locator(".feed .item").first()).toBeVisible();
+  await expect(page.locator(".feed .item").first()).toBeVisible({ timeout });
   await expect(ruler(page)).toBeVisible();
   await settle(page);
 }
@@ -284,7 +285,7 @@ test.describe("day ruler", () => {
       }
     }
     await seedServer(server.url, { entries, timeOff: [] });
-    await open(page, server.url);
+    await open(page, server.url, 30_000);
     const target = nearest(400, false);
     const iso = isoDay(dayNine(-target));
     await row(page, target).click();
@@ -661,8 +662,11 @@ test.describe("day ruler", () => {
     for (let date = 4; date <= 19; date++) {
       const day = new Date(year, 0, date, 9).getTime();
       if ([0, 6].includes(new Date(day).getDay())) continue;
-      january.push({ description: `January ${date} early`, startedAt: day, stoppedAt: day + 30 * 60_000 });
-      january.push({ description: `January ${date} late`, startedAt: day + HOUR, stoppedAt: day + HOUR + 30 * 60_000 });
+      // Four rows a day: a screenful even with a platform's smaller fonts.
+      for (let index = 0; index < 4; index++) {
+        const start = day + index * HOUR;
+        january.push({ description: `January ${date} task ${index}`, startedAt: start, stoppedAt: start + 30 * 60_000 });
+      }
     }
     await seedServer(server.url, { entries: january });
     await page.clock.setFixedTime(new Date(year, 0, 20, 12));
@@ -679,7 +683,7 @@ test.describe("day ruler", () => {
           : section;
         const origin = scroller.getBoundingClientRect().top;
         scroller.scrollTop = block.getBoundingClientRect().top - origin + scroller.scrollTop - 16 - heads + 8;
-        return new Promise<{ chip: boolean; hidden: string[] }>((resolve) =>
+        return new Promise<{ chip: boolean; hidden: string[]; where: string }>((resolve) =>
           requestAnimationFrame(() =>
             requestAnimationFrame(() => {
               const heads = [...block.querySelectorAll<HTMLElement>(":scope > .dr-yhead, .dr-mhead")].slice(0, 2);
@@ -691,7 +695,9 @@ test.describe("day ruler", () => {
                   return hit === null || !head.contains(hit);
                 })
                 .map((head) => head.textContent!.trim());
-              resolve({ chip: document.querySelector(".dr-return") !== null, hidden });
+              const thumb = document.querySelector<HTMLElement>(".dr-thumb");
+              const where = `thumb ${thumb?.style.top} +${thumb?.style.height}, ruler at ${scroller.scrollTop}, page at ${window.scrollY}`;
+              resolve({ chip: document.querySelector(".dr-return") !== null, hidden, where });
             }),
           ),
         );
@@ -699,7 +705,7 @@ test.describe("day ruler", () => {
     // A past year's month sticks under its year's row: two headers.
     for (const [key, heads] of [[`${year - 1}-12`, 24], [`${year - 1}-11`, 48]] as const) {
       const outcome = await covered(key, heads);
-      expect(outcome.chip, key).toBe(true);
+      expect(outcome.chip, `${key}: ${outcome.where}`).toBe(true);
       expect(outcome.hidden, key).toEqual([]);
     }
     expect(await pageErrors(page)).toEqual([]);

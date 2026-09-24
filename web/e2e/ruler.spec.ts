@@ -335,8 +335,16 @@ test.describe("day ruler", () => {
     const end = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
     await page.keyboard.press("End");
     await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 1_500 }).toBeGreaterThanOrEqual(end - 2);
+    // More history loads below, and the days above are measured - the page's
+    // scroll position moves with the corrections, but what the reader sees
+    // does not: End does not chase the growing bottom.
+    await settle(page);
+    const ended = await atLine();
     await page.waitForTimeout(1_000);
-    expect(await page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(end + 2);
+    await settle(page);
+    const after = await atLine();
+    expect(after.text).toBe(ended.text);
+    expect(Math.abs(after.offset - ended.offset)).toBeLessThanOrEqual(1.5);
 
     // The oldest day: the page ends before it reaches the line, and it stays put.
     const oldest = page.locator(".dr-day").last();

@@ -775,6 +775,8 @@ test.describe("day ruler", () => {
     await pointAtFeed(page);
     await settle(page);
     const explored = await scrollTop();
+    // Still where the wheel took it: nothing snapped it back before the baseline.
+    expect(explored).toBeGreaterThan(1500);
 
     // A sync changes an old day and rebuilds the rows; the ruler stays put.
     const saturday = nearest(100, true);

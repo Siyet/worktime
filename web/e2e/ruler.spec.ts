@@ -323,11 +323,19 @@ test.describe("day ruler", () => {
     expect(later.text).toBe(scrolled.text);
     expect(Math.abs(later.offset - scrolled.offset)).toBeLessThanOrEqual(1.5);
 
-    // Home while the days above a far jump are still being measured reaches the top.
+    // Home and End while the days above a far jump are still being measured
+    // go straight to the ends of the page - End to the end it had then.
     await row(page, nearest(750, false)).click();
     await page.waitForTimeout(700);
     await page.keyboard.press("Home");
-    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 5_000 }).toBe(0);
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 1_500 }).toBe(0);
+    await row(page, nearest(500, false)).click();
+    await page.waitForTimeout(700);
+    const end = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+    await page.keyboard.press("End");
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 1_500 }).toBeGreaterThanOrEqual(end - 2);
+    await page.waitForTimeout(1_000);
+    expect(await page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(end + 2);
 
     // The oldest day: the page ends before it reaches the line, and it stays put.
     const oldest = page.locator(".dr-day").last();

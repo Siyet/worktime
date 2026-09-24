@@ -146,7 +146,7 @@ export class FeedScroller {
   #heldCard: HTMLElement | null = null;
   #releaseTimer: ReturnType<typeof setTimeout> | undefined;
   /** Where the last page key is scrolling to, so a quick repeat continues from there. */
-  #page: { target: number; at: number; edge: "top" | "bottom" | null } | null = null;
+  #page: { target: number; at: number } | null = null;
   #observer: ResizeObserver | null = null;
   #dayGap: number | null = null;
 
@@ -342,13 +342,14 @@ export class FeedScroller {
   // would carry the next unread rows beneath the strip. So the step is taken here,
   // in every engine, whenever the page itself is what the key would scroll. Also
   // before the strip sticks: the step that sticks it must not bury rows either.
-  // Home and End as well, and all of them with no strip at all: a correction
-  // landing while the page is on its way - the days above a far jump being
-  // measured, for seconds - cancels a smooth scroll, and one taken here is
-  // carried on (see #keepAnchor) where the browser's own would stop dead.
+  // With no strip at all too: a correction landing while the page is on its way
+  // - the days above a far jump being measured, for seconds - cancels a smooth
+  // scroll, and one taken here is carried on (see #keepAnchor) where the
+  // browser's own would stop dead. Home and End are jumps, instant like the
+  // ruler's: a smooth scroll over years of days would be restarted from rest by
+  // every correction on the way, and End would chase a bottom that keeps growing.
   #onKeydown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || this.#elements === null) return;
-    const edge = event.key === "Home" ? "top" : event.key === "End" ? "bottom" : null;
     const direction =
       event.key === "PageDown" || event.key === "End" || (event.key === " " && !event.shiftKey)
         ? 1
@@ -370,18 +371,19 @@ export class FeedScroller {
       }
     }
     event.preventDefault();
-    const now = performance.now();
     const bottom = document.documentElement.scrollHeight - window.innerHeight;
-    let target: number;
-    if (edge !== null) {
-      target = edge === "top" ? 0 : bottom;
-    } else {
-      const visible = window.innerHeight - this.#stuckLine();
-      const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
-      const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
-      target = Math.min(bottom, Math.max(0, from + direction * step));
+    if (event.key === "Home" || event.key === "End") {
+      this.#anchor = null;
+      this.#jumpTo(event.key === "Home" ? 0 : bottom);
+      this.schedule();
+      return;
     }
-    this.#page = { target, at: now, edge };
+    const now = performance.now();
+    const visible = window.innerHeight - this.#stuckLine();
+    const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
+    const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
+    const target = Math.min(bottom, Math.max(0, from + direction * step));
+    this.#page = { target, at: now };
     this.#stepPage(target);
   };
 
@@ -648,12 +650,11 @@ export class FeedScroller {
     this.#place(target);
     if (this.#jump !== null) this.#jump.top = this.#scrollBase();
     // The correction cancels a key's smooth step under way: it goes on from
-    // here, to the same place in the feed or to the same end of the page.
+    // here, to the same place in the feed.
     const page = this.#page;
     if (page === null) return;
     const bottom = document.documentElement.scrollHeight - window.innerHeight;
-    page.target =
-      page.edge === "top" ? 0 : page.edge === "bottom" ? bottom : Math.min(bottom, Math.max(0, page.target + correction));
+    page.target = Math.min(bottom, Math.max(0, page.target + correction));
     if (Math.abs(window.scrollY - page.target) >= 1) this.#stepPage(page.target);
   }
 

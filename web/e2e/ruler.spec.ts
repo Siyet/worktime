@@ -674,39 +674,44 @@ test.describe("day ruler", () => {
     // The feed at the top, the ruler scrolled so that a month's last row sits
     // half under the stuck header: the chip shows, and the next month's header
     // (and a past year's row) must stay in view above it.
-    const covered = (month: string, heads: number) =>
-      page.evaluate(({ key, heads }) => {
-        const scroller = document.querySelector<HTMLElement>(".dr-scroll")!;
+    // A month's block: a past year's first month comes under its year's row.
+    const scrollTo = (key: string, heads: number) =>
+      page.evaluate(
+        ({ key, heads }) => {
+          const section = document.querySelector(`.dr-mbtn[data-month="${key}"]`)!.closest(".dr-month")!;
+          const year = section.parentElement!;
+          const block = year.classList.contains("past") && section === year.querySelector(".dr-month") ? year : section;
+          const scroller = document.querySelector<HTMLElement>(".dr-scroll")!;
+          const origin = scroller.getBoundingClientRect().top;
+          scroller.scrollTop = block.getBoundingClientRect().top - origin + scroller.scrollTop - 16 - heads + 8;
+        },
+        { key, heads },
+      );
+    // The block's headers in view whose centres something else is drawn over.
+    const hidden = (key: string) =>
+      page.evaluate((key) => {
         const section = document.querySelector(`.dr-mbtn[data-month="${key}"]`)!.closest(".dr-month")!;
-        const block = section.parentElement!.classList.contains("past") && section === section.parentElement!.querySelector(".dr-month")
-          ? section.parentElement!
-          : section;
-        const origin = scroller.getBoundingClientRect().top;
-        scroller.scrollTop = block.getBoundingClientRect().top - origin + scroller.scrollTop - 16 - heads + 8;
-        return new Promise<{ chip: boolean; hidden: string[]; where: string }>((resolve) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              const heads = [...block.querySelectorAll<HTMLElement>(":scope > .dr-yhead, .dr-mhead")].slice(0, 2);
-              const hidden = heads
-                .filter((head) => {
-                  const rect = head.getBoundingClientRect();
-                  if (rect.bottom <= origin + 24) return false;
-                  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-                  return hit === null || !head.contains(hit);
-                })
-                .map((head) => head.textContent!.trim());
-              const thumb = document.querySelector<HTMLElement>(".dr-thumb");
-              const where = `thumb ${thumb?.style.top} +${thumb?.style.height}, ruler at ${scroller.scrollTop}, page at ${window.scrollY}`;
-              resolve({ chip: document.querySelector(".dr-return") !== null, hidden, where });
-            }),
-          ),
-        );
-      }, { key: month, heads });
+        const year = section.parentElement!;
+        const block = year.classList.contains("past") && section === year.querySelector(".dr-month") ? year : section;
+        const origin = document.querySelector<HTMLElement>(".dr-scroll")!.getBoundingClientRect().top;
+        return [...block.querySelectorAll<HTMLElement>(":scope > .dr-yhead, .dr-mhead")]
+          .slice(0, 2)
+          .filter((head) => {
+            const rect = head.getBoundingClientRect();
+            if (rect.bottom <= origin + 24) return false;
+            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            return hit === null || !head.contains(hit);
+          })
+          .map((head) => head.textContent!.trim());
+      }, key);
     // A past year's month sticks under its year's row: two headers.
     for (const [key, heads] of [[`${year - 1}-12`, 24], [`${year - 1}-11`, 48]] as const) {
-      const outcome = await covered(key, heads);
-      expect(outcome.chip, `${key}: ${outcome.where}`).toBe(true);
-      expect(outcome.hidden, key).toEqual([]);
+      await scrollTo(key, heads);
+      // The chip comes with the ruler's scroll event, which some engines send a
+      // few frames late.
+      await expect(page.locator(".dr-return"), key).toBeVisible();
+      await settle(page);
+      expect(await hidden(key), key).toEqual([]);
     }
     expect(await pageErrors(page)).toEqual([]);
   });

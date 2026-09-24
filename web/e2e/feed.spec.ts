@@ -326,9 +326,11 @@ async function expectStrip(page: Page, lines: number, coarse: boolean): Promise<
 // hidden card was still held: its release a quiet moment later is a correction
 // the reader's row is owed, not a scroll cut short, and on a slow machine it can
 // come inside the six still frames. midScroll says whether the change reached
-// the strip while the page was still on its way - an engine that paints only a
-// few frames a second, WebKit on a Linux CI runner, ends a smooth scroll before
-// the sync lands, and then there is nothing mid-scroll to test.
+// the strip while the page was still on its way - WebKit on a Linux CI runner
+// paints only a few frames a second and ends a smooth scroll before the sync
+// lands, so there is nothing mid-scroll to test and the test is skipped there.
+// Chromium must always catch it mid-scroll, or a sync that started waiting for
+// the scroll to end would skip the tests everywhere.
 async function scrollWhileSyncLands(
   page: Page,
   target: number,
@@ -554,7 +556,7 @@ test.describe("pinned running timers", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
-  test("a timer that arrives while the page scrolls lets the scroll finish", async ({ page, server }) => {
+  test("a timer that arrives while the page scrolls lets the scroll finish", async ({ page, server, browserName }) => {
     await trackErrors(page);
     await seedHistory(server.url, 60);
     await page.setViewportSize({ width: 1200, height: 900 });
@@ -571,13 +573,14 @@ test.describe("pinned running timers", () => {
     // Still again, the hidden card takes its real height and the strip is right.
     await expectStrip(page, 2, false);
     expect(await pageErrors(page)).toEqual([]);
-    test.skip(!outcome.midScroll, "the smooth scroll ended before the sync landed");
+    test.skip(browserName === "webkit" && !outcome.midScroll, "the smooth scroll ended before the sync landed");
+    expect(outcome.midScroll).toBe(true);
     // The timer arrived while the page was still moving, and the scroll still
     // went all the way.
     expect(Math.abs(outcome.end - target)).toBeLessThanOrEqual(2);
   });
 
-  test("a timer stopped elsewhere while the page scrolls lets the scroll finish", async ({ page, request, server }) => {
+  test("a timer stopped elsewhere while the page scrolls lets the scroll finish", async ({ page, request, server, browserName }) => {
     await trackErrors(page);
     await seedHistory(server.url, 30);
     await page.setViewportSize({ width: 1200, height: 900 });
@@ -631,7 +634,8 @@ test.describe("pinned running timers", () => {
     await expect(page.locator(".feed .item").filter({ hasText: "Stopped elsewhere" })).toHaveCount(1);
     await expectStrip(page, 2, false);
     expect(await pageErrors(page)).toEqual([]);
-    test.skip(!outcome.midScroll, "the smooth scroll ended before the sync landed");
+    test.skip(browserName === "webkit" && !outcome.midScroll, "the smooth scroll ended before the sync landed");
+    expect(outcome.midScroll).toBe(true);
     expect(Math.abs(outcome.end - target)).toBeLessThanOrEqual(2);
   });
 

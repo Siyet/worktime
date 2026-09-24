@@ -449,8 +449,9 @@ export class FeedScroller {
     // shift instead of the page: it gives up or gains exactly what changed above,
     // a row landing in today's day, say, so the reader's row stays put without a
     // scroll that would stop theirs. Once scrolling is quiet the card takes its
-    // real height and the page the net correction. A shift bigger than the whole
-    // card is left to the scroll, and so is one found inside the ResizeObserver
+    // real height and the page the net correction. Growth above the reader bigger
+    // than the whole card is left to the scroll (something shrinking above it only
+    // makes the card that much taller), and so is a shift found inside the ResizeObserver
     // callback: resizing the card there resizes the observed body again, a loop.
     // A sync merge lands outside a frame, so the frame's own pass sees it first.
     const held = this.#heldCard;

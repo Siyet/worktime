@@ -301,10 +301,19 @@ export class FeedScroller {
     // Released before the correction below, so that it is the correction that
     // absorbs whatever the held card grew or shrank by - and at the latest in the
     // frame the page unsticks, read fresh rather than from the last frame, so the
-    // card never shows cut to its old height. A card that changed while held then
+    // card never shows cut to its old height. When it unsticks because the card
+    // is coming into view, the anchor from the stuck frame is dropped: the card
     // takes its new height in view, as any change above the feed does once the
-    // strip lets go: stopping the reader's scroll to hide that would be worse.
-    if (this.#heldCard !== null && (this.#pinnedRect() === null || this.#quietFor() >= IDLE_MS)) this.#releaseCard();
+    // strip lets go, because a correction would stop the reader's scroll -
+    // Safari's status-bar tap would end at the card instead of the top. A card
+    // that went away with its last timer is still corrected for.
+    if (this.#heldCard !== null) {
+      const unstuck = this.#pinnedRect() === null;
+      if (unstuck || this.#quietFor() >= IDLE_MS) {
+        if (unstuck && this.#heldCard.isConnected) this.#anchor = null;
+        this.#releaseCard();
+      }
+    }
     // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.

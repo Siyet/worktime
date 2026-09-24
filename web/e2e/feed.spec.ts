@@ -572,7 +572,7 @@ test.describe("pinned running timers", () => {
       await frame();
       window.dispatchEvent(new Event("online"));
       let shown = 0;
-      for (let count = 0; count < 600 && window.scrollY > 0; count++) {
+      for (let count = 0; count < 300 && window.scrollY > 0; count++) {
         await frame();
         const card = document.querySelector<HTMLElement>(".running-full");
         if (card !== null && getComputedStyle(card).visibility === "visible" && card.style.height !== "") shown += 1;
@@ -580,6 +580,9 @@ test.describe("pinned running timers", () => {
       return shown;
     });
     expect(shownHeld).toBe(0);
+    // And the scroll still reached the top: the card taking its new height as it
+    // comes into view is no correction, which would stop a smooth scroll short.
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
     await expect(runningCard(page).locator(".item")).toHaveCount(4);
     expect(await pageErrors(page)).toEqual([]);
   });

@@ -14,50 +14,55 @@
 .th-dark,.th-light{background:var(--bg);color:var(--text)}
 
 /* ===========================================================================
-   PROPOSED - the day ruler. Port to lib/components/DayRuler.svelte (scoped).
+   The day ruler, revision 3 - as implemented in lib/components/DayRuler.svelte
+   (scoped; the component's CSS is the source of truth for every value here).
    Tokens: --bg --surface --text --text-dim --border --accent --hover --teal
-   --purple --danger --radius --mono. New derived values: the label, today
-   and thumb colours, and the ruler's own tick shades (below). The bands are
+   --purple --danger --radius --mono. New derived values: the label, today and
+   lit-tick colours (below). The ticks are --text at an opacity; the bands are
    the Reports chart's own rgba values, not tokens (as in DailyChart.svelte).
+   No spine and no thumb: a tick per day against the right edge of the window,
+   like the outline of a Notion page, and the ticks of the days the feed shows
+   light up. The spec marks those rows with .vis; the component sets data-vis.
    ======================================================================== */
 
 .dr {
-  /* Geometry. Every size is fixed, so every offset in the ruler is arithmetic:
-     nothing here is measured, and a month can be sized before it is laid out. */
-  --dr-w: 7.875rem;        /* 126px: the whole ruler                        */
-  --dr-pitch: 1rem;        /* 16px per calendar day                         */
-  --dr-head: 1.5rem;       /* 24px: a month header, and a past year's row   */
-  --dr-spine-x: 4px;       /* the spine's left edge                         */
-  --dr-tick-day: 6px;
-  --dr-tick-week: 11px;    /* Monday                                        */
-  --dr-tick-month: 17px;   /* the 1st                                       */
-  --dr-label-x: 1.625rem;  /* 26px: labels and headers start here           */
-  --dr-wd-w: 1.5rem;       /* replaced per locale: the widest short weekday */
-  --dr-font: 0.6875rem;    /* 11px                                          */
-  --dr-dur-font: 0.65625rem; /* 10.5px mono: the day's tracked time         */
-  --dr-dur-gap: 8px;       /* at least this much between date and time      */
-  --dr-pad-r: 4px;         /* the time's right edge, from the ruler's edge  */
+  /* Geometry. Every size is fixed, so every offset in the ruler is arithmetic
+     (lib/ruler.ts): nothing here is measured, and a month can be sized before
+     it is laid out. */
+  --dr-w: min(11rem, calc(50% - 33.75rem)); /* the margin less 12px, ≤ 176px */
+  --dr-pitch: 1.25rem;     /* 20px per calendar day - RULER_PITCH            */
+  --dr-head: 1.75rem;      /* 28px: a month header, a past year's row - RULER_HEAD */
+  /* Ticks: 2px bars against the right edge, a Monday longer than a day and the
+     1st longer still; a hovered one grows by --dr-tick-grow. The labels keep
+     clear of the longest a tick can get. */
+  --dr-tick-h: 2px;
+  --dr-tick-day: 12px;
+  --dr-tick-week: 20px;    /* Monday                                         */
+  --dr-tick-month: 28px;   /* the 1st                                        */
+  --dr-tick-grow: 10px;    /* hover and keyboard focus                       */
+  --dr-ticks: calc(var(--dr-tick-month) + var(--dr-tick-grow) + 6px); /* 44px */
+  --dr-label-x: 0.375rem;  /* 6px: labels start here, headers 4px before     */
+  --dr-wd-w: 1.75rem;      /* replaced per locale: the widest short weekday  */
+  --dr-font: 0.75rem;      /* 12px                                           */
+  --dr-dur-font: 0.6875rem; /* 11px mono: the day's clock time               */
+  --dr-dur-gap: 8px;       /* at least this much between date and time       */
 
   /* Colour, dark (the default theme). Labels sit on the bands too, so they
      are a touch brighter than --text-dim: 6.2:1 on --bg, 4.8 on the palest band. */
   --dr-label: color-mix(in srgb, var(--text-dim) 90%, var(--text));
   --dr-strong: var(--text);                                          /* 13.4:1         */
   --dr-today: var(--accent);                                         /* 8.1:1, 6.2 on bands */
-  --dr-thumb: var(--accent);
-  --dr-spine: color-mix(in srgb, var(--text-dim) 38%, transparent);
-  --dr-tick: color-mix(in srgb, var(--text-dim) 75%, transparent);
-  --dr-tick-quiet: color-mix(in srgb, var(--text-dim) 42%, transparent);
-  --dr-tick-week-c: var(--text-dim);
-  --dr-tick-month-c: var(--text);
+  --dr-lit: var(--accent);                                           /* 8.1:1 */
+  --dr-tick: var(--text);                                            /* at an opacity  */
   --dr-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 
-  /* Placement: fixed to the viewport, in the right margin of the 68rem shell,
-     12px clear of the cards (the spine is 16px clear). */
+  /* Placement: fixed against the right edge of the window, as wide as the
+     margin beside the 68rem shell allows, 12px clear of the cards. */
   position: fixed;
   z-index: 6;
   top: 0.75rem;
   bottom: 0;
-  left: calc(50% + 33.75rem);
+  right: 0;
   width: var(--dr-w);
   display: none;
   flex-direction: column;
@@ -68,14 +73,15 @@
   .dr {
     --dr-label: color-mix(in srgb, var(--text-dim) 80%, var(--text));  /* 5.3:1, 4.6 on bands */
     --dr-today: color-mix(in srgb, var(--accent) 55%, var(--text));    /* 5.3:1, 4.5 on bands */
-    --dr-thumb: color-mix(in srgb, var(--accent) 75%, var(--text));    /* 3.8:1 */
+    --dr-lit: color-mix(in srgb, var(--accent) 75%, var(--text));      /* 3.8:1 */
     --dr-shadow: 0 6px 18px rgba(20, 26, 40, 0.12);
   }
 }
-/* 66rem of cards + 2 × (12px + 126px) = 1332px, + a classic 17px scrollbar =
-   1349px: 85rem (1360px) leaves 5.5px of air. Mouse only (owner's decision):
-   every part of it (hover, 16px rows) assumes a fine pointer. */
-@media (min-width: 85rem) and (hover: hover) and (pointer: fine) {
+/* The widest row needs about 150px (engineering notes). 88rem (1408px) less a
+   classic 17px scrollbar leaves (1391 − 1056) / 2 − 12 = 155.5px: 6px of air;
+   87rem would miss by 2px. Mouse only (owner's decision): every part of it
+   (hover, 20px rows) assumes a fine pointer. */
+@media (min-width: 88rem) and (hover: hover) and (pointer: fine) {
   .dr { display: flex; }
 }
 @media print { .dr { display: none !important; } }
@@ -98,12 +104,6 @@
 .dr-scroll.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2rem), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 2rem), transparent); }
 
 .dr-track { position: relative; padding-bottom: 1.5rem; }
-/* The spine ends at the oldest day's tick: the start of the history. */
-.dr-spine { position: absolute; top: 0; left: var(--dr-spine-x); width: 1px; background: var(--dr-spine); }
-/* The visible range. Above the headers, so one in the flow never cuts it; over a
-   stuck header it only ever touches the spine's 3px. */
-.dr-thumb { position: absolute; z-index: 5; left: calc(var(--dr-spine-x) - 1px); width: 3px; border-radius: 2px; background: var(--dr-thumb); }
-.dr-thumb[hidden] { display: none; }
 
 .dr-days { list-style: none; margin: 0; padding: 0; }
 /* Off-screen months skip style, layout and paint. Their size is exact
@@ -113,8 +113,7 @@
 .dr-month { content-visibility: auto; }
 .dr-month.near { content-visibility: visible; }
 
-/* Headers stick to the top of the ruler. The spine is part of their
-   background, so it never breaks under a stuck header. */
+/* Headers stick to the top of the ruler. */
 .dr-yhead,
 .dr-mhead {
   position: sticky;
@@ -123,12 +122,12 @@
   display: flex;
   align-items: flex-end;
   white-space: nowrap;
-  background: linear-gradient(var(--dr-spine), var(--dr-spine)) var(--dr-spine-x) 0 / 1px 100% no-repeat, var(--bg);
+  background: var(--bg);
 }
 .dr-mhead { z-index: 2; }
 .dr-year.past .dr-mhead { top: var(--dr-head); }
 /* The month header is a button: it jumps to the month's newest day with
-   entries. Its hover band is the header's bottom 20px, like a tall row. */
+   entries. Its hover band is the header's bottom 24px, like a tall row. */
 .dr-mbtn {
   all: unset;
   box-sizing: border-box;
@@ -136,8 +135,8 @@
   align-items: flex-end;
   width: 100%;
   height: calc(var(--dr-head) - 4px);
-  /* 4px left of the labels: 104px for the longest month name (septiembre, 62px). */
-  padding: 0 0 0.3rem calc(var(--dr-label-x) - 4px);
+  /* 4px left of the labels, the full width for the name (septiembre, 69px). */
+  padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
   border-radius: 4px;
   font-size: var(--dr-font);
   font-weight: 600;
@@ -152,23 +151,22 @@
 /* A past year: its own row above its months, a hairline across the ruler. */
 .dr-yhead {
   z-index: 3;
-  padding: 0 0 0.3rem calc(var(--dr-label-x) - 4px);
-  font-size: 0.75rem;
+  padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
+  font-size: 0.8125rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--dr-strong);
   background:
-    linear-gradient(var(--border), var(--border)) var(--dr-spine-x) 0 / 100% 1px no-repeat,
-    linear-gradient(var(--dr-spine), var(--dr-spine)) var(--dr-spine-x) 0 / 1px 100% no-repeat,
+    linear-gradient(var(--border), var(--border)) 0 0 / 100% 1px no-repeat,
     var(--bg);
 }
 
 .dr-li { position: relative; height: var(--dr-pitch); }
 /* Bands, exactly as the Reports daily chart draws them (DailyChart.svelte), the
    same values in both themes. One band per day: sick, else other time off, else
-   the weekend. Square ends and no gaps, so consecutive days - a Saturday and
-   its Sunday, a vacation week - read as one block. */
-.dr-li[data-band]::before { content: ""; position: absolute; inset: 0 0 0 calc(var(--dr-spine-x) + 1px); background: var(--dr-band); }
+   the weekend. The full row, square ends and no gaps, so consecutive days - a
+   Saturday and its Sunday, a vacation week - read as one block. */
+.dr-li[data-band]::before { content: ""; position: absolute; inset: 0; background: var(--dr-band); }
 .dr-li[data-band="weekend"] { --dr-band: rgba(96, 125, 190, 0.13); }
 .dr-li[data-band="vacation"] { --dr-band: rgba(64, 190, 196, 0.15); }
 .dr-li[data-band="dayoff"] { --dr-band: rgba(181, 125, 232, 0.17); }
@@ -176,8 +174,11 @@
    edge - the tile clips half of it, so 0.8px is what the chart shows. */
 .dr-li[data-band="sick"] { --dr-band: repeating-linear-gradient(135deg, rgba(224, 82, 82, 0.38) 0 0.8px, transparent 0.8px 7px), rgba(224, 82, 82, 0.10); }
 
-/* One day: a real button across the whole row. */
+/* One day: a real button across the whole row. The right padding is the tick
+   zone - the labels keep clear of the longest a tick can get. */
 .dr-day {
+  --dr-len: var(--dr-tick-day);
+  --dr-op: 0.22;
   all: unset;
   box-sizing: border-box;
   position: relative;
@@ -186,7 +187,7 @@
   align-items: center;
   width: 100%;
   height: 100%;
-  padding: 0 var(--dr-pad-r) 0 var(--dr-label-x);
+  padding: 0 var(--dr-ticks) 0 var(--dr-label-x);
   border-radius: 4px;
   font-size: var(--dr-font);
   line-height: 1;
@@ -194,25 +195,37 @@
   color: var(--dr-label);
   cursor: pointer;
 }
-/* The tick. Its length is the calendar, nothing else. */
+/* The tick, flush with the right edge of the window. Its length is the
+   calendar, its strength whether the day has entries; the days the feed shows
+   light up in the accent, and the one at the reading line glows. */
 .dr-day::before {
   content: "";
   position: absolute;
-  left: calc(var(--dr-spine-x) + 1px);
-  top: calc(50% - 0.5px);
-  width: var(--dr-tick-day);
-  height: 1px;
-  background: var(--dr-tick-quiet);
+  right: 0;
+  top: calc(50% - var(--dr-tick-h) / 2);
+  width: var(--dr-len);
+  height: var(--dr-tick-h);
+  border-radius: 1px 0 0 1px;
+  background: var(--dr-tick);
+  opacity: var(--dr-op);
+  transition: width 180ms ease, opacity 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
-.dr-day.rec::before { background: var(--dr-tick); }
-.dr-day.mon::before { width: var(--dr-tick-week); background: var(--dr-tick-week-c); }
-.dr-day.first::before { width: var(--dr-tick-month); background: var(--dr-tick-month-c); }
-.dr-day.today::before { background: var(--dr-today); }
+.dr-day.rec { --dr-op: 0.45; }
+.dr-day.mon { --dr-len: var(--dr-tick-week); }
+.dr-day.first { --dr-len: var(--dr-tick-month); }
+/* Days the feed shows right now (.vis here, [data-vis] in the component). */
+.dr-day.vis::before { background: var(--dr-lit); opacity: 1; }
+.dr-day[aria-current]::before { box-shadow: 0 0 4px var(--dr-lit); }
+/* The row under the pointer, or keyboard focus: its tick reaches out and comes
+   up to full strength. */
+.dr-day:hover::before,
+.dr-day:focus-visible::before { width: calc(var(--dr-len) + var(--dr-tick-grow)); opacity: 1; }
 .dr-wd { flex: none; width: var(--dr-wd-w); text-align: right; }
 .dr-n { flex: none; width: 2ch; margin-left: 3px; text-align: right; font-variant-numeric: tabular-nums; }
-/* The day's tracked time - the day header's own figure - right-aligned at the
-   ruler's edge, so a column of them lines up like the feed's totals. Muted
-   mono, never accented (not even today's); only on days with entries. */
+/* The day's clock time - the day header's first figure, the one before the
+   slash - right-aligned just left of the tick zone, so a column of them lines
+   up like the feed's totals. Muted mono, never accented (not even today's);
+   only on days with entries. */
 .dr-dur {
   flex: none;
   margin-left: auto;
@@ -232,13 +245,11 @@
 .dr-day.vis .dr-n { color: var(--dr-strong); }
 .dr-day.today.vis .dr-wd,
 .dr-day.today.vis .dr-n { color: var(--dr-today); }
-@media (hover: hover) {
-  .dr-day:hover { background: var(--hover); }
-  .dr-day:hover .dr-wd, .dr-day:hover .dr-n, .dr-day:hover .dr-dur { color: var(--dr-strong); }
-}
+/* No hover band on a day: the labels go bright and the tick grows. */
+.dr-day:hover .dr-wd, .dr-day:hover .dr-n, .dr-day:hover .dr-dur { color: var(--dr-strong); }
 .dr-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* Shown when the visible range is scrolled out of the ruler: says where it is. */
+/* Shown when the lit ticks are scrolled out of the ruler: says where they are. */
 .dr-return {
   position: absolute;
   z-index: 6;
@@ -290,11 +301,12 @@
 @keyframes dr-landed { from { box-shadow: 0 0 0 2px var(--accent); } to { box-shadow: 0 0 0 2px transparent; } }
 
 @media (prefers-reduced-motion: reduce) {
+  .dr-day::before { transition: none; }
   .day.dr-landed > .card { animation: none; box-shadow: 0 0 0 2px var(--accent); }
 }
 @media (forced-colors: active) {
-  .dr-spine, .dr-day::before { background: CanvasText; }
-  .dr-thumb { background: Highlight; }
+  .dr-day::before { background: CanvasText; }
+  .dr-day.vis::before { background: Highlight; }
   /* Time off keeps a mark; the weekend band goes - the weekday label says it. */
   .dr-li[data-band]::before { background: none; }
   .dr-li[data-band]:not([data-band="weekend"])::before { border-left: 3px solid CanvasText; }
@@ -305,8 +317,8 @@
    ======================================================================== */
 
 /* Frames force the ruler's theme too (the rules above follow the viewer). */
-.th-dark .dr, .th-dark.dr { --dr-label: color-mix(in srgb, var(--text-dim) 90%, var(--text)); --dr-today: var(--accent); --dr-thumb: var(--accent); --dr-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
-.th-light .dr, .th-light.dr { --dr-label: color-mix(in srgb, var(--text-dim) 80%, var(--text)); --dr-today: color-mix(in srgb, var(--accent) 55%, var(--text)); --dr-thumb: color-mix(in srgb, var(--accent) 75%, var(--text)); --dr-shadow: 0 6px 18px rgba(20, 26, 40, 0.12); }
+.th-dark .dr, .th-dark.dr { --dr-label: color-mix(in srgb, var(--text-dim) 90%, var(--text)); --dr-today: var(--accent); --dr-lit: var(--accent); --dr-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
+.th-light .dr, .th-light.dr { --dr-label: color-mix(in srgb, var(--text-dim) 80%, var(--text)); --dr-today: color-mix(in srgb, var(--accent) 55%, var(--text)); --dr-lit: color-mix(in srgb, var(--accent) 75%, var(--text)); --dr-shadow: 0 6px 18px rgba(20, 26, 40, 0.12); }
 .th-dark .dr-tip { --dr-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
 .th-light .dr-tip { --dr-shadow: 0 6px 18px rgba(20, 26, 40, 0.12); }
 
@@ -397,6 +409,10 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 .m-page .tag { display: inline-block; padding: 0.05rem 0.45rem; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); font-size: 0.8rem; line-height: 1.45; }
 .m-page .kebab { padding: 0.3rem 0.45rem; min-width: 2.2rem; min-height: 2.2rem; line-height: 1; color: var(--text-dim); background: transparent; border-color: transparent; }
 .m-page .row > .mono { white-space: nowrap; }
+/* A day header with parallel work: clock time, a divider, the tracked sum (TimerPage.svelte). */
+.m-page .totals { display: inline-flex; align-items: center; gap: 0.35rem; }
+.m-page .totals .sep { color: var(--text-dim); }
+.m-page .wall { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; white-space: nowrap; }
 /* The pinned strip, as specified in pinned-running.html (subset). */
 .m-page .pinbox { --pin-row: 2rem; --pin-hit: 1.75rem; --pin-face: 1.625rem; --pin-h: calc(0.5rem + 1px + var(--pin-lines, 1) * var(--pin-row)); position: sticky; top: var(--pin-h); z-index: 7; height: 0; }
 .m-page .pinbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 0.25rem 0; background: var(--surface); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); box-shadow: var(--pin-shadow); visibility: hidden; opacity: 0; pointer-events: none; transition: opacity 120ms ease-out, visibility 0s linear 120ms; }
@@ -412,35 +428,42 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 .m-page .pin-stop svg { grid-area: 1 / 1; position: relative; }
 
 /* --- static ruler fragments (anatomy, states, alternatives) --- */
-.dr.static { position: relative; display: flex; top: auto; left: auto; bottom: auto; }
-.dr.static .dr-scroll { overflow: hidden; }
+/* Out of the window there is no margin to size by: 176px, the width from 1432px up. */
+.dr.static { --dr-w: 11rem; position: relative; display: flex; top: auto; right: auto; bottom: auto; }
+/* The height a fragment sets is the height it shows (flex: 1 would size it by its content). */
+.dr.static .dr-scroll { overflow: hidden; flex: none; }
 .dr.static .dr-month { content-visibility: visible; }
 .dr.static.cv .dr-month { content-visibility: auto; }
-.frag { position: relative; display: inline-block; padding: 0.6rem 0.6rem 0.6rem 0.5rem; border-radius: 10px; outline: 1px solid rgba(128, 128, 128, 0.35); }
-.frag.tipped { padding-left: 13.5rem; }
+/* No padding on the right: the ticks sit against the fragment's edge, as against the window's. */
+.frag { position: relative; display: inline-block; padding: 0.6rem 0 0.6rem 0.5rem; border-radius: 10px; outline: 1px solid rgba(128, 128, 128, 0.35); }
 .frag .dr-tip { position: absolute; }
-.dr .dr-day.is-hover, .dr .dr-mbtn.is-hover { background: var(--hover); }
+.dr .dr-mbtn.is-hover { background: var(--hover); }
 .dr .dr-day.is-hover .dr-wd, .dr .dr-day.is-hover .dr-n, .dr .dr-day.is-hover .dr-dur { color: var(--dr-strong); }
+.dr .dr-day.is-hover::before, .dr .dr-day.is-focus::before { width: calc(var(--dr-len) + var(--dr-tick-grow)); opacity: 1; }
 .dr .dr-day.is-focus, .dr .dr-mbtn.is-focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 .figs { display: flex; flex-wrap: wrap; gap: 1.4rem 1.8rem; align-items: flex-start; }
 .fig { margin: 0; }
 .fig .lbl { display: flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; font-weight: 600; margin: 0 0 0.4rem; }
-.fig figcaption { font-size: 0.8rem; color: var(--text-dim); margin: 0.45rem 0 0; max-width: 17rem; }
+.fig figcaption { font-size: 0.8rem; color: var(--text-dim); margin: 0.45rem 0 0; max-width: 20rem; }
 .fig figcaption b { color: var(--text); }
 .pair { display: flex; gap: 0.5rem; align-items: flex-start; }
-/* Alternatives, drawn just well enough to judge them. The previous proposal:
-   an 88px ruler with an hours bar (10h = 14px) instead of the time. */
-.alt-bar .dr { --dr-w: 5.5rem; }
+.pair.col { flex-direction: column; align-items: flex-end; }
+/* Alternatives, drawn just well enough to judge them. Revision 1: an hours bar
+   (10h = 14px) after the date instead of the time, 120px with the tick zone. */
+.alt-bar .dr { --dr-w: 7.5rem; }
 .alt-bar .dr-dur { display: none; }
 .alt-bar .dr-day.rec::after { content: ""; flex: none; width: max(2px, calc(var(--dr-h, 0) * 14px)); height: 4px; margin-left: 6px; border-radius: 2px; background: color-mix(in srgb, var(--text-dim) 55%, transparent); }
 .alt-mondays .dr-day:not(.mon):not(.first):not(.today) .dr-wd,
 .alt-mondays .dr-day:not(.mon):not(.first):not(.today) .dr-n { visibility: hidden; }
 .dr-day.pre { cursor: default; }
 .dr-day.pre .dr-wd, .dr-day.pre .dr-n { opacity: 0.45; }
-.p14 .dr { --dr-pitch: 14px; } .p18 .dr { --dr-pitch: 18px; }
+/* Revision 2's scale, flush ticks and all: 16px rows, 11px type, 1px ticks of 6/11/17px. */
+.p16 .dr { --dr-pitch: 1rem; --dr-head: 1.5rem; --dr-font: 0.6875rem; --dr-dur-font: 0.65625rem; --dr-tick-h: 1px; --dr-tick-day: 6px; --dr-tick-week: 11px; --dr-tick-month: 17px; --dr-tick-grow: 6px; }
+.p16 .dr-mbtn { padding-bottom: 0.3rem; }
+.p24 .dr { --dr-pitch: 1.5rem; }
 
 /* --- anatomy --- */
-.anat { position: relative; display: inline-block; padding: 1rem 15rem 1rem 13rem; }
+.anat { position: relative; display: inline-block; padding: 1rem 17rem 1rem 13rem; }
 .anat .frag { zoom: 3; border-radius: 4px; }
 .mk { position: absolute; display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; color: var(--text-dim); white-space: nowrap; transform: translateY(-50%); }
 .mk.l { flex-direction: row-reverse; }
@@ -465,9 +488,11 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 .sch-win .s-bar { position: absolute; left: 0; right: 0; border-radius: 2px; background: var(--surface); border: 1px solid var(--border); }
 .sch-win .s-head { background: none; border: 0; border-bottom: 1px dashed var(--border); border-radius: 0; }
 .sch-win .s-strip { background: var(--surface); border-color: var(--text-dim); }
-.sch-win .s-ruler { position: absolute; width: 11px; border-left: 1px solid var(--text-dim); }
-.sch-win .s-ruler::before { content: ""; position: absolute; left: -2px; width: 3px; top: 38%; height: 18%; background: var(--accent); border-radius: 2px; }
-.sch-win .s-ruler i { position: absolute; left: 0; height: 1px; background: var(--text-dim); }
+/* Ticks against the window's edge, no spine; the lit ones are what the feed shows. */
+.sch-win .s-ruler { position: absolute; width: 11px; }
+.sch-win .s-ruler i { position: absolute; right: 0; height: 1px; background: var(--text-dim); }
+.sch-win .s-ruler i.lit { background: var(--accent); }
+.sch-win .s-ruler.l i { right: auto; left: 0; }
 .sch-cap { font-size: 0.8rem; color: var(--text-dim); max-width: 250px; margin-top: 0.4rem; }
 .sch-cap b { color: var(--text); }
 </style>
@@ -478,31 +503,34 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 <div class="card sec">
   <h1>Day ruler: jump to any day from the side</h1>
   <blockquote>"On a large screen I'd also like tick marks with dates along the side. They scroll separately from the main screen, so you can quickly jump to a specific day, like the table of contents in Notion. Each tick is a separate day, showing the day of the week. Monday's tick is a little longer than the others, and the first day of a month is longer still." - the owner</blockquote>
+  <blockquote>"The design is wrong: the scale is too small. There must be no vertical connecting line. Show the time that stands before the slash in the day card, i.e. accounting for overlap. The ticks must be right-aligned, fully flush against the right edge of the screen. On hover a tick should smoothly grow and gain opacity. Look at how Notion does it." - the owner, on revision 2</blockquote>
   <p class="sub">
-    This page is the proposed design for that ruler on the Timer page: a live demo in a mock desktop window, its anatomy and states in both themes,
-    placement and breakpoints, the alternatives that lost, and the spec. <b>Revision 2</b> applies the owner's review: the hours bar is gone - the day's
-    tracked time is quiet text instead; month headers are clickable; weekends and time off are the Reports chart's bands; the ruler is mouse-only. The feed it drives is the one that is live today
-    (<code>feed.ts</code> + <code>FeedScroller</code>): newest first, virtualised, with <code>reveal(iso)</code> already able to put any day under the pinned strip.
+    This page is the design of that ruler on the Timer page, as implemented in <code>DayRuler.svelte</code> and <code>lib/ruler.ts</code>: a live demo in a mock desktop window, its anatomy and states in both themes,
+    placement and breakpoints, the alternatives that lost, and the spec. <b>Revision 2</b> applied the owner's first review: the hours bar went - the day's
+    time became quiet text; month headers became clickable; weekends and time off are the Reports chart's bands; the ruler is mouse-only. <b>Revision 3</b> applies the second, with Notion's outline as the model:
+    a larger scale (20px rows, 12px type); no spine and no thumb - 2px ticks flush with the right edge of the window, and the ticks of the days the feed shows lit in the accent;
+    a hovered tick grows and comes up to full strength; the time is the day header's clock time, parallel work counted once. The feed it drives is the live one
+    (<code>feed.ts</code> + <code>FeedScroller</code>): newest first, virtualised, with <code>reveal(iso)</code> able to put any day under the pinned strip.
   </p>
   <div class="tldr">
-    <div><b>Right margin, from 85rem with a mouse.</b><span>A 126px strip fixed to the viewport, 12px right of the cards, from the header's top to the bottom of the window. It lives in the free margin only - it never covers the feed or the strip. Below 1360px, or on any touch-only device (tablets included), it is not rendered at all.</span></div>
-    <div><b>One tick per day, 16px apart.</b><span>Ticks hang off a 1px spine: 6px a day, 11px a Monday, 17px the 1st. Length is the calendar and nothing else. About 50 days - seven weeks - fit a 900px window.</span></div>
-    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 11px, weekday dim, date bright when the day has entries and dim when it has none. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
-    <div><b>The day's time, as quiet text.</b><span><i>7h 35m</i> after the date, right-aligned, muted mono - the same figure as the day's header in the feed, only on days with entries, never accented. Behind the rows, the Reports chart's bands: blue weekends, teal vacation, purple day off, hatched red sick; time off wins over a weekend.</span></div>
-    <div><b>An accent thumb says where you are.</b><span>It covers the days the feed is showing and moves continuously with the page. The ruler scrolls itself only to keep the thumb in view, and never while the pointer or keyboard focus is in it.</span></div>
+    <div><b>Right edge, from 88rem with a mouse.</b><span>Fixed to the viewport against the right edge of the window, from the header's top to the bottom of the window: as wide as the margin right of the cards less 12px, at most 176px. It lives in the free margin only - it never covers the feed or the strip. Below 1408px, or on any touch-only device (tablets included), it is not rendered at all.</span></div>
+    <div><b>One tick per day, 20px apart, flush with the edge.</b><span>2px bars against the window's edge, no spine: 12px a day, 20px a Monday, 28px the 1st. Length is the calendar; strength is whether the day has entries (<code>--text</code> at 45%, or 22% without). About 41 days fit a 900px window.</span></div>
+    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 12px, weekday dim, date bright when the day has entries and dim when it has none. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
+    <div><b>The day's clock time, as quiet text.</b><span><i>2h 30m</i> right-aligned just left of the ticks, muted mono - the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i>: work that ran in parallel counts once. Only on days with entries, never accented. Behind the rows, the Reports chart's bands: blue weekends, teal vacation, purple day off, hatched red sick; time off wins over a weekend.</span></div>
+    <div><b>Lit ticks say where you are.</b><span>The ticks of the days the feed shows light up in the accent at full strength, and the day at the reading line glows. They move continuously with the page. The ruler scrolls itself only to keep them in view, and never while the pointer or keyboard focus is in it. A hovered tick reaches out 10px and comes up to full strength.</span></div>
     <div><b>Click jumps, instantly.</b><span>Any day, including an empty one: an empty day lands where it would be in the feed (the next older day with entries). A month header lands on the month's newest day with entries. Today goes to the top of the page. The landed card gets a ring that fades in 1.2s.</span></div>
   </div>
   <table class="nums">
-    <thead><tr><th>Window</th><th>Margin right of the cards</th><th>Ruler</th><th>Days in the ruler at once</th></tr></thead>
+    <thead><tr><th>Window</th><th>Margin right of the cards</th><th>Ruler · clear of the cards</th><th>Days in the ruler at once</th></tr></thead>
     <tbody>
-      <tr><td>1920 × 1080</td><td class="mono">432 px</td><td class="mono">shown <span class="pct">· 294 px spare</span></td><td class="mono">≈ 63</td></tr>
-      <tr class="new"><td>1440 × 900 (MacBook Air)</td><td class="mono">192 px</td><td class="mono">shown <span class="pct">· 54 px spare</span></td><td class="mono">≈ 52</td></tr>
-      <tr><td>1366 × 768</td><td class="mono">155 px <span class="pct">(146.5 with a 17px scrollbar)</span></td><td class="mono">shown <span class="pct">· 17 px spare (8.5)</span></td><td class="mono">≈ 43</td></tr>
-      <tr><td>1360, the breakpoint (85rem)</td><td class="mono">152 px <span class="pct">(143.5)</span></td><td class="mono">shown <span class="pct">· 14 px spare (5.5)</span></td><td class="mono">≈ 43</td></tr>
-      <tr><td>1359 and narrower (1280 included), any touch-only device</td><td class="mono">-</td><td class="mono">not rendered</td><td class="mono">-</td></tr>
+      <tr><td>1920 × 1080</td><td class="mono">432 px</td><td class="mono">176 px <span class="pct">· 256 px</span></td><td class="mono">≈ 50</td></tr>
+      <tr class="new"><td>1440 × 900 (MacBook Air)</td><td class="mono">192 px <span class="pct">(183.5 with a 17px scrollbar)</span></td><td class="mono">176 px <span class="pct">· 16 px (171.5 · 12)</span></td><td class="mono">≈ 41</td></tr>
+      <tr><td>1432 and wider</td><td class="mono">≥ 188 px</td><td class="mono">176 px <span class="pct">· ≥ 12 px</span></td><td class="mono">-</td></tr>
+      <tr><td>1408, the breakpoint (88rem)</td><td class="mono">176 px <span class="pct">(167.5)</span></td><td class="mono">164 px <span class="pct">· 12 px (155.5 · 12)</span></td><td class="mono">≈ 41 at 900 high</td></tr>
+      <tr><td>1407 and narrower (1366 and 1280 included), any touch-only device</td><td class="mono">-</td><td class="mono">not rendered</td><td class="mono">-</td></tr>
     </tbody>
   </table>
-  <p class="note">Days at once = (window height − 12px top − 24px stuck month header − about 1.5 month headers in view) / 16px. The ruler needs 12 + 126 = 138px right of the cards: 1332px of window with overlay scrollbars, 1349px with a classic 17px one - so 85rem (1360px), with 5.5px to spare in the worst case. 84rem (1344px) would miss by 5px with a classic scrollbar. 1280px windows lost the ruler with this revision (open question below).</p>
+  <p class="note">Days at once = (window height − 12px top − 28px stuck month header − about 1.5 month headers in view) / 20px. The ruler is the margin right of the cards less 12px, capped at 176px, and its widest row needs about 150px (the budget is in the engineering notes): 1379px of window with overlay scrollbars, 1396px with a classic 17px one - so 88rem (1408px), with 6px to spare in the worst case. 87rem (1392px) would miss by 2px with a classic scrollbar. Windows from 1360 to 1407px wide, 1366 included, lost the ruler with this revision (open question below).</p>
 </div>
 </div>
 
@@ -512,15 +540,16 @@ pre.sketch b { color: var(--text); font-weight: 600; }
       <h2>Live demo - the Timer page in a desktop window</h2>
       <p class="sub" style="margin-bottom:0.7rem">
         Three months of mock data (switch to two years to see year boundaries, a vacation across a weekend, and scale): weekends, a gap on Tue Jul 21,
-        a day off on Fri Jul 3, a vacation week Aug 10-14 and a sick day on Wed Sep 9. Today is Thu Sep 24 with two timers running, so the pinned strip
-        takes over once the Running card scrolls away. <b>Scroll the window</b> and watch the thumb; <b>scroll the ruler</b> on its own; <b>hover</b> for
-        the tooltip; <b>click</b> any day, including a weekend, or a <b>month header</b>. Keyboard: Tab to the ruler (one stop), arrows (month headers are
+        a day off on Fri Jul 3, a vacation week Aug 10-14 and a sick day on Wed Sep 9; on some days an agent worked in parallel (Wed Sep 23 among them), so their
+        headers read <i>⏱ clock / tracked</i> and the ruler shows the clock time. Today is Thu Sep 24 with two timers running, so the pinned strip
+        takes over once the Running card scrolls away. <b>Scroll the window</b> and watch the lit ticks; <b>scroll the ruler</b> on its own; <b>hover</b> for
+        the growing tick and the tooltip; <b>click</b> any day, including a weekend, or a <b>month header</b>. Keyboard: Tab to the ruler (one stop), arrows (month headers are
         stops too), PageUp/PageDown (month), Shift+PageUp/PageDown (year), Home/End, Enter; Tab after a jump enters the landed day.
       </p>
       <div class="controls">
         <div><div class="ctl-label">Theme</div><div class="seg" data-ctl="theme"><button type="button" data-v="dark" class="on">Dark</button><button type="button" data-v="light">Light</button></div></div>
         <div><div class="ctl-label">Language</div><div class="seg" data-ctl="lang"><button type="button" data-v="en" class="on">EN</button><button type="button" data-v="ru">RU</button><button type="button" data-v="de">DE</button><button type="button" data-v="fr">FR</button><button type="button" data-v="es">ES</button><button type="button" data-v="zh">ZH</button></div></div>
-        <div><div class="ctl-label">Window width</div><div class="seg" data-ctl="width"><button type="button" data-v="window" class="on">This window</button><button type="button" data-v="1440">1440</button><button type="button" data-v="1366">1366</button><button type="button" data-v="1280">1280</button></div></div>
+        <div><div class="ctl-label">Window width</div><div class="seg" data-ctl="width"><button type="button" data-v="window" class="on">This window</button><button type="button" data-v="1440">1440</button><button type="button" data-v="1408">1408</button><button type="button" data-v="1366">1366</button></div></div>
         <div><div class="ctl-label">History</div><div class="seg" data-ctl="history"><button type="button" data-v="3m" class="on">3 months</button><button type="button" data-v="2y">2 years</button></div></div>
         <div><div class="ctl-label">Click jump</div><div class="seg" data-ctl="jump"><button type="button" data-v="instant" class="on">Instant</button><button type="button" data-v="smooth">Smooth</button></div></div>
         <div><div class="ctl-label">Page</div><div class="btns"><button type="button" data-go="top">Top</button><button type="button" data-go="mid">Middle</button><button type="button" data-go="end">End</button></div></div>
@@ -530,7 +559,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <div class="bleed hscroll"><div class="m-frame th-dark" id="m-frame"></div></div>
   <div class="wrap">
     <div class="demo-read" id="readout" aria-live="off"></div>
-    <p class="note">The window's own scrollbar is hidden, as macOS shows it. In the mock the ruler is the first Tab stop (it lives in the window's fixed layer); in the app it comes after the running timers, before the feed. "This window" sizes the mock to your browser and applies the real breakpoint to your real window width; 1366 is the narrowest common width that keeps the ruler, 1280 shows it gone. Everything here is plain DOM; nothing is measured in the ruler - row positions are arithmetic.</p>
+    <p class="note">The window's own scrollbar is hidden, as macOS shows it. In the mock the ruler is the first Tab stop (it lives in the window's fixed layer); in the app it comes after the running timers, before the feed. "This window" sizes the mock to your browser and applies the real breakpoint to your real window width; 1440 is the narrowest common width that keeps the ruler, 1408 is the breakpoint (the ruler at its narrowest, 12px clear of the cards), 1366 shows it gone. The ticks sit against the mock window's right edge, as against a real one. Everything here is plain DOM; nothing is measured in the ruler - row positions are arithmetic.</p>
   </div>
 </section>
 
@@ -538,7 +567,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 
 <div class="card sec">
   <h2>Anatomy (3×)</h2>
-  <p class="sub">A month boundary as it sits in the ruler: September's first days above, August's last below, with a weekend. Numbers are CSS px at 1×.</p>
+  <p class="sub">A month boundary as it sits in the ruler at its full 176px: September's first days above, August's last below, with a weekend; the feed shows Sep 2 - Aug 31 and the pointer rests on Saturday. The fragment's right edge is the window's. Numbers are CSS px at 1×.</p>
   <div id="anatomy"></div>
   <table class="spec" style="max-width:62rem">
     <thead><tr><th>#</th><th>Part</th><th>Size</th><th>Colour (dark / light)</th></tr></thead>
@@ -554,14 +583,14 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 
 <div class="card sec">
   <h2>Placement and breakpoints</h2>
-  <p class="sub">The shell is one width on every page (68rem, cards 66rem), so the ruler cannot borrow space from the column without moving the header between pages. It lives only in the free margin, which is wide enough from 85rem.</p>
+  <p class="sub">The shell is one width on every page (68rem, cards 66rem), so the ruler cannot borrow space from the column without moving the header between pages. It lives only in the free margin, against the window's right edge, and the margin is wide enough from 88rem.</p>
   <div class="sch" id="schematics"></div>
   <div class="bp" id="bp"></div>
   <ul class="plain" style="margin-top:0.9rem">
-    <li><b>Horizontal.</b> <span><code>left: calc(50% + 33.75rem)</code> of the viewport: half the 66rem of cards plus 12px, so it tracks the column exactly, whatever the window width. The spine is 16px from the cards - the same gutter as the shell's own padding.</span></li>
+    <li><b>Horizontal.</b> <span><code>right: 0; width: min(11rem, calc(50% - 33.75rem))</code> of the viewport: flush with the right edge of the window (the left edge of a classic scrollbar), so the ticks sit against it as Notion's outline does. The width is the margin right of the cards less 12px, capped at 11rem (176px): from 1408 to 1432px wide the ruler is exactly 12px clear of the cards, and a wider window only adds air between the cards and the labels - never between the ticks and the edge.</span></li>
     <li><b>Vertical.</b> <span>Fixed, from <code>top: 0.75rem</code> (level with the header's content when the page is at the top) to the bottom of the window. The header is not sticky and scrolls away; the ruler does not follow it, because a ruler whose top moved with the page would push its own bottom rows off-screen at the top of the page. The pinned strip lives inside the column, so the two never meet.</span></li>
     <li><b>Never over content.</b> <span>The ruler itself only ever occupies the margin. The tooltip is the one thing that crosses into the column - it is transient, appears only while the ruler is being pointed at, and never on its own.</span></li>
-    <li><b>Hidden means not rendered.</b> <span>Below 85rem, or without a fine hovering pointer, the component does not mount: no DOM, no landmark, no tab stop, no scroll listener. A window resized across 85rem mounts or unmounts it (<code>matchMedia</code> listener).</span></li>
+    <li><b>Hidden means not rendered.</b> <span>Below 88rem, or without a fine hovering pointer, the component does not mount: no DOM, no landmark, no tab stop, no scroll listener. A window resized across 88rem mounts or unmounts it (<code>matchMedia</code> listener on <code>(min-width: 88rem) and (hover: hover) and (pointer: fine)</code> in <code>TimerPage.svelte</code>).</span></li>
     <li><b>Mouse only.</b> <span>No touch version for now (owner's decision). A tablet - an iPad Pro in landscape is 1366px wide - has no hovering pointer, so it gets no ruler, whatever its width. A touchscreen laptop with a mouse or trackpad does get it.</span></li>
     <li><b>Only the Timer page.</b> <span>The other pages have no day feed.</span></li>
   </ul>
@@ -577,36 +606,35 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <table class="spec">
     <thead><tr><th>Element</th><th>Size</th><th>Tokens and notes</th></tr></thead>
     <tbody>
-      <tr><td>Ruler</td><td class="n">126 × (100vh − 12)</td><td><code>nav.dr</code>, <code>position: fixed; top: 0.75rem; bottom: 0; left: calc(50% + 33.75rem); width: 7.875rem; z-index: 6</code> - 12px clear of the cards, the spine 16px. Shown only under <code>(min-width: 85rem) and (hover: hover) and (pointer: fine)</code>: mouse only, no touch variant.</td></tr>
-      <tr><td>Scroller</td><td class="n">flex: 1</td><td><code>overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; scroll-padding: 48px 0 40px</code>. Bottom fade: <code>mask-image</code> 2rem, only while there is more below.</td></tr>
-      <tr><td>Spine</td><td class="n">1px at x = 4</td><td><code>--text-dim</code> 38% (<code>--border</code> vanishes on the light background). From the top of the track to the oldest day's tick, where it ends.</td></tr>
-      <tr><td>Day row</td><td class="n">126 × 16</td><td>A <code>&lt;button&gt;</code> inside an <code>&lt;li&gt;</code>. Labels start at x = 26, the time ends at x = 122. Hover: <code>--hover</code> band, radius 4px, labels and time <code>--text</code>.</td></tr>
-      <tr><td>Tick</td><td class="n">6 / 11 / 17 × 1</td><td>From x = 5. Day with entries <code>--text-dim</code> 75%; day without 42%; Monday <code>--text-dim</code>; the 1st <code>--text</code>; today <code>--accent</code> (light: mix, see Today). A Monday that is the 1st takes the 1st's tick.</td></tr>
-      <tr><td>Weekday</td><td class="n">11px, w = widest</td><td><code>Intl</code> <code>weekday: "short"</code> in the UI locale (<i>пн</i>, <i>Mon</i>, <i>Mo</i>, <i>lun.</i>, <i>lun</i>, <i>周一</i>), right-aligned in a column as wide as the locale's widest (measured once per locale on macOS: ru 14px, de 17, zh 22, en 24, es 24, fr 25). <code>--dr-label</code>: dark <code>color-mix(text-dim 90%, text)</code>, light <code>color-mix(text-dim 80%, text)</code> - a step brighter than <code>--text-dim</code> so the label keeps 4.5:1 on every band.</td></tr>
-      <tr><td>Date</td><td class="n">11px, 2ch</td><td>Tabular, right-aligned, 3px after the weekday. With entries <code>--text</code>; without, the weekday's colour; the 1st weight 600.</td></tr>
-      <tr><td>Tracked time</td><td class="n">10.5px, ≤ 7ch</td><td><code>formatDurationShort(tracked)</code> - exactly the figure in the day's header in the feed (<code>dayTotal(groupDayEntries(day.entries))</code>, finished entries): <i>7h 35m</i>, <i>45m</i>. <code>--mono</code>, tabular, <code>--dr-label</code> - muted, never accented, today included; <code>--text</code> only on hover. Right-aligned, its right edge 4px from the ruler's edge (x = 122), at least 8px after the date. Not shown on days without entries. Not localised (neither is the header's).</td></tr>
-      <tr><td>Bands</td><td class="n">x 5 → 126 × 16</td><td>Behind the row, the Reports chart's exact values (<code>DailyChart.svelte</code>), square ends, no gap between rows: weekend (Sat, Sun) <code>rgba(96,125,190,0.13)</code>; vacation <code>rgba(64,190,196,0.15)</code>; day off <code>rgba(181,125,232,0.17)</code>; sick <code>rgba(224,82,82,0.10)</code> hatched with <code>rgba(224,82,82,0.38)</code> "/" stripes, 7px apart: <code>repeating-linear-gradient(135deg, stripe 0 0.8px, transparent 0.8px 7px)</code> (why 0.8px: open questions). Precedence as in the chart: sick, then other time off, then weekend - a vacation over a weekend is teal. <b>Light theme: nothing different</b> - the chart uses these same rgba values in both themes, and so does the ruler; only the text over them is a step darker (weekday, today).</td></tr>
-      <tr><td>Today</td><td class="n">first row</td><td>Weekday and date weight 600 in <code>--accent</code> (dark 8.1:1); light <code>color-mix(accent 55%, text)</code> (5.3:1, 4.5 on the palest band). Its tick takes the same colour; its time does not.</td></tr>
-      <tr><td>Month header</td><td class="n">24px, sticky</td><td>Standalone month name (<code>Intl</code> <code>month: "long"</code>, first letter capitalised), 11px 600 <code>--text</code>, bottom-aligned with 5px below, from x = 22 (102px of room; widest <i>septiembre</i>, 62px). <code>position: sticky; top: 0</code> (24px in a past year). Background <code>--bg</code> with the spine drawn in. The name is a <code>&lt;button&gt;</code> filling the header's bottom 20px: hover <code>--hover</code> band 126 × 20, radius 4; focus the 2px accent ring; a tooltip like a day's. Click or Enter: the month's newest day with entries (see behaviour 3).</td></tr>
-      <tr><td>Year row</td><td class="n">24px, sticky</td><td>Only for years other than the current one, above their newest month: 12px 700 tabular <code>--text</code>, a 1px <code>--border</code> hairline across its top. Sticks above the month header. Not a button (open question).</td></tr>
-      <tr><td>Thumb</td><td class="n">3px wide</td><td>Over the spine (x = 3). <code>--accent</code>; light <code>color-mix(accent 75%, text)</code> (3.8:1). Top and bottom mapped continuously from the feed (see behaviour). Drawn above headers, so a month boundary never cuts it. The rows it spans: weekday and date <code>--text</code>.</td></tr>
-      <tr><td>Return chip</td><td class="n">122 × 16 pill</td><td>Only when the thumb is scrolled out of the ruler: <i>▲ Tue 22</i> exactly over the first whole row under the stuck headers, the part of a row above it covered in <code>--bg</code>, or <i>▼ Tue 22</i> 4px above the bottom - the full width, so it never shows half a label. Hidden while keyboard focus is in the ruler: it would cover the row focus moves to. 10.5px 600 in the today colour, <code>--bg</code>, 1px <code>--border</code>. Scrolls the ruler back; decorative for assistive tech (focus lands on the current day anyway).</td></tr>
-      <tr><td>Tooltip</td><td class="n">auto</td><td>Fixed, right edge 8px left of the ruler, centred on the row, clamped to the window. <code>--surface</code>, <code>--border</code>, radius 8px, the strip's shadow. Title 0.8rem 600: full date (<i>Tuesday, September 22</i>, year when not the current one, <i>Today, …</i>). Line 2 at 0.75rem <code>--text-dim</code>: <i>7h 35m · 5 entries</i> (hours mono <code>--text</code>), the time off kind with an 8px swatch, or <i>No entries · jumps to Fri 18</i>. On a month header: <i>September 2026</i>, then <i>Jumps to Tue 22</i> (<i>Jumps to the top</i> when that is today; <i>No entries · jumps to …</i> for a month without any).</td></tr>
+      <tr><td>Ruler</td><td class="n">155.5-176 × (100vh − 12)</td><td><code>nav.dr</code>, <code>position: fixed; top: 0.75rem; bottom: 0; right: 0; width: min(11rem, calc(50% - 33.75rem)); z-index: 6</code> - flush with the right edge of the window, and at least 12px clear of the cards (exactly 12px at the narrowest widths). Shown only under <code>(min-width: 88rem) and (hover: hover) and (pointer: fine)</code>: mouse only, no touch variant.</td></tr>
+      <tr><td>Scroller</td><td class="n">flex: 1</td><td><code>overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; scroll-padding: 56px 0 40px</code> (two stuck header rows). Bottom fade: <code>mask-image</code> 2rem, only while there is more below. No spine anywhere: not in the track, not drawn into the headers.</td></tr>
+      <tr><td>Day row</td><td class="n">full width × 20</td><td>A <code>&lt;button&gt;</code> inside an <code>&lt;li&gt;</code>, <code>--dr-pitch: 1.25rem</code> (<code>RULER_PITCH</code> 20 in <code>ruler.ts</code>). Labels start at x = 6 (<code>--dr-label-x</code>); the right padding is the tick zone, <code>--dr-ticks: calc(--dr-tick-month + --dr-tick-grow + 6px)</code> = 44px, so the labels keep clear of the longest a tick can get. Hover: <b>no band</b> - labels and time <code>--text</code>, and the tick grows. Radius 4px, for the focus ring.</td></tr>
+      <tr><td>Tick</td><td class="n">12 / 20 / 28 × 2</td><td>The row's <code>::before</code>: <code>position: absolute; right: 0</code>, vertically centred, <code>--dr-tick-h</code> 2px, <code>border-radius: 1px 0 0 1px</code> - flush with the right edge of the window. Length by the calendar through a per-row <code>--dr-len</code>: <code>--dr-tick-day</code> 12px, <code>--dr-tick-week</code> 20px (Monday), <code>--dr-tick-month</code> 28px (the 1st; a Monday that is the 1st takes it). Colour <code>--text</code> at opacity 0.45 on a day with entries, 0.22 without (dark 3.7:1 / 1.8:1, light 2.6 / 1.5 - decorative: the labels say the same). Today's tick is not accented; its label is. Hover or <code>:focus-visible</code>: <code>+ --dr-tick-grow</code> (10px) and opacity 1, <code>transition: width, opacity, background-color, box-shadow 180ms ease</code>; none under reduced motion.</td></tr>
+      <tr><td>Lit ticks</td><td class="n">same sizes</td><td>The ticks of the days the feed shows (<code>.vis</code> here; <code>[data-vis]</code> in the component, set by hand): <code>--dr-lit</code> at full opacity - <code>--accent</code> (8.1:1), light <code>color-mix(accent 75%, text)</code> (3.8:1). The day at the reading line (<code>aria-current</code>) also glows: <code>box-shadow: 0 0 4px var(--dr-lit)</code>. Their weekday and date go <code>--text</code>. Which rows: those the continuous mapping of the feed covers (behaviour 5). No thumb element - the ticks alone draw what the feed shows.</td></tr>
+      <tr><td>Weekday</td><td class="n">12px, w = widest</td><td><code>--dr-font: 0.75rem</code>. <code>Intl</code> <code>weekday: "short"</code> in the UI locale (<i>пн</i>, <i>Mon</i>, <i>Mo</i>, <i>lun.</i>, <i>lun</i>, <i>周一</i>), right-aligned in a column as wide as the locale's widest (measured once per locale; here: ru 15px, de 18, zh 24, es 25, en 26, fr 27); <code>--dr-wd-w: 1.75rem</code> until measured. <code>--dr-label</code>: dark <code>color-mix(text-dim 90%, text)</code>, light <code>color-mix(text-dim 80%, text)</code> - a step brighter than <code>--text-dim</code> so the label keeps 4.5:1 on every band.</td></tr>
+      <tr><td>Date</td><td class="n">12px, 2ch</td><td>Tabular, right-aligned, 3px after the weekday. With entries <code>--text</code>; without, the weekday's colour; the 1st weight 600.</td></tr>
+      <tr><td>Clock time</td><td class="n">11px, ≤ 7ch</td><td><code>formatDurationShort(clockMs)</code>, <code>clockMs = wallClockMs(day.entries, 0)</code> (<code>lib/tasks.ts</code>): the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i> - work that ran in parallel counts once. On a day without parallel work the header shows one figure, and it is this one. The model row keeps both: <code>clockMs</code> (shown) and <code>trackedMs</code> (the sum, for the tooltip). Finished entries only. <code>--dr-dur-font: 0.6875rem</code> <code>--mono</code>, tabular, <code>--dr-label</code> - muted, never accented, today included; <code>--text</code> only on hover. Right-aligned just left of the tick zone (44px from the window's edge), at least 8px after the date. Not shown on days without entries. Not localised (neither is the header's).</td></tr>
+      <tr><td>Bands</td><td class="n">full width × 20</td><td>Behind the row (<code>inset: 0</code>), the Reports chart's exact values (<code>DailyChart.svelte</code>), square ends, no gap between rows: weekend (Sat, Sun) <code>rgba(96,125,190,0.13)</code>; vacation <code>rgba(64,190,196,0.15)</code>; day off <code>rgba(181,125,232,0.17)</code>; sick <code>rgba(224,82,82,0.10)</code> hatched with <code>rgba(224,82,82,0.38)</code> "/" stripes, 7px apart: <code>repeating-linear-gradient(135deg, stripe 0 0.8px, transparent 0.8px 7px)</code> (why 0.8px: open questions). Precedence as in the chart: sick, then other time off, then weekend - a vacation over a weekend is teal. <b>Light theme: nothing different</b> - the chart uses these same rgba values in both themes, and so does the ruler; only the text over them is a step darker (weekday, today).</td></tr>
+      <tr><td>Today</td><td class="n">first row</td><td>Weekday and date weight 600 in <code>--accent</code> (dark 8.1:1); light <code>color-mix(accent 55%, text)</code> (5.3:1, 4.5 on the palest band). Neither its tick nor its time takes the colour: the tick is lit only while the feed shows today, like any day's.</td></tr>
+      <tr><td>Month header</td><td class="n">28px, sticky</td><td><code>--dr-head: 1.75rem</code> (<code>RULER_HEAD</code> 28). Standalone month name (<code>Intl</code> <code>month: "long"</code>, first letter capitalised), 12px 600 <code>--text</code>, bottom-aligned with 0.35rem below, from x = 2 (the ruler's full width for it; widest <i>septiembre</i>, 69px). <code>position: sticky; top: 0</code> (28px in a past year). Background plain <code>--bg</code>. The name is a <code>&lt;button&gt;</code> filling the header's bottom 24px: hover <code>--hover</code> band, full width × 24, radius 4 - the one hover band left in the ruler; focus the 2px accent ring; a tooltip like a day's. Click or Enter: the month's newest day with entries (see behaviour 3).</td></tr>
+      <tr><td>Year row</td><td class="n">28px, sticky</td><td>Only for years other than the current one, above their newest month: 13px (0.8125rem) 700 tabular <code>--text</code>, 0.35rem below, a 1px <code>--border</code> hairline across its full width from x = 0. Sticks above the month header. Not a button (open question).</td></tr>
+      <tr><td>Return chip</td><td class="n">(w − 4) × 20 pill</td><td>Only when the lit ticks are scrolled out of the ruler: <i>▲ Tue 22</i> exactly over the first whole row under the stuck headers, the part of a row above it covered in <code>--bg</code>, or <i>▼ Tue 22</i> 4px above the bottom - the full width less 2px a side, so it never shows half a label. Hidden while keyboard focus is in the ruler: it would cover the row focus moves to. 10.5px 600 in the today colour, <code>--bg</code>, 1px <code>--border</code>. Scrolls the ruler back; decorative for assistive tech (focus lands on the current day anyway).</td></tr>
+      <tr><td>Tooltip</td><td class="n">auto</td><td>Fixed, right edge 8px left of the ruler, centred on the row, clamped to the window. <code>--surface</code>, <code>--border</code>, radius 8px, the strip's shadow. Title 0.8rem 600: full date (<i>Tuesday, September 22</i>, year when not the current one, <i>Today, …</i>). Then at 0.75rem <code>--text-dim</code>: <i>7h 35m · 5 entries</i> (the clock time, mono <code>--text</code>); when the clock time and the tracked sum differ, the header's own sentence, <i>2h 30m on the clock, 4h 30m tracked - work that ran in parallel is counted once</i>; the time off kind with an 8px swatch; or <i>No entries · jumps to Fri 18</i>. On a month header: <i>September 2026</i>, then <i>Jumps to Tue 22</i> (<i>Jumps to the top</i> when that is today; <i>No entries · jumps to …</i> for a month without any).</td></tr>
       <tr><td>Landing ring</td><td class="n">2px, 1.2s</td><td><code>box-shadow: 0 0 0 2px --accent</code> on the landed day's card, fading out. Reduced motion: static for 1.2s, then removed.</td></tr>
     </tbody>
   </table>
 
   <h2 style="margin-top:1.2rem">Behaviour</h2>
   <ol class="rules">
-    <li><b>Range.</b> <span>From today (the top row, always, entries or not) down to the oldest day with a finished entry, every calendar day in between. Not rounded to the month's start: every row maps to a real place in the feed, and the spine simply ends at the first recorded day. Future time off is not shown.</span></li>
-    <li><b>What a day row says.</b> <span>Tick length = calendar (day, Monday, 1st). Date brightness = has entries. The time = how much, in the day header's own words. Band = weekend or time off (time off wins). Accent = today. Nothing else varies. Empty days stay quiet - fainter tick, dim date, no time; the band, not the dimming, is what says "weekend".</span></li>
+    <li><b>Range.</b> <span>From today (the top row, always, entries or not) down to the oldest day with a finished entry, every calendar day in between. Not rounded to the month's start: every row maps to a real place in the feed, and the ruler simply ends at the first recorded day's tick. Future time off is not shown.</span></li>
+    <li><b>What a day row says.</b> <span>Tick length = calendar (day, Monday, 1st). Tick strength and date brightness = has entries. The time = how long by the clock, the day header's first figure. Band = weekend or time off (time off wins). Accent label = today. Lit tick = the feed shows the day; glow = the day at the reading line. Nothing else varies. Empty days stay quiet - fainter tick, dim date, no time; the band, not the dimming, is what says "weekend".</span></li>
     <li><b>Click or Enter jumps the feed, instantly.</b> <span>A day with entries: <code>scroller.reveal(iso)</code> - its top under the pinned strip. A day without: <code>reveal</code> of the nearest older day with entries - the place the day would occupy in a newest-first feed. Today, and any empty day newer than the newest recorded day: the top of the page (<code>scrollTo(0)</code>), where the start form and running timers are. A month header: the month's newest day with entries - the top of the page when that is today, as for today's row; a month without entries lands where the month would be (its oldest day's target). Then the landing ring.</span></li>
     <li><b>Why not smooth.</b> <span>A distant jump would stream through unmounted months, and every <code>FeedScroller</code> anchor correction is an instant scroll that cancels a smooth one. The ring does the orientation work a smooth scroll would have done. (Try "Smooth" in the demo: fine in a mock with everything mounted, not in the real feed.)</span></li>
-    <li><b>The thumb maps the feed continuously.</b> <span>The reading line (the strip's bottom when stuck, else the window top) and the window bottom are each mapped into the ruler: inside a day's card at fraction f → that row's top + f × 16; inside the gap after it → linearly across the empty rows (and any header) down to the next recorded row; above the feed → today's row. So the thumb glides with the page and crosses a weekend as the feed crosses the gap between Friday and Monday. Rows it overlaps are the visible range; the day at the reading line is <code>aria-current</code>.</span></li>
-    <li><b>Following.</b> <span>After each page scroll, if the thumb has left the comfort band - from the stuck headers + 15% of the rest to 80% of the ruler's height - the ruler scrolls the minimum that brings it back (the thumb's top wins if it is taller than the band). Always instantly: during a scroll the ruler moves in lock-step with the page, and after a big page jump (Home, End, a scrollbar drag, the first scroll after exploring the ruler) it cuts to the new place once - a long smooth scroll of dates in the corner of the eye pulls attention away from the feed.</span></li>
+    <li><b>The lit ticks follow the feed continuously.</b> <span>The reading line (the strip's bottom when stuck, else the window top) and the window bottom are each mapped into the ruler (<code>rulerOffset</code>): inside a day's card at fraction f → that row's top + f × 20; inside the gap after it → linearly across the empty rows (and any header) down to the next recorded row; above the feed → today's row. The rows that span overlaps are the visible range, and their ticks light up; so the lit run moves with the page and crosses a weekend as the feed crosses the gap between Friday and Monday. The day at the reading line is <code>aria-current</code>, and its tick glows. Nothing draws the span itself: it only steers the ruler's scrolling and the chip.</span></li>
+    <li><b>Following.</b> <span>After each page scroll, if the lit span has left the comfort band - from the stuck headers + 15% of the rest to 80% of the ruler's height - the ruler scrolls the minimum that brings it back (the span's top wins if it is taller than the band). Always instantly: during a scroll the ruler moves in lock-step with the page, and after a big page jump (Home, End, a scrollbar drag, the first scroll after exploring the ruler) it cuts to the new place once - a long smooth scroll of dates in the corner of the eye pulls attention away from the feed.</span></li>
     <li><b>Never fights the user.</b> <span>Following is suspended while the pointer is over the ruler and while it holds keyboard focus (<code>:focus-visible</code>). A mouse click takes no focus at all, as in Safari, so the page keys go on scrolling the page - unless keyboard focus is already in the ruler, where it moves to the clicked row. A wheel over the ruler scrolls only the ruler (<code>overscroll-behavior: contain</code>). A jump started from the ruler never makes it scroll.</span></li>
-    <li><b>Resuming.</b> <span>Following resumes on the first page scroll after the pointer and keyboard focus have both left. Until then the ruler stays wherever the reader left it; if the thumb is out of view there, the return chip says where it is and scrolls the ruler back on click.</span></li>
-    <li><b>Hover.</b> <span>The row gets the hover band and bright labels at once; the tooltip appears after 250ms of hover intent, then follows the pointer from row to row with no delay; it hides 120ms after the pointer leaves the ruler, and the next entry needs the delay again. Month headers behave the same (hover band, tooltip with the jump target); year rows are inert.</span></li>
+    <li><b>Resuming.</b> <span>Following resumes on the first page scroll after the pointer and keyboard focus have both left. Until then the ruler stays wherever the reader left it; if the lit ticks are out of view there, the return chip says where they are and scrolls the ruler back on click.</span></li>
+    <li><b>Hover.</b> <span>No hover band on a day: its labels go bright at once, and its tick reaches out 10px and comes up to full strength over 180ms - and back when the pointer moves on, so a sweep down the ruler leaves a short wave behind it. The tooltip appears after 250ms of hover intent, then follows the pointer from row to row with no delay; it hides 120ms after the pointer leaves the ruler, and the next entry needs the delay again. Month headers keep a hover band and show a tooltip with the jump target; year rows are inert.</span></li>
     <li><b>Live data.</b> <span>The model is rebuilt from <code>feedDays</code> and <code>appState.timeOff</code> whenever they change (one pass, keyed by day, so only changed rows re-render). Today's time counts finished entries only - the same figure as today's card - so it changes when a timer stops, never per second or per minute. A new day at midnight adds a row at the top (and a header on the 1st) without moving what the reader is looking at: the ruler keeps its scroll offset from the bottom when it is not at the top.</span></li>
     <li><b>Mounting.</b> <span>Only when the feed has at least one finished day before today; below that there is nothing to navigate. Only with a mouse (behaviour of the media query, not a setting).</span></li>
   </ol>
@@ -614,15 +642,15 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <h2 style="margin-top:1.2rem">Keyboard and accessibility</h2>
   <ol class="rules">
     <li><b>Landmark.</b> <span><code>&lt;nav aria-label={t("Days")}&gt;</code> placed in the DOM after the running timers and before the feed: navigation, then content. One tab stop (roving <code>tabindex</code>) across month headers and days.</span></li>
-    <li><b>Structure.</b> <span>Per month: the header button, then one <code>&lt;ol aria-label="September 2026"&gt;</code> of its days ("September 2026, list, 30 items"). The list is named directly, not by the header, because the header's name is now an action. Year rows, ticks, times (they repeat the name), bands and the thumb are presentational.</span></li>
-    <li><b>Names.</b> <span>Each day is a <code>&lt;button&gt;</code> named with the full localised date and its state: "Tuesday, September 22, 2026, 7h 35m, 5 entries", "Saturday, September 19, 2026, no entries", "…, vacation". Today starts with "Today,". The visible text <i>Tue 22 7h 35m</i> is an abbreviation of that name - a deliberate trade against WCAG 2.5.3 in favour of a complete name. A month header is "September 2026, go to the newest day with entries" (its visible text first, so 2.5.3 holds), or "July 2026, no entries, jumps to Tuesday, June 30, 2026".</span></li>
-    <li><b>aria-current="location"</b> <span>on the day at the reading line; it moves as the page scrolls. While focus is outside the ruler, the roving tab stop follows it too, so Tab lands on "where I am".</span></li>
+    <li><b>Structure.</b> <span>Per month: the header button, then one <code>&lt;ol aria-label="September 2026"&gt;</code> of its days ("September 2026, list, 30 items"). The list is named directly, not by the header, because the header's name is now an action. Year rows, ticks (lit or not - <code>aria-current</code> says where the reader is), times (they repeat the name) and bands are presentational.</span></li>
+    <li><b>Names.</b> <span>Each day is a <code>&lt;button&gt;</code> named with the full localised date and its state, the time being the clock time: "Tuesday, September 22, 2026, 7h 35m, 5 entries", "Saturday, September 19, 2026, no entries", "…, vacation". Today starts with "Today,". The visible text <i>Tue 22 7h 35m</i> is an abbreviation of that name - a deliberate trade against WCAG 2.5.3 in favour of a complete name. A month header is "September 2026, go to the newest day with entries" (its visible text first, so 2.5.3 holds), or "July 2026, no entries, jumps to Tuesday, June 30, 2026".</span></li>
+    <li><b>aria-current="location"</b> <span>on the day at the reading line - the tick that glows; it moves as the page scrolls. While focus is outside the ruler, the roving tab stop follows it too, so Tab lands on "where I am".</span></li>
     <li><b>Keys.</b> <span>↑/↓ previous/next stop in visual order - every month header and every calendar day; PageUp/PageDown the same date one month newer/older (clamped), or from a header the neighbouring month's header; Shift+PageUp/PageDown one year; Home today; End the oldest day; Enter/Space jump; Escape hides the tooltip. The ruler scrolls to keep focus clear of its stuck headers. Its key handler calls <code>preventDefault</code>, so <code>FeedScroller</code>'s page-key handler (which checks <code>defaultPrevented</code>) leaves the page alone.</span></li>
     <li><b>Focus after a jump</b> <span>stays on the ruler, so the reader can keep browsing. The next Tab moves into the landed day - its first control - the way an in-page link moves the sequential focus starting point. Shift+Tab leaves the ruler backwards as usual.</span></li>
-    <li><b>Tooltip</b> <span>also shows for keyboard focus (<code>:focus-visible</code>), is dismissible (Escape) and hoverable-safe (it never sits under the pointer: <code>pointer-events: none</code>, to the left of the ruler). It duplicates the button's name, so it is <code>aria-hidden</code>.</span></li>
-    <li><b>Contrast.</b> <span>On the background / on the palest band: labels and times 6.2 / 4.8 dark, 5.3 / 4.6 light; bright dates 13.4 / 10.2 dark, 13.1 / 11.3 light; today 8.1 / 6.2 dark, 5.3 / 4.5 light; thumb 8.1 / 3.8 (on the background). The sick hatch is measured on its fill; its 0.8px stripes are texture. Ticks and bands repeat what the labels and names say, so they are decorative. The focus ring is the system's <code>--accent</code> ring (2.6:1 on the light background - the system-wide token issue already noted in the pinned strip spec).</span></li>
-    <li><b>Reduced motion</b> <span>(<code>prefers-reduced-motion: reduce</code>): the return chip scrolls the ruler instantly (the only smooth scroll the ruler has), the landing ring is static for 1.2s instead of fading. The page jump and following are instant anyway; the tooltip has no animation.</span></li>
-    <li><b>Forced colours.</b> <span>Spine and ticks <code>CanvasText</code>; thumb <code>Highlight</code>; time off a 3px <code>CanvasText</code> edge instead of the band; weekend bands dropped (the weekday says it).</span></li>
+    <li><b>Tooltip</b> <span>also shows for keyboard focus (<code>:focus-visible</code>), is dismissible (Escape) and hoverable-safe (it never sits under the pointer: <code>pointer-events: none</code>, to the left of the ruler). It duplicates the button's name (plus, on a day with parallel work, the header's own title), so it is <code>aria-hidden</code>.</span></li>
+    <li><b>Contrast.</b> <span>On the background / on the palest band: labels and times 6.2 / 4.8 dark, 5.3 / 4.6 light; bright dates 13.4 / 10.2 dark, 13.1 / 11.3 light; today 8.1 / 6.2 dark, 5.3 / 4.5 light; lit ticks 8.1 dark / 3.8 light (on the background). Unlit ticks are 3.7 / 1.8 dark and 2.6 / 1.5 light (with / without entries). The sick hatch is measured on its fill; its 0.8px stripes are texture. Ticks and bands repeat what the labels and names say, so they are decorative. The focus ring is the system's <code>--accent</code> ring (2.6:1 on the light background - the system-wide token issue already noted in the pinned strip spec).</span></li>
+    <li><b>Reduced motion</b> <span>(<code>prefers-reduced-motion: reduce</code>): a hovered or focused tick grows at once (no transition), the return chip scrolls the ruler instantly (the only smooth scroll the ruler has), the landing ring is static for 1.2s instead of fading. The page jump and following are instant anyway; the tooltip has no animation.</span></li>
+    <li><b>Forced colours.</b> <span>Ticks <code>CanvasText</code>; lit ticks <code>Highlight</code>; time off a 3px <code>CanvasText</code> edge instead of the band; weekend bands dropped (the weekday says it).</span></li>
   </ol>
 
   <h2 style="margin-top:1.2rem">Rendering at scale</h2>
@@ -637,24 +665,30 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <p class="note" id="scale-note">Measured live in your browser when this page loads (a synthetic ten-year history, the same markup as the demo; Svelte's own DOM creation will add to the build figure): <b id="scale-num">…</b>. <button type="button" id="scale-btn" style="padding:0.15rem 0.6rem;font-size:0.8rem">Measure again</button></p>
 
   <h2 style="margin-top:1.2rem">Implementation sketch</h2>
-<pre class="sketch"><b>lib/ruler.ts</b>  (pure, vitest - like feed.ts)
-  buildRuler(days: FeedDay[], timeOff: TimeOff[], todayISO): RulerModel
-      rows newest first: { iso, weekday, date, first, monday, trackedMs, count, band, target: iso | "top", top }
-          <span>trackedMs = dayTotal(groupDayEntries(entries)) - the header's figure; band = sick | vacation | dayoff | weekend | null</span>
-      months: { key, year, top, height, target }  years: { year, top } (past years only)   <span>- one pass, all offsets arithmetic</span>
-  thumbSpan(model, feedSpan): { top, bottom, current }  <span>- the continuous mapping (rule 5)</span>
-  stepMonth(model, index, delta): number                  <span>- PageUp/PageDown, clamped</span>
+<pre class="sketch"><b>lib/ruler.ts</b>  (pure, vitest - like feed.ts)   <span>RULER_PITCH = 20 (--dr-pitch), RULER_HEAD = 28 (--dr-head)</span>
+  buildRuler(days: FeedDay[], off: Map&lt;iso, TimeOffKind&gt;, todayISO, previous?): RulerModel
+      rows newest first: { iso, year, month, date, weekday, clockMs, trackedMs, count, off, band, today, target: iso | "top", top, index, past }
+          <span>clockMs = wallClockMs(day.entries, 0) - the header's first figure, shown; trackedMs = the entries' durations summed - its second</span>
+          <span>band = sick | vacation | dayoff | weekend | null; a row equal to the previous model's is that same object</span>
+      months: { key, year, month, past, top, height, rows, recorded, target, index }  years: { year, past, top, months }   <span>- one pass, all offsets arithmetic</span>
+  rulerOffset(model, spot: FeedSpot): number      <span>- the continuous mapping (rule 5), in track px</span>
+  rowFrom / rowUntil(model, offset): number       <span>- the rows the lit span covers</span>
+  stepMonth(model, index, delta): number          <span>- PageUp/PageDown, clamped</span>
 
 <b>FeedScroller</b>  (feed-scroll.svelte.ts)
-  visible = $state&lt;{ top: { iso, fraction, inGap }, bottom: { iso, fraction, inGap } } | null&gt;
-      <span>set in #update from the mounted days it already reads for #findAnchor - no extra listeners</span>
-  reveal(iso) exists; add revealTop() = scrollTo(0) for today
+  visible = $state&lt;{ top: FeedSpot, bottom: FeedSpot, current: iso | null } | null&gt;
+      <span>set from the mounted days it already reads for its anchor - no extra listeners</span>
+
+<b>DayRuler.svelte</b>
+  lit ticks: data-vis on the rows rowFrom(top)…rowUntil(bottom), aria-current on the current day -
+      <span>attributes set by hand on the few rows that change, never rendered per row</span>
 
 <b>TimerPage.svelte</b>
+  const RULER_MEDIA = "(min-width: 88rem) and (hover: hover) and (pointer: fine)"
   &lt;form&gt;…&lt;/form&gt;  {running card, sentinel, PinnedStrip}
-  {#if wide &amp;&amp; days.some(d =&gt; d.iso &lt; todayISO)}
+  {#if showRuler}   <span>- the media query, and a finished day before today</span>
     <b>&lt;DayRuler {days} timeOff={appState.timeOff} {todayISO} visible={scroller.visible}</b>
-    <b>          onjump={(target) =&gt; target === "top" ? scroller.revealTop() : scroller.reveal(target)} /&gt;</b>
+    <b>          scrolledAt={() =&gt; scroller.scrolledAt} onjump={jumpTo} /&gt;</b>
   {/if}
   &lt;div class="feed"&gt;…</pre>
 
@@ -665,26 +699,31 @@ pre.sketch b { color: var(--text); font-weight: 600; }
     <li><b>Landing ring</b> <span>is a class on the day wrapper after <code>reveal</code> resolves (the day is mounted by then); removed on <code>animationend</code> or after 1.2s.</span></li>
     <li><b>Tab into the landed day:</b> <span>remember <code>{ button, iso }</code> of the last jump; on Tab (no Shift) from that same button, <code>preventDefault</code> and focus the first control in <code>.day[data-key=iso]</code>. Cleared on any other focus change.</span></li>
     <li><b>Weekday column width</b> <span>= the widest of the 7 short weekday names in the UI locale, measured once per locale with <code>canvas.measureText</code> in the ruler's font, set as <code>--dr-wd-w</code>. With Segoe UI or Roboto the widths differ from macOS; measuring keeps the dates in one column everywhere.</span></li>
-    <li><b>Midnight</b> <span>- <code>todayISO</code> already derives from <code>clock.now</code> once a day; the model rebuild adds the new row. Keep the ruler's <code>scrollTop</code> anchored from the bottom when it is not at 0 so the rows under the reader do not shift by 16px.</span></li>
+    <li><b>Midnight</b> <span>- <code>todayISO</code> already derives from <code>clock.now</code> once a day; the model rebuild adds the new row. Keep the ruler's <code>scrollTop</code> anchored from the bottom when it is not at 0 so the rows under the reader do not shift by 20px.</span></li>
     <li><b><code>content-visibility</code></b> <span>is <code>auto</code> on every month but the two newest (<code>.near</code>), which are what the ruler shows when it mounts - so the first frame can never be blank. In Chromium, a far jump of the ruler's own scroller (End, a resync) renders the newly visible months in the same frame (checked here).</span></li>
-    <li><b>No ResizeObserver, no measuring</b> <span>in the ruler: pitch and header heights are constants, the thumb and every row's top are arithmetic. The only DOM reads are the ruler's own <code>scrollTop</code>/<code>clientHeight</code> and the tooltip's size.</span></li>
-    <li><b>Tracked time</b> <span>comes from the same helpers as the card header - <code>formatDurationShort(dayTotal(groupDayEntries(day.entries)))</code> - computed once per day in the model, not per render. The width budget is the widest locale: 26 (labels start) + 25 (fr weekday) + 3 + 13.8 (date) + 8 + 44.3 (<i>10h 12m</i>, 7 characters of 10.5px mono) = 120.1, + 4px right pad = 124.1, rounded up to 126 to leave room for other platforms' fonts (measured here on two years of data: at least 9px between date and time in every locale, fr the tightest). Parallel agent work can pass 24h (<i>31h 05m</i> still fits); 100h+ would need five timers running all day, and is clipped.</span></li>
+    <li><b>No ResizeObserver, no measuring</b> <span>in the ruler: pitch and header heights are constants, the lit span and every row's top are arithmetic. The only DOM reads are the ruler's own <code>scrollTop</code>/<code>clientHeight</code> and the tooltip's size.</span></li>
+    <li><b>Lit ticks are marks, not an element.</b> <span>The component sets <code>data-vis</code> and <code>aria-current</code> by hand on the rows that change (a few per frame of scrolling), and clears them when the model is rebuilt; toggling a class on thousands of rows reactively would rerun every row each frame. The tick's colour, opacity and glow are CSS on those attributes, so there is no thumb to position and nothing a month header can cut.</span></li>
+    <li><b>Clock time</b> <span>comes from the same helper as the card header's first figure - <code>formatDurationShort(wallClockMs(day.entries, 0))</code> - computed once per day in the model, not per render; <code>trackedMs</code> sits beside it for the tooltip, which adds the header's sentence only when the two differ. The width budget is the widest locale: 6 (labels start) + 27 (fr weekday at 12px) + 3 + 15.1 (date, 2ch) + 8 + 46.4 (<i>10h 12m</i>, 7 characters of 11px mono) + 44 (the tick zone) = 149.5px, measured here. The ruler gets at least 155.5px (88rem with a classic scrollbar), 164 with overlay scrollbars, 176 from 1432px. Seven characters hold anything up to <i>99h 59m</i>, and with parallel work counted once a day's clock time only passes 24h when an entry runs on past midnight - the tracked sum, which could (<i>31h 05m</i> of parallel agents), is no longer what the ruler shows.</span></li>
     <li><b>Bands</b> <span>share their values with <code>DailyChart</code>: move <code>BAND_COLORS</code>, the weekend colour and the hatch into one module (or tokens) when this lands, so the two can never drift. The chart's hatch is an SVG pattern; the ruler's is the CSS gradient above, checked side by side against it.</span></li>
-    <li><b>Strings (new).</b> <span><code>t("Days")</code> (nav), <code>t("No entries")</code>, <code>t("jumps to {day}")</code>, <code>t("jumps to the top")</code>, <code>t("Today")</code>, <code>t("{month}, go to the newest day with entries")</code>, <code>t("{month}, no entries, {jump}")</code>. Reused: <code>t("{n} entries")</code>, <code>t("vacation")</code>, <code>t("sick leave")</code>, <code>t("day off")</code>. Dates, weekdays and <i>September 2026</i> come from <code>Intl</code> with <code>formattingLocale()</code>.</span></li>
+    <li><b>Strings (new).</b> <span><code>t("Days")</code> (nav), <code>t("No entries")</code>, <code>t("jumps to {day}")</code>, <code>t("jumps to the top")</code>, <code>t("Today")</code>, <code>t("{month}, go to the newest day with entries")</code>, <code>t("{month}, no entries, {jump}")</code>. Reused: <code>t("{n} entries")</code>, <code>t("vacation")</code>, <code>t("sick leave")</code>, <code>t("day off")</code>, and the day header's <code>t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once")</code>. Dates, weekdays and <i>September 2026</i> come from <code>Intl</code> with <code>formattingLocale()</code>.</span></li>
   </ul>
 
   <h2 style="margin-top:1.2rem">Decisions and alternatives</h2>
   <ul class="plain">
     <li><b>Right side, not left.</b> <span>The right pairs with the scrollbar, the reader's existing "where am I"; the day totals and durations are right-aligned, so the eye already travels there; and the left margin starts every line of reading. Left would sit next to the day headings - the only thing it had going for it.</span></li>
-    <li><b>Free margin only, hidden below 85rem.</b> <span>Rejected: shifting the column left to make room (the header would move between pages), overlaying the feed's edge (covers durations), a collapsed rail that expands on hover (hides the very labels the owner asked for).</span></li>
+    <li><b>Notion's outline as the model (owner).</b> <span>Measured on a live Notion page: 2px rounded dashes, 16px long (12px a level deeper), right-aligned, 14px apart; inactive ones the text colour at about 30% (dark <code>rgba(255,252,235,0.306)</code>), the active one bright with <code>box-shadow: 0 0 3px</code> in its own colour; 200ms transitions; hovering the column opens a panel of headings. Taken: 2px rounded bars flush right, <code>--text</code> at an opacity, lit ticks at full strength with a 4px glow on the current one, 180ms transitions, a tick that grows on hover. Not taken: the lengths (ours are the calendar: 12 / 20 / 28px), 14px apart (too tight for a label on every row - 20px), and the panel - our labels are always there, as the owner first asked, so hover only brightens a row and the tooltip gives the full date.</span></li>
+    <li><b>No spine, no thumb (owner).</b> <span>The 1px spine joined the ticks into a comb and read as one more line beside the scrollbar; the 3px accent thumb over it said where the feed was, but only on that line. Now the ticks stand alone against the window's edge, and the ticks of the shown days carry the accent themselves - the same information, one mark fewer. Today's tick lost its accent with it: an accent tick means "on screen".</span></li>
+    <li><b>Flush with the window's edge (owner).</b> <span><code>right: 0</code>, not a fixed offset from the cards: the ticks are where the eye finds the scrollbar, and a wider window adds air between the cards and the labels, never between the ticks and the edge. The width follows the margin (at most 176px), so the ruler still never comes closer than 12px to the cards.</span></li>
+    <li><b>Free margin only, hidden below 88rem.</b> <span>Rejected: shifting the column left to make room (the header would move between pages), overlaying the feed's edge (covers durations), a collapsed rail that expands on hover (hides the very labels the owner asked for).</span></li>
     <li><b>Mouse only (owner).</b> <span>No touch variant for now; the media query requires a hovering fine pointer, so tablets of any width get no ruler. Rejected for now: a drag scrubber with 28px rows and a floating date bubble.</span></li>
     <li><b>Fixed to the viewport</b>, <span>not sticky in the flow below the header (its top would move and its bottom would start off-screen).</span></li>
-    <li><b>Every day labelled at a 16px pitch, 11px type.</b> <span>14px leaves 3px between lines and reads as a texture; 18px shows 12% fewer days (46 instead of 52 at 900px). Mondays-only labels would be calmer, but the owner asked for every tick to carry its weekday - calm comes from colour instead: dim weekdays, bright dates only where there is work.</span></li>
+    <li><b>Every day labelled at a 20px pitch, 12px type (owner: "the scale is too small").</b> <span>Revision 2's 16px and 11px showed more days (52 instead of 41 at 900px) but were too small to read and to hit; 24px shows 17% fewer days again (34) for little gain. Mondays-only labels would be calmer, but the owner asked for every tick to carry its weekday - calm comes from colour instead: dim weekdays, bright dates only where there is work.</span></li>
     <li><b>Month headers above their days, a year row for past years.</b> <span>In a newest-first ruler the 1st is the last row of its month, so the long tick closes the month and the header opens the next one down. A sticky year row keeps every past month unambiguous without crowding the header.</span></li>
     <li><b>Month headers are buttons (owner).</b> <span>A click lands on the month's newest day with entries - the mouse's PageUp/PageDown, and a stuck header becomes "back to the start of this month". Hover band, focus ring and a tooltip with the target, like a day. The header button is a stop in the arrow-key sequence, so the keyboard reaches it the same way. The year row stays inert for now.</span></li>
     <li><b>Empty days are clickable.</b> <span>The ruler is a time axis: any point on it is a place in the feed. Rejected: inert empty rows (dead zones on every weekend; a near-miss does nothing).</span></li>
     <li><b>Ends at the oldest recorded day.</b> <span>Rejected: rounding down to the month's 1st (up to 30 rows of pre-history that go nowhere; drawn in Alternatives).</span></li>
-    <li><b>The day's time as quiet text, not a bar (owner).</b> <span>The day header's own figure, <code>formatDurationShort(tracked)</code>, so the ruler and the card can never disagree; muted mono, right-aligned so the column reads like the feed's totals, never accented, absent on empty days. It costs 38px (88 → 126px), which moves the breakpoint from 80rem to 85rem: 1280-1359px windows lose the ruler. Rejected: the hours bar (the previous proposal - a shape to compare, but no number), tick opacity, no signal.</span></li>
+    <li><b>The day's time as quiet text, not a bar (owner).</b> <span>The day header's own figure, so the ruler and the card can never disagree; muted mono, right-aligned so the column reads like the feed's totals, never accented, absent on empty days. Rejected: the hours bar (revision 1 - a shape to compare, but no number), tick opacity by the amount (the opacity now says only whether there are entries at all), no signal.</span></li>
+    <li><b>The clock time, not the tracked sum (owner).</b> <span>The figure before the slash in <i>⏱ 2h 30m / 4h 30m</i>: <code>wallClockMs</code>, parallel work counted once - how long the day took, which is what a reader scanning for a long day means. On a day without parallel work the two are one figure. The tooltip names both, in the header's own sentence, whenever they differ. Revision 2 showed the sum (<code>dayTotal</code>), which parallel agents could push past a working day.</span></li>
     <li><b>Weekends as the Reports chart's band (owner).</b> <span>Same blue band, same time off colours and hatch, same precedence as <code>DailyChart</code>, in both themes - a weekend or a vacation looks the same in the ruler and in the chart. Consecutive weekend days form one continuous block (square ends, no gap). Weekends stay full height: the calendar keeps its true distances. Rejected: half-height weekends (≈25% more days on screen), the previous proposal's rounded time-off runs and theme-token tints.</span></li>
     <li><b>Instant jump + landing ring</b>, <span>not smooth scrolling (see behaviour 4).</span></li>
     <li><b>Plain DOM with <code>content-visibility</code></b>, <span>not a windowed list or canvas.</span></li>
@@ -692,9 +731,9 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 
   <h2 style="margin-top:1.2rem">Open questions for the owner</h2>
   <ul class="plain">
-    <li><b>1280-1359px windows.</b> <span>The wider ruler no longer fits a 1280px window. Accept that, or add a compact 88px variant there (labels only, the time in the tooltip)? It would be a second layout to maintain for one band of window widths.</span></li>
+    <li><b>1360-1407px windows.</b> <span>The larger scale and the 44px tick zone need about 150px, which moves the breakpoint from 85rem to 88rem: a 1366px laptop now loses the ruler, as 1280px windows did in revision 2. Accept that, or add a compact variant there (the time in the tooltip only, which saves 54px and fits from 81rem)? It would be a second layout to maintain for one band of window widths.</span></li>
     <li><b>Today's running time.</b> <span>Today's time counts finished entries only, like today's card; the running timers are in the Running card and the strip. Add them to today's row (refreshed once a minute)?</span></li>
-    <li><b>Clickable year row.</b> <span>Jump to the year's newest day with entries, as a month header does? Consistent, but a stuck year row sits 24px above a stuck month header - two targets that close would need to look different.</span></li>
+    <li><b>Clickable year row.</b> <span>Jump to the year's newest day with entries, as a month header does? Consistent, but a stuck year row sits 28px above a stuck month header - two targets that close would need to look different.</span></li>
     <li><b>The sick hatch's stripe width.</b> <span>The chart's source says 1.6px, but its 7px pattern tile clips half of the stroke, so the chart shows 0.8px. The ruler matches what the chart shows. If 1.6px is what was meant, fix the chart (offset the line by 0.8px) and change the ruler with it.</span></li>
   </ul>
 </div>
@@ -707,8 +746,8 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 // --- constants -------------------------------------------------------------
 const TODAY = "2026-09-24";
 const NOW_SECONDS = 15 * 3600 + 42 * 60 + 10;      // the mock clock: 15:42:10
-const PITCH = 16;                                  // --dr-pitch
-const HEAD = 24;                                   // --dr-head
+const PITCH = 20;                                  // --dr-pitch, RULER_PITCH
+const HEAD = 28;                                   // --dr-head, RULER_HEAD
 const STRIP_LINES = 2;
 const STRIP_H = 8 + 1 + STRIP_LINES * 32;           // 0.5rem + 1px + lines × 2rem
 const TIP_DELAY = 250;
@@ -744,29 +783,37 @@ const TIME_OFF = [
 ];
 // Weekdays with no entries and no time off: a public holiday, a forgotten day.
 const GAPS = new Set(["2026-07-21", "2025-05-01", "2025-05-09", "2025-11-04", "2026-01-07", "2025-02-24"]);
+// Days an agent worked alongside: their clock time is less than the tracked sum.
+const PARALLEL = new Set(["2026-09-23", "2026-09-16", "2026-09-03", "2026-08-26", "2026-08-05", "2026-07-15", "2026-06-24", "2025-11-12", "2025-06-18", "2025-02-05"]);
 const HISTORY = { "3m": "2026-06-17", "2y": "2024-09-16" };
 
 const LOCALES = { en: "en-US", ru: "ru", de: "de", fr: "fr", es: "es", zh: "zh-CN" };
 const STR = {
   en: { days: "Days", today: "Today", none: "No entries", to: (day) => "jumps to " + day, top: "jumps to the top", entries: (n) => n + (n === 1 ? " entry" : " entries"),
         newest: "go to the newest day with entries",
+        both: (wall, tracked) => wall + " on the clock, " + tracked + " tracked - work that ran in parallel is counted once",
         kind: { vacation: "Vacation", sick: "Sick leave", dayoff: "Day off" }, tabs: ["Timer", "Projects", "Time off", "Reports", "Settings"],
         ph: "What are you working on?", noProject: "No project", tagsBtn: "Tags", start: "Start", running: "Running", stop: "Stop" },
   ru: { days: "Дни", today: "Сегодня", none: "Нет записей", to: (day) => "переход к " + day, top: "переход наверх", entries: (n) => "записей: " + n,
         newest: "перейти к последнему дню с записями",
+        both: (wall, tracked) => wall + " по часам, " + tracked + " затрекано - параллельная работа считается один раз",
         kind: { vacation: "Отпуск", sick: "Больничный", dayoff: "Отгул" }, tabs: ["Таймер", "Проекты", "Отсутствия", "Отчёты", "Настройки"],
         ph: "Над чем работаешь?", noProject: "Без проекта", tagsBtn: "Теги", start: "Старт", running: "Идут", stop: "Стоп" },
   de: { days: "Tage", today: "Heute", none: "Keine Einträge", to: (day) => "springt zu " + day, top: "springt nach oben", entries: (n) => n + " Einträge",
         newest: "zum neuesten Tag mit Einträgen",
+        both: (wall, tracked) => wall + " nach der Uhr, " + tracked + " erfasst - parallele Arbeit zählt einmal",
         kind: { vacation: "Urlaub", sick: "Krankmeldung", dayoff: "Freier Tag" } },
   fr: { days: "Jours", today: "Aujourd’hui", none: "Aucune entrée", to: (day) => "va à " + day, top: "va en haut", entries: (n) => n + " entrées",
         newest: "aller au jour le plus récent avec des entrées",
+        both: (wall, tracked) => wall + " à l'horloge, " + tracked + " suivies - le travail en parallèle est compté une fois",
         kind: { vacation: "Vacances", sick: "Arrêt maladie", dayoff: "Jour de congé" } },
   es: { days: "Días", today: "Hoy", none: "Sin registros", to: (day) => "salta a " + day, top: "salta arriba", entries: (n) => n + " registros",
         newest: "ir al día más reciente con registros",
+        both: (wall, tracked) => wall + " en reloj, " + tracked + " registrados - el trabajo en paralelo se cuenta una vez",
         kind: { vacation: "Vacaciones", sick: "Baja médica", dayoff: "Día libre" } },
   zh: { days: "日期", today: "今天", none: "无记录", to: (day) => "跳到 " + day, top: "跳到顶部", entries: (n) => n + " 条记录",
         newest: "跳到最近有记录的一天",
+        both: (wall, tracked) => "按时钟 " + wall + "，记录 " + tracked + " - 并行的工作只计一次",
         kind: { vacation: "休假", sick: "病假", dayoff: "调休" } },
 };
 // Page chrome in the mock is translated for en and ru only; dates and the ruler in every locale.
@@ -778,6 +825,7 @@ const IC = {
   synced: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
   kebab: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>',
   stop: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" rx="2" fill="currentColor"/></svg>',
+  dial: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>',
 };
 
 // --- small helpers -----------------------------------------------------------
@@ -836,12 +884,27 @@ const wdCache = new Map();
 function weekdayWidth(lang) {
   if (wdCache.has(lang)) return wdCache.get(lang);
   const canvas = document.createElement("canvas").getContext("2d");
-  canvas.font = "400 11px " + getComputedStyle(document.body).fontFamily;
+  canvas.font = "400 12px " + getComputedStyle(document.body).fontFamily;
   let widest = 0;
   for (let offset = 0; offset < 7; offset++) widest = Math.max(widest, canvas.measureText(fmts(lang).weekday.format(dateOf(addDays("2026-09-21", offset)))).width);
   const width = Math.ceil(widest);
   wdCache.set(lang, width);
   return width;
+}
+
+// A day's two figures, as the day header shows them: every entry's duration summed,
+// and the union of their intervals - wallClockMs, parallel work counted once.
+function trackedOf(entries) { return entries.reduce((sum, entry) => sum + entry.min * 60000, 0); }
+function clockOf(entries) {
+  const spans = entries.map((entry) => [entry.start, entry.start + entry.min]).sort((left, right) => left[0] - right[0]);
+  let total = 0;
+  let open = null;
+  for (const [start, end] of spans) {
+    if (open === null || start > open[1]) { if (open) total += open[1] - open[0]; open = [start, end]; }
+    else open[1] = Math.max(open[1], end);
+  }
+  if (open) total += open[1] - open[0];
+  return total * 60000;
 }
 
 // --- mock data -------------------------------------------------------------
@@ -891,6 +954,11 @@ function makeData(history) {
     } else {
       entries = rand() < 0.985 ? dayEntries("full", rand) : [];
     }
+    // An agent alongside: it starts 25 minutes into the day's first entry and runs for 2h 10m.
+    if (entries.length > 0 && PARALLEL.has(iso)) {
+      const first = entries[entries.length - 1];
+      entries = [...entries, { p: "WorkTime", d: "Claude Code", tags: ["development"], start: first.start + 25, min: 130 }].sort((left, right) => right.start - left.start);
+    }
     if (entries.length > 0) days.push({ iso, entries });
   }
   return { days, oldest, history };
@@ -906,12 +974,14 @@ function rulerModel(data, options = {}) {
   for (let iso = top; iso >= bottom; iso = addDays(iso, -1)) {
     const date = dateOf(iso);
     const day = recorded.get(iso);
-    // Finished entries only - the figure in the day's header (today's too: running timers are not in it).
-    const ms = day ? day.entries.reduce((sum, entry) => sum + entry.min * 60000, 0) : 0;
+    // Finished entries only - the day header's two figures (today's too: running timers are not in them).
+    // clockMs is the first, the one shown; trackedMs the second, for the tooltip.
+    const clockMs = day ? clockOf(day.entries) : 0;
+    const trackedMs = day ? trackedOf(day.entries) : 0;
     const count = day ? day.entries.length : 0;
     const off = OFF.get(iso) || null;
     const weekend = date.getDay() === 0 || date.getDay() === 6;
-    rows.push({ iso, year: date.getFullYear(), month: date.getMonth(), date: date.getDate(), weekday: date.getDay(), ms, count, off,
+    rows.push({ iso, year: date.getFullYear(), month: date.getMonth(), date: date.getDate(), weekday: date.getDay(), clockMs, trackedMs, count, off,
                 band: off || (weekend ? "weekend" : null), today: iso === TODAY, pre: iso < data.oldest, index: rows.length });
   }
   // Where a click lands: the day itself, else the nearest older recorded day; today and
@@ -960,14 +1030,14 @@ function rulerModel(data, options = {}) {
   }
   const byISO = new Map(rows.map((row) => [row.iso, row]));
   const monthByKey = new Map(months.map((item) => [item.key, item]));
-  return { rows, years, months, byISO, monthByKey, height: offset, spineEnd: rows.length ? rows[rows.length - 1].top + PITCH / 2 : 0 };
+  return { rows, years, months, byISO, monthByKey, height: offset };
 }
 
 function ariaLabel(row, lang) {
   const text = str(lang);
   const full = fmts(lang).full.format(dateOf(row.iso));
   let label = row.today ? text.today + ", " + full : capitalise(full);
-  if (row.count > 0) label += ", " + fmtShort(row.ms) + ", " + text.entries(row.count);
+  if (row.count > 0) label += ", " + fmtShort(row.clockMs) + ", " + text.entries(row.count);
   if (row.off) label += ", " + text.kind[row.off].toLocaleLowerCase();
   if (row.count === 0 && !row.off) label += ", " + text.none.toLocaleLowerCase();
   return label;
@@ -992,14 +1062,14 @@ function rowHTML(row, lang) {
   if (row.pre) classes.push("pre");
   const li = row.band ? '<li class="dr-li" data-band="' + row.band + '">' : '<li class="dr-li">';
   // The button's aria-label already carries the time; the visible text is not read on its own.
-  const time = row.count > 0 ? '<span class="dr-dur">' + fmtShort(row.ms) + "</span>" : "";
+  const time = row.count > 0 ? '<span class="dr-dur">' + fmtShort(row.clockMs) + "</span>" : "";
   return li + '<button type="button" class="' + classes.join(" ") + '" data-iso="' + row.iso + '" tabindex="-1"' +
     (row.pre ? " disabled" : "") + ' aria-label="' + esc(ariaLabel(row, lang)) + '"><span class="dr-wd">' + esc(fmts(lang).weekday.format(dateOf(row.iso))) +
     '</span><span class="dr-n">' + row.date + "</span>" + time + "</button></li>";
 }
 
 function rulerHTML(model, lang) {
-  let html = '<div class="dr-scroll"><div class="dr-track"><div class="dr-spine" style="height:' + model.spineEnd + 'px"></div><div class="dr-thumb" hidden></div>';
+  let html = '<div class="dr-scroll"><div class="dr-track">';
   for (const year of model.years) {
     html += '<div class="dr-year' + (year.past ? " past" : "") + '">';
     if (year.past) html += '<div class="dr-yhead" aria-hidden="true">' + year.year + "</div>";
@@ -1021,7 +1091,9 @@ function tipHTML(row, lang) {
   const day = (row.year === CURRENT_YEAR ? fmts(lang).tipDay : fmts(lang).tipDayYear).format(date);
   const title = row.today ? text.today + ", " + day : capitalise(day);
   let html = '<div class="tt">' + esc(title) + "</div>";
-  if (row.count > 0) html += '<div class="ts"><span class="num">' + fmtShort(row.ms) + "</span>· " + esc(text.entries(row.count)) + "</div>";
+  if (row.count > 0) html += '<div class="ts"><span class="num">' + fmtShort(row.clockMs) + "</span>· " + esc(text.entries(row.count)) + "</div>";
+  // The header's two readings, spelled out as its own title does.
+  if (row.clockMs !== row.trackedMs) html += '<div class="ts">' + esc(text.both(fmtShort(row.clockMs), fmtShort(row.trackedMs))) + "</div>";
   if (row.off) html += '<div class="ts"><span class="kind" style="background:' + KIND_COLOR[row.off] + '"></span>' + esc(text.kind[row.off]) + "</div>";
   if (row.count === 0) {
     const where = row.target === "top" ? text.top : text.to(shortLabel(row.target, lang));
@@ -1040,18 +1112,24 @@ function dayHeading(iso, lang) {
   const date = dateOf(iso);
   return (date.getFullYear() === CURRENT_YEAR ? fmts(lang).dayHead : fmts(lang).dayHeadYear).format(date);
 }
-function clockOf(iso, minute, lang) { const date = dateOf(iso); date.setHours(0, minute, 0, 0); return fmts(lang).time.format(date); }
+function timeOfDay(iso, minute, lang) { const date = dateOf(iso); date.setHours(0, minute, 0, 0); return fmts(lang).time.format(date); }
 function entryHTML(iso, entry, lang) {
   const text = str(lang);
   const tags = entry.tags.length ? '<span class="tags"><span class="tag">' + esc(entry.tags[0]) + "</span></span>" : "";
   return '<div class="row item"><span class="dot" style="background:' + (entry.p ? PROJ[entry.p] : "var(--border)") + '"></span><span class="main"><button type="button" class="desc">' + esc(entry.d) +
     '</button><span class="meta muted"><span class="proj">' + esc(entry.p || text.noProject) + "</span>" + tags + '</span></span><span class="when"><span class="dur">' + fmtShort(entry.min * 60000) +
-    '</span><span class="range muted">' + clockOf(iso, entry.start, lang) + "-" + clockOf(iso, entry.start + entry.min, lang) + '</span></span><button type="button" class="kebab icon" tabindex="-1" aria-label="Actions">' + IC.kebab + "</button></div>";
+    '</span><span class="range muted">' + timeOfDay(iso, entry.start, lang) + "-" + timeOfDay(iso, entry.start + entry.min, lang) + '</span></span><button type="button" class="kebab icon" tabindex="-1" aria-label="Actions">' + IC.kebab + "</button></div>";
 }
+// The day header: one figure, or with parallel work the clock time, a divider and the tracked sum.
 function dayCardHTML(day, lang) {
-  const total = day.entries.reduce((sum, entry) => sum + entry.min * 60000, 0);
-  return '<div class="day" data-key="' + day.iso + '"><div class="card"><div class="row"><h3>' + esc(dayHeading(day.iso, lang)) + '</h3><span class="spacer"></span><span class="muted mono">' + fmtShort(total) +
-    "</span></div>" + day.entries.map((entry) => entryHTML(day.iso, entry, lang)).join("") + "</div></div>";
+  const tracked = trackedOf(day.entries);
+  const wall = clockOf(day.entries);
+  const both = str(lang).both(fmtShort(wall), fmtShort(tracked));
+  const totals = wall === tracked
+    ? '<span class="muted mono">' + fmtShort(tracked) + "</span>"
+    : '<span class="muted mono totals" title="' + esc(both) + '"><span class="wall">' + IC.dial + fmtShort(wall) + '</span><span class="sep" aria-hidden="true">/</span><span class="tracked">' + fmtShort(tracked) + "</span></span>";
+  return '<div class="day" data-key="' + day.iso + '"><div class="card"><div class="row"><h3>' + esc(dayHeading(day.iso, lang)) + '</h3><span class="spacer"></span>' + totals +
+    "</div>" + day.entries.map((entry) => entryHTML(day.iso, entry, lang)).join("") + "</div></div>";
 }
 function runningCardHTML(lang) {
   const text = str(lang);
@@ -1078,7 +1156,7 @@ const demo = {
   theme: "dark", lang: "en", width: "window", history: "3m", jump: "instant",
   data: null, model: null, buttons: [], stops: [], stopIndex: new Map(), heads: new Map(), feed: [], feedByISO: new Map(),
   hover: false, kbFocus: false, lastJump: null, ownJump: null,
-  thumb: [0, 0], vis: [-1, -1], current: -1, tabStop: null,
+  lit: [0, 0], vis: [-1, -1], current: -1, tabStop: null,
   tipButton: null, tipWarm: false, tipTimer: 0, frame: 0, stuck: false,
 };
 const el = {};
@@ -1117,7 +1195,7 @@ function buildFrame() {
 
 function sizeFrame() {
   const width = demo.width === "window" ? document.documentElement.clientWidth : Number(demo.width);
-  const wide = demo.width === "window" ? window.matchMedia("(min-width: 85rem)").matches : width >= 1360;
+  const wide = demo.width === "window" ? window.matchMedia("(min-width: 88rem)").matches : width >= 1408;
   const height = Math.max(560, Math.min(900, window.innerHeight - 16));
   el.frame.style.width = width + "px";
   el.frame.style.height = height + "px";
@@ -1133,10 +1211,9 @@ function renderDemo(keepScroll) {
   el.nav.setAttribute("aria-label", str(lang).days);
   el.nav.style.setProperty("--dr-wd-w", weekdayWidth(lang) + "px");
   el.scroller = el.nav.querySelector(".dr-scroll");
-  el.thumb = el.nav.querySelector(".dr-thumb");
   el.ret = el.nav.querySelector(".dr-return");
   el.scroller.addEventListener("scroll", onRulerScroll, { passive: true });
-  el.ret.addEventListener("click", () => bringThumbIntoView(true));
+  el.ret.addEventListener("click", () => bringLitIntoView(true));
   demo.buttons = [...el.nav.querySelectorAll(".dr-day")];
   // Every stop in visual order: each month's header, then its days.
   demo.stops = [...el.nav.querySelectorAll(".dr-mbtn, .dr-day")];
@@ -1229,13 +1306,12 @@ function update(fromPage) {
   const line = stuck ? STRIP_H : 0;
   const readTop = el.view.scrollTop + line;
   const readBottom = el.view.scrollTop + el.view.clientHeight;
+  // The lit span, in track px. Nothing draws it: the ticks of the rows it covers light up,
+  // and it steers the ruler's following and the return chip.
   const top = mapToRuler(readTop);
   const bottom = Math.max(top + 4, mapToRuler(readBottom));
-  demo.thumb = [top, bottom];
-  el.thumb.hidden = false;
-  el.thumb.style.top = top.toFixed(1) + "px";
-  el.thumb.style.height = (bottom - top).toFixed(1) + "px";
-  // Rows under the thumb are the visible range.
+  demo.lit = [top, bottom];
+  // Rows under the span are the visible range: their ticks are lit (.vis; data-vis in the app).
   const first = rowFrom(top);
   const last = Math.max(first, rowUntil(bottom));
   if (first !== demo.vis[0] || last !== demo.vis[1]) {
@@ -1251,7 +1327,7 @@ function update(fromPage) {
     demo.current = current;
   }
   if (!demo.kbFocus) setTabStop(demo.buttons[current]);
-  if (fromPage && following()) bringThumbIntoView(false);
+  if (fromPage && following()) bringLitIntoView(false);
   updateReturn();
   readout();
 }
@@ -1259,8 +1335,9 @@ function update(fromPage) {
 // Headers stuck at the top of the ruler at a given track offset: a month's, plus a past year's.
 function stuckHeight(y) { const row = demo.model.rows[clamp(rowFrom(y), 0, demo.model.rows.length - 1)]; return row && row.past ? 2 * HEAD : HEAD; }
 
-function bringThumbIntoView(fromChip) {
-  const [top, bottom] = demo.thumb;
+// Keeps the lit ticks inside a comfort band, moving the ruler the least it can.
+function bringLitIntoView(fromChip) {
+  const [top, bottom] = demo.lit;
   const scroller = el.scroller;
   const height = scroller.clientHeight;
   const scrollTop = scroller.scrollTop;
@@ -1291,8 +1368,8 @@ function updateReturn() {
   if (!el.ret) return;
   const scroller = el.scroller;
   const heads = stuckHeight(scroller.scrollTop + HEAD);
-  const above = demo.thumb[1] < scroller.scrollTop + heads;
-  const below = demo.thumb[0] > scroller.scrollTop + scroller.clientHeight - 8;
+  const above = demo.lit[1] < scroller.scrollTop + heads;
+  const below = demo.lit[0] > scroller.scrollTop + scroller.clientHeight - 8;
   if (!above && !below) { el.ret.hidden = true; return; }
   el.ret.hidden = false;
   el.ret.className = "dr-return " + (above ? "up" : "down");
@@ -1454,10 +1531,10 @@ function readout() {
   const lang = demo.lang;
   const days = first >= 0 ? last - first + 1 : 0;
   const withEntries = first >= 0 ? rows.slice(first, last + 1).filter((row) => row.count > 0).length : 0;
-  let state = "<i>following</i> - the thumb is kept in view as the page scrolls";
+  let state = "<i>following</i> - the lit ticks are kept in view as the page scrolls";
   if (demo.hover) state = "<b>paused</b> - pointer over the ruler";
   else if (demo.kbFocus) state = "<b>paused</b> - keyboard focus in the ruler";
-  else if (el.ret && !el.ret.hidden) state = "<i>following</i> - thumb out of view: returns on the next page scroll";
+  else if (el.ret && !el.ret.hidden) state = "<i>following</i> - lit ticks out of view: returns on the next page scroll";
   let jumpText = "-";
   if (demo.lastJump) {
     const info = demo.lastJump.info;
@@ -1468,7 +1545,7 @@ function readout() {
   }
   const wide = el.frame.hasAttribute("data-wide");
   box.innerHTML =
-    "<span>window</span><span><b>" + el.frame.offsetWidth + " px</b> · ruler " + (wide ? "<i>shown</i>" : "<b>not rendered</b> (below 85rem)") + " · strip " + (demo.stuck ? "stuck, reading line " + STRIP_H + "px" : "not stuck") + "</span>" +
+    "<span>window</span><span><b>" + el.frame.offsetWidth + " px</b> · ruler " + (wide ? "<i>shown</i>, " + el.nav.offsetWidth + " px at the right edge" : "<b>not rendered</b> (below 88rem)") + " · strip " + (demo.stuck ? "stuck, reading line " + STRIP_H + "px" : "not stuck") + "</span>" +
     "<span>visible</span><span>" + (first >= 0 ? "<b>" + shortLabel(rows[last].iso, lang) + " – " + shortLabel(rows[first].iso, lang) + "</b> · " + days + " days, " + withEntries + " with entries" : "-") + "</span>" +
     "<span>current</span><span><b>" + (demo.current >= 0 ? shortLabel(rows[demo.current].iso, lang) : "-") + '</b> (aria-current="location", roving tab stop)</span>' +
     "<span>ruler</span><span>" + state + "</span>" +
@@ -1484,26 +1561,23 @@ function fragment(options) {
   const lang = options.lang || demo.lang;
   const model = rulerModel(data, { top: options.top, bottom: options.bottom });
   const wrap = document.createElement("div");
-  wrap.className = "frag th-" + (options.theme || "dark") + (options.tip ? " tipped" : "") + " " + (options.className || "");
+  wrap.className = "frag th-" + (options.theme || "dark") + " " + (options.className || "");
   fragID += 1;
   wrap.innerHTML = '<nav class="dr static" aria-label="' + esc(str(lang).days) + '">' + rulerHTML(model, lang) + "</nav>" + (options.tip ? '<div class="dr-tip" aria-hidden="true"></div>' : "");
   const nav = wrap.querySelector(".dr");
   nav.style.setProperty("--dr-wd-w", weekdayWidth(lang) + "px");
-  nav.querySelector(".dr-scroll").style.height = (options.height || 216) + "px";
+  // The whole track by default - its headers and rows are arithmetic - plus any extra below.
+  nav.querySelector(".dr-scroll").style.height = (options.height || model.height + (options.extra || 0)) + "px";
   const byISO = (iso) => nav.querySelector('.dr-day[data-iso="' + iso + '"]');
   // A stop by key: an ISO day, or "m:2026-09" for a month header.
   const stop = (key) => (key.startsWith("m:") ? nav.querySelector('.dr-mbtn[data-month="' + key.slice(2) + '"]') : byISO(key));
-  // The previous proposal's hours bar: 10 hours = full length.
-  if (options.bar) for (const row of model.rows) if (row.count > 0) byISO(row.iso).style.setProperty("--dr-h", Math.max(0.14, Math.min(1, row.ms / 36e6)).toFixed(3));
-  if (options.thumb) {
-    const [from, to] = options.thumb.map((iso) => model.byISO.get(iso));
-    const thumb = nav.querySelector(".dr-thumb");
-    const top = from.top + (options.thumbFrom || 0) * PITCH;
-    const bottom = to.top + (options.thumbTo ?? 1) * PITCH;
-    thumb.hidden = false;
-    thumb.style.top = top + "px";
-    thumb.style.height = bottom - top + "px";
-    for (const row of model.rows) if (row.top + PITCH > top && row.top < bottom) byISO(row.iso).classList.add("vis");
+  // Revision 1's hours bar: 10 hours = full length.
+  if (options.bar) for (const row of model.rows) if (row.count > 0) byISO(row.iso).style.setProperty("--dr-h", Math.max(0.14, Math.min(1, row.clockMs / 36e6)).toFixed(3));
+  // What the feed shows: a run of lit ticks, the one at the reading line glowing.
+  if (options.vis) {
+    const [from, to] = options.vis.map((iso) => model.byISO.get(iso).index);
+    for (const row of model.rows) if (row.index >= from && row.index <= to) byISO(row.iso).classList.add("vis");
+    byISO(options.current || options.vis[0]).setAttribute("aria-current", "location");
   }
   if (options.hover) stop(options.hover).classList.add("is-hover");
   if (options.focus) stop(options.focus).classList.add("is-focus");
@@ -1520,6 +1594,8 @@ function fragment(options) {
     const button = stop(options.tip);
     const tip = wrap.querySelector(".dr-tip");
     tip.innerHTML = options.tip.startsWith("m:") ? monthTipHTML(model.monthByKey.get(options.tip.slice(2)), lang) : tipHTML(model.byISO.get(options.tip), lang);
+    // Room on the left for the tooltip, however long its lines are in this language.
+    wrap.style.paddingLeft = Math.ceil(tip.offsetWidth + 16) + "px";
     const rect = button.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
     tip.style.left = nav.offsetLeft - 8 - tip.offsetWidth + "px";
@@ -1528,10 +1604,10 @@ function fragment(options) {
   return { wrap, nav, model };
 }
 
-function figure(host, label, caption, build) {
+function figure(host, label, caption, build, pairClass) {
   const fig = document.createElement("figure");
   fig.className = "fig";
-  fig.innerHTML = '<div class="lbl">' + label + '</div><div class="pair"></div><figcaption>' + caption + "</figcaption>";
+  fig.innerHTML = '<div class="lbl">' + label + '</div><div class="pair' + (pairClass ? " " + pairClass : "") + '"></div><figcaption>' + caption + "</figcaption>";
   host.appendChild(fig);
   build(fig.querySelector(".pair"));
   return fig;
@@ -1541,77 +1617,81 @@ function renderStates() {
   const host = document.getElementById("states");
   host.innerHTML = "";
   const both = (options) => (pair) => { fragment({ ...options, host: pair, theme: "dark" }); fragment({ ...options, host: pair, theme: "light" }); };
-  figure(host, "Default · today at the top", "Today in the accent, its tick too - its time stays muted. Every day with entries shows its time; the weekend is the chart's blue band, its empty days dim with fainter ticks.",
-    both({ top: TODAY, bottom: "2026-09-13" }));
-  figure(host, "Hover", "Hover band, bright labels and time at once; the tooltip after 250ms, then row to row with no delay.",
-    both({ top: "2026-09-24", bottom: "2026-09-13", hover: "2026-09-22", tip: "2026-09-22" }));
-  figure(host, "Keyboard focus, an empty day", "2px accent ring inside the row, over the weekend band. The tooltip shows for focus too and says where the jump will land.",
-    both({ top: "2026-09-24", bottom: "2026-09-13", focus: "2026-09-19", tip: "2026-09-19" }));
-  figure(host, "Visible range", "The thumb covers what the feed shows, entering a row partway as the card does. Those rows' labels go bright; the top one is aria-current.",
-    both({ top: "2026-09-24", bottom: "2026-09-13", thumb: ["2026-09-18", "2026-09-15"], thumbFrom: 0.4, thumbTo: 0.7 }));
+  figure(host, "Default · the page at the top", "The feed shows today and the days below it, so their ticks are lit, and today's - at the reading line - glows. Today's label is in the accent; its time never is. Every day with entries shows its clock time; the weekend is the chart's blue band, its empty days dim with fainter ticks.",
+    both({ top: TODAY, bottom: "2026-09-13", vis: [TODAY, "2026-09-22"] }));
+  figure(host, "Visible range", "Scrolled into the feed: the ticks of the days it shows light up in the accent at full strength, and their labels go bright; the day at the reading line (aria-current) glows. Today, above them, keeps its accent label over a plain tick.",
+    both({ top: TODAY, bottom: "2026-09-13", vis: ["2026-09-18", "2026-09-15"] }));
+  figure(host, "Hover", "No band: the labels go bright at once, and the tick reaches out 10px and comes up to full strength over 180ms. The tooltip after 250ms, then row to row with no delay.",
+    both({ top: TODAY, bottom: "2026-09-13", hover: "2026-09-22", tip: "2026-09-22" }));
+  figure(host, "Keyboard focus, an empty day", "2px accent ring inside the row, over the weekend band; the tick grows as on hover. The tooltip shows for focus too and says where the jump will land.",
+    both({ top: TODAY, bottom: "2026-09-13", focus: "2026-09-19", tip: "2026-09-19" }));
+  figure(host, "Parallel work", "An agent worked alongside on Wed 23, so its card reads <i>⏱ clock / tracked</i>. The ruler shows the clock time, the figure before the slash; the tooltip spells out both in the header's own sentence.",
+    both({ top: TODAY, bottom: "2026-09-20", hover: "2026-09-23", tip: "2026-09-23" }), "col");
   figure(host, "Empty days, weekends", "A weekend is one blue block across Saturday and Sunday; a weekday gap (Tue Jul 21) has no band. Same tick lengths - the calendar never changes - but a fainter tick, a dim date and no time.",
     both({ top: "2026-07-26", bottom: "2026-07-15" }));
   figure(host, "Time off: vacation", "A teal block behind the run, square like the chart's. Entered as Mon-Fri, so the weekends on either side keep their blue band.",
     both({ top: "2026-08-17", bottom: "2026-08-06", hover: "2026-08-12", tip: "2026-08-12" }));
   figure(host, "Time off over a weekend", "A two-week vacation in 2025: time off wins over the weekend band, so the run stays one teal block through Sat 19 and Sun 20.",
-    both({ data: demo.data2y, top: "2025-07-22", bottom: "2025-07-12", height: 232 }));
+    both({ data: demo.data2y, top: "2025-07-22", bottom: "2025-07-12" }));
   figure(host, "Time off: sick, day off", "Sick is the chart's red hatch (a shape, not only a hue); a day off is purple, next to Saturday's blue.", (pair) => {
     for (const theme of ["dark", "light"]) {
-      fragment({ host: pair, theme, top: "2026-09-10", bottom: "2026-09-08", height: 72 });
-      fragment({ host: pair, theme, top: "2026-07-04", bottom: "2026-07-02", height: 72 });
+      fragment({ host: pair, theme, top: "2026-09-10", bottom: "2026-09-08" });
+      fragment({ host: pair, theme, top: "2026-07-04", bottom: "2026-07-02" });
     }
   });
   figure(host, "Month start", "The 1st closes its month with the longest tick; August's header opens the next block. Headers stick while their month scrolls.",
     both({ top: "2026-09-05", bottom: "2026-08-25" }));
-  figure(host, "Month header: hover", "The header is a button: a 20px hover band, and the tooltip names the landing day - the month's newest day with entries.",
+  figure(host, "Month header: hover", "The header is a button - the one hover band left in the ruler, 24px tall - and the tooltip names the landing day: the month's newest day with entries.",
     both({ top: "2026-09-02", bottom: "2026-08-25", hover: "m:2026-08", tip: "m:2026-08" }));
   figure(host, "Month header: keyboard focus", "A stop in the arrow-key sequence, with the day's ring. This month's newest day with entries is today, so it goes to the top of the page, as today's row does.",
     both({ top: TODAY, bottom: "2026-09-15", focus: "m:2026-09", tip: "m:2026-09" }));
-  figure(host, "Year start", "A past year gets a row with a hairline above its months; it sticks above the month header. Here days off run across New Year, between two weekends.",
-    both({ data: demo.data2y, top: "2026-01-06", bottom: "2025-12-24", height: 256 }));
-  figure(host, "Ruler scrolled away", "The visible range is out of view (the reader explored). The chip says where it is and scrolls the ruler back.",
+  figure(host, "Year start", "A past year gets a row with a hairline across the full width above its months; it sticks above the month header. Here days off run across New Year, between two weekends.",
+    both({ data: demo.data2y, top: "2026-01-06", bottom: "2025-12-24" }));
+  figure(host, "Ruler scrolled away", "The lit ticks are out of view (the reader explored). The chip says where they are and scrolls the ruler back.",
     both({ top: "2026-08-20", bottom: "2026-08-10", returnChip: { dir: "up", iso: "2026-09-22" } }));
-  figure(host, "End of history", "The spine ends at the oldest recorded day's tick. No rows before it.",
-    both({ top: "2026-06-27", bottom: "2026-06-17", height: 208 }));
+  figure(host, "End of history", "The ruler ends at the oldest recorded day's tick. No rows before it.",
+    both({ top: "2026-06-27", bottom: "2026-06-17", extra: 8 }));
 }
 
 function renderAlternatives() {
   const host = document.getElementById("alts");
   host.innerHTML = "";
   const one = (options) => (pair) => fragment({ ...options, host: pair, theme: demo.theme });
-  const range = { top: "2026-09-24", bottom: "2026-09-06", height: 332 };
-  figure(host, '<span class="badge rec">Chosen</span>The day\'s time as text', "The day header's own figure, muted and right-aligned: a number to read, not a shape to estimate. 126px wide.", one(range));
-  figure(host, '<span class="badge rej">Rejected</span>Hours bar (previous proposal)', "88px and a 4px bar, 10h = 14px: the long day stands out, but no number, and it was one more shape beside the ticks.", one({ ...range, className: "alt-bar", bar: true }));
+  const range = { top: "2026-09-24", bottom: "2026-09-06" };
+  const days = 19;
+  figure(host, '<span class="badge rec">Chosen</span>The clock time as text, 20px rows', "The day header's first figure, muted and right-aligned just left of the ticks: a number to read, not a shape to estimate. 12px type, at most 176px wide, 41 days on a 900px screen.", one(range));
+  figure(host, '<span class="badge rej">Rejected</span>Revision 2\'s scale', "16px rows, 11px type, 1px ticks of 6 / 11 / 17px: 52 days on a 900px screen instead of 41, but the owner found the scale too small to read and to hit.", one({ ...range, height: 24 + days * 16, className: "p16" }));
+  figure(host, '<span class="badge rej">Rejected</span>24px pitch', "Airy, but 34 days on a 900px screen - 17% fewer than 20px - for little gain in legibility.", one({ ...range, height: HEAD + days * 24, className: "p24" }));
+  figure(host, '<span class="badge rej">Rejected</span>Hours bar (revision 1)', "A 4px bar after the date, 10h = 14px: 120px wide instead of 176, so the breakpoint could drop to 84rem - but the long day is a shape to estimate, not a number, and one more shape beside the ticks.", one({ ...range, className: "alt-bar", bar: true }));
   figure(host, '<span class="badge rej">Rejected</span>Labels on Mondays only', "Calmer, but the owner asked for every tick to carry its weekday, and a date between labels needs counting.", one({ ...range, className: "alt-mondays" }));
-  figure(host, '<span class="badge rej">Rejected</span>14px pitch', "59 days on a 900px screen instead of 52, but 3px between lines reads as texture.", one({ top: "2026-09-24", bottom: "2026-09-06", height: 296, className: "p14" }));
-  figure(host, '<span class="badge rej">Rejected</span>18px pitch', "Airy, but 46 days on a 900px screen - 12% fewer than 16px - for little gain in legibility.", one({ top: "2026-09-24", bottom: "2026-09-06", height: 368, className: "p18" }));
-  figure(host, '<span class="badge rej">Rejected</span>Rounded to the 1st', "The oldest month drawn whole: 16 rows of pre-history that go nowhere and must be disabled.", one({ top: "2026-06-27", bottom: "2026-06-01", height: 456, pre: true }));
+  figure(host, '<span class="badge rej">Rejected</span>Rounded to the 1st', "The oldest month drawn whole: 16 rows of pre-history that go nowhere and must be disabled.", one({ top: "2026-06-27", bottom: "2026-06-01", pre: true }));
 }
 
 function renderAnatomy() {
   const host = document.getElementById("anatomy");
   host.innerHTML = '<div class="anat"></div>';
   const anat = host.firstElementChild;
-  const { nav } = fragment({ host: anat, theme: demo.theme, top: "2026-09-03", bottom: "2026-08-28", height: 164, thumb: ["2026-09-02", "2026-08-31"], thumbFrom: 0.3, thumbTo: 0.6 });
+  // The feed shows Sep 2 - Aug 31; the pointer rests on Saturday.
+  const { nav } = fragment({ host: anat, theme: demo.theme, top: "2026-09-03", bottom: "2026-08-28", extra: 4, vis: ["2026-09-02", "2026-08-31"], hover: "2026-08-29" });
   const base = anat.getBoundingClientRect();
   const navRect = nav.getBoundingClientRect();
   const row = (iso) => nav.querySelector('.dr-day[data-iso="' + iso + '"]').getBoundingClientRect();
   const header = nav.querySelectorAll(".dr-mhead")[1].getBoundingClientRect();
-  const thumb = nav.querySelector(".dr-thumb").getBoundingClientRect();
-  const spine = nav.querySelector(".dr-spine").getBoundingClientRect();
   const middle = (rect, fraction = 0.5) => rect.top + rect.height * fraction;
   const marks = [
-    [1, "l", middle(spine, 0.94), "Spine"],
-    [2, "l", middle(row("2026-09-03")), "Day tick"],
-    [9, "l", middle(thumb, 0.2), "Visible range (thumb)"],
-    [4, "l", middle(row("2026-09-01")), "1st of month tick"],
-    [3, "l", middle(row("2026-08-31")), "Monday tick"],
-    [5, "r", middle(row("2026-09-03")), "Weekday · date"],
-    [6, "r", middle(row("2026-09-02")), "Tracked time"],
-    [7, "r", middle(header, 0.62), "Month header (button)"],
-    [10, "r", middle(row("2026-08-30")), "Day without entries"],
-    [11, "r", middle(row("2026-08-29")), "Weekend band"],
-    [8, "r", middle(row("2026-08-28")), "Row pitch"],
+    [1, "l", middle(row("2026-09-03")), "Weekday · date"],
+    [2, "r", middle(row("2026-09-03")), "Day tick"],
+    [3, "l", middle(row("2026-09-02")), "Clock time"],
+    [4, "r", middle(row("2026-09-02")), "Current day: lit, glowing"],
+    [5, "r", middle(row("2026-09-01"), 0.25), "1st of month tick"],
+    [6, "r", middle(row("2026-09-01"), 0.8), "Lit ticks: what the feed shows"],
+    [7, "l", middle(header, 0.62), "Month header (button)"],
+    [8, "r", middle(row("2026-08-31")), "Monday tick"],
+    [9, "l", middle(row("2026-08-30")), "Day without entries"],
+    [10, "l", middle(row("2026-08-29")), "Weekend band"],
+    [11, "r", middle(row("2026-08-29")), "Hovered tick"],
+    [12, "l", middle(row("2026-08-28")), "Row pitch"],
+    [13, "r", middle(row("2026-08-28")), "Tick zone"],
   ];
   for (const [number, side, y, text] of marks) {
     const node = document.createElement("span");
@@ -1623,49 +1703,52 @@ function renderAnatomy() {
     node.style.top = y - base.top + "px";
   }
   const legend = [
-    [1, "Spine", "1 px at x = 4; ends at the oldest day's tick", "<code>--text-dim</code> 38%"],
-    [2, "Day tick", "6 × 1 px from x = 5", "<code>--text-dim</code> 75%, 42% on a day without entries"],
-    [3, "Monday tick", "11 × 1 px", "<code>--text-dim</code>"],
-    [4, "1st of month tick", "17 × 1 px; wins over Monday", "<code>--text</code>"],
-    [5, "Weekday · date", "11px from x = 26. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "weekday <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; date <code>--text</code> with entries"],
-    [6, "Tracked time", "<code>formatDurationShort(tracked)</code>, 10.5px <code>--mono</code> tabular; right edge at x = 122, at least 8px after the date; only on days with entries", "<code>--dr-label</code>, never accented; <code>--text</code> on hover"],
-    [7, "Month header (button)", "24px, text bottom-aligned 5px up, from x = 22; sticky; the button is its bottom 126 × 20, radius 4", "11px 600 <code>--text</code> on <code>--bg</code>, spine drawn through; hover <code>--hover</code>"],
-    [8, "Row pitch", "16px (1rem); the whole row is the button, hover band 126 × 16, radius 4", "<code>--hover</code>"],
-    [9, "Visible range (thumb)", "3px wide over the spine, ends mapped continuously from the feed", "<code>--accent</code>; light <code>color-mix(accent 75%, text)</code>"],
-    [10, "Day without entries", "same tick length; fainter tick, dim date, no time", "-"],
-    [11, "Weekend band", "from x = 5 to the right edge, 16px a day, square ends; Saturday and Sunday one block; time off replaces it", "<code>rgba(96,125,190,0.13)</code>, both themes (the Reports chart's)"],
+    [1, "Weekday · date", "12px from x = 6. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "weekday <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; date <code>--text</code> with entries"],
+    [2, "Day tick", "12 × 2 px, flush with the right edge of the window, <code>border-radius: 1px 0 0 1px</code>, vertically centred", "<code>--text</code> at 45% on a day with entries"],
+    [3, "Clock time", "<code>formatDurationShort(clockMs)</code> - the day header's first figure, parallel work counted once; 11px <code>--mono</code> tabular; right edge 44px from the window's edge, at least 8px after the date; only on days with entries", "<code>--dr-label</code>, never accented; <code>--text</code> on hover"],
+    [4, "Current day", "The lit tick at the reading line (<code>aria-current</code>)", "<code>box-shadow: 0 0 4px --dr-lit</code>"],
+    [5, "1st of month tick", "28 × 2 px; wins over Monday", "as any tick"],
+    [6, "Lit ticks", "The days the feed shows, mapped continuously from it; lengths unchanged; weekday and date <code>--text</code>", "<code>--dr-lit</code> at full strength: <code>--accent</code>; light <code>color-mix(accent 75%, text)</code>"],
+    [7, "Month header (button)", "28px, text bottom-aligned 0.35rem up, from x = 2; sticky; the button is its bottom 24px across the full width, radius 4", "12px 600 <code>--text</code> on <code>--bg</code>; hover <code>--hover</code>"],
+    [8, "Monday tick", "20 × 2 px", "as any tick"],
+    [9, "Day without entries", "Same tick length, fainter; dim date, no time", "tick <code>--text</code> at 22%"],
+    [10, "Weekend band", "The full row, 20px a day, square ends; Saturday and Sunday one block; time off replaces it", "<code>rgba(96,125,190,0.13)</code>, both themes (the Reports chart's)"],
+    [11, "Hovered tick", "+10px (<code>--dr-tick-grow</code>) at full strength, <code>180ms ease</code>; keyboard focus the same; the labels go bright, no band", "<code>--text</code> at 100% (a lit tick stays <code>--dr-lit</code>)"],
+    [12, "Row pitch", "20px (1.25rem); the whole row is the button", "-"],
+    [13, "Tick zone", "44px of right padding (<code>--dr-ticks</code>): the longest tick, 28, its growth, 10, and 6px of air - no label ever runs under a tick", "-"],
   ];
   document.getElementById("anat-legend").innerHTML = legend.map((item) => "<tr><td>" + item[0] + "</td><td>" + item[1] + "</td><td>" + item[2] + "</td><td>" + item[3] + "</td></tr>").join("");
 }
 
 function renderPlacement() {
-  // Breakpoint table, drawn at 1/8.
+  // Breakpoint table, drawn at 1/8: the ruler is the margin less 12px, at most 176px, against the edge.
   const scale = 1 / 8;
   const rows = [
-    { width: 1920 }, { width: 1600 }, { width: 1440 }, { width: 1366 }, { width: 1360 }, { width: 1360, scrollbar: 17 }, { width: 1359 }, { width: 1280 },
+    { width: 1920 }, { width: 1600 }, { width: 1440 }, { width: 1440, scrollbar: 17 }, { width: 1432 }, { width: 1408 }, { width: 1408, scrollbar: 17 }, { width: 1407 }, { width: 1366 },
   ];
   document.getElementById("bp").innerHTML = rows.map((item) => {
     const layout = item.width - (item.scrollbar || 0);
     const margin = (layout - 1056) / 2;
-    const shown = item.width >= 1360;
-    const spare = margin - 12 - 126;
+    const shown = item.width >= 1408;
+    const ruler = Math.min(176, margin - 12);
     const columnLeft = margin * scale;
     const text = shown
-      ? "margin <b>" + margin + " px</b> · ruler at +12 · <b>" + spare + " px</b> spare" + (item.scrollbar ? " (17px classic scrollbar)" : "")
-      : "below 85rem: <b>not rendered</b>";
+      ? "margin <b>" + margin + " px</b> · ruler <b>" + ruler + " px</b> at the edge, " + (margin - ruler) + " px clear of the cards" + (item.scrollbar ? " (17px classic scrollbar)" : "")
+      : "below 88rem: <b>not rendered</b>";
     return '<div class="bp-row' + (shown ? "" : " off") + '"><span class="w">' + item.width + (item.scrollbar ? "*" : "") + '</span><div class="v" style="width:' + item.width * scale + 'px"><span class="c" style="left:' + columnLeft + "px;width:" + 1056 * scale + 'px"></span>' +
-      (shown ? '<span class="r" style="left:' + (columnLeft + (1056 + 12) * scale) + "px;width:" + 126 * scale + 'px"></span>' : "") + '</div><span class="t">' + text + "</span></div>";
+      (shown ? '<span class="r" style="left:' + (layout - ruler) * scale + "px;width:" + ruler * scale + 'px"></span>' : "") + '</div><span class="t">' + text + "</span></div>";
   }).join("");
-  // Two vertical schematics: page top and scrolled.
-  const ticks = (count) => Array.from({ length: count }, (unused, index) => '<i style="top:' + (index * 6 + 3) + "px;width:" + (index % 7 === 0 ? 6 : 3) + 'px"></i>').join("");
+  // Three schematics: page top, scrolled, and the rejected left side. Ticks against the
+  // window's edge; the lit ones (from-to) are what the feed shows.
+  const ticks = (count, from, to) => Array.from({ length: count }, (unused, index) => '<i' + (index >= from && index <= to ? ' class="lit"' : "") + ' style="top:' + (index * 6 + 3) + "px;width:" + (index % 7 === 0 ? 6 : 3) + 'px"></i>').join("");
   document.getElementById("schematics").innerHTML =
     '<div><div class="sch-win"><div class="s-col"><div class="s-bar s-head" style="top:4px;height:10px"></div><div class="s-bar" style="top:20px;height:16px"></div><div class="s-bar" style="top:40px;height:22px"></div>' +
-    '<div class="s-bar" style="top:70px;height:44px"></div><div class="s-bar" style="top:120px;height:60px"></div></div><div class="s-ruler" style="left:196px;top:3px;bottom:0">' + ticks(28) + '</div></div>' +
-    '<div class="sch-cap"><b>Top of the page.</b> The ruler starts level with the header content (0.75rem) and runs to the bottom of the window.</div></div>' +
+    '<div class="s-bar" style="top:70px;height:44px"></div><div class="s-bar" style="top:120px;height:60px"></div></div><div class="s-ruler" style="right:0;top:3px;bottom:0">' + ticks(28, 0, 2) + '</div></div>' +
+    '<div class="sch-cap"><b>Top of the page.</b> The ruler starts level with the header content (0.75rem) and runs to the bottom of the window, its ticks against the window\'s edge; today\'s and the next days\' are lit.</div></div>' +
     '<div><div class="sch-win"><div class="s-col"><div class="s-bar s-strip" style="top:-1px;height:14px;border-top:0;border-radius:0 0 3px 3px;z-index:1"></div><div class="s-bar" style="top:6px;height:50px"></div><div class="s-bar" style="top:62px;height:40px"></div><div class="s-bar" style="top:108px;height:70px"></div></div>' +
-    '<div class="s-ruler" style="left:196px;top:3px;bottom:0">' + ticks(28) + '</div></div><div class="sch-cap"><b>Scrolled into the feed.</b> The header is gone, the pinned strip is stuck inside the column; the ruler has not moved - it is fixed to the window.</div></div>' +
+    '<div class="s-ruler" style="right:0;top:3px;bottom:0">' + ticks(28, 11, 15) + '</div></div><div class="sch-cap"><b>Scrolled into the feed.</b> The header is gone, the pinned strip is stuck inside the column; the ruler has not moved - it is fixed to the window - but its lit ticks followed the feed.</div></div>' +
     '<div><div class="sch-win"><div class="s-col" style="left:100px"><div class="s-bar" style="top:6px;height:50px"></div><div class="s-bar" style="top:62px;height:40px"></div><div class="s-bar" style="top:108px;height:70px"></div></div>' +
-    '<div class="s-ruler" style="left:52px;top:3px;bottom:0">' + ticks(28) + '</div></div><div class="sch-cap"><span class="badge rej">Rejected</span> <b>Left side.</b> Next to the day headings, but the left margin starts every line of reading, and the scrollbar - the reader\'s existing position cue - is on the right.</div></div>';
+    '<div class="s-ruler l" style="left:0;top:3px;bottom:0">' + ticks(28, 11, 15) + '</div></div><div class="sch-cap"><span class="badge rej">Rejected</span> <b>Left side.</b> Next to the day headings, but the left margin starts every line of reading, and the scrollbar - the reader\'s existing position cue - is on the right.</div></div>';
 }
 
 // --- scale measurement ---------------------------------------------------------

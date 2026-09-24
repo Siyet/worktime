@@ -241,9 +241,9 @@ export function buildRuler(
 // rulerOffset maps a place in the feed onto the ruler's track, continuously: a
 // fraction of a day's card is that fraction of its row, the gap after it spans
 // the empty rows (and any header) down to the next recorded day, and the space
-// above the feed spans today's row down to the feed's first day. So the thumb
-// glides with the page and crosses a weekend as the feed crosses the gap
-// between Friday and Monday.
+// above the feed spans today's row down to the feed's first day. So the span
+// of lit ticks moves with the page and crosses a weekend as the feed crosses the
+// gap between Friday and Monday.
 export function rulerOffset(model: RulerModel, spot: FeedSpot): number {
   const first = model.rows[0]?.top ?? 0;
   const topOf = (iso: string | null, fallback: number) => (iso === null ? fallback : (model.byISO.get(iso)?.top ?? fallback));

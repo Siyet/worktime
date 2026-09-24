@@ -740,7 +740,7 @@
     .dr {
       --dr-label: color-mix(in srgb, var(--text-dim) 80%, var(--text));
       --dr-today: color-mix(in srgb, var(--accent) 55%, var(--text));
-      --dr-lit: color-mix(in srgb, var(--accent) 75%, var(--text));
+      --dr-lit: color-mix(in srgb, var(--accent) 60%, var(--text));
     }
   }
 
@@ -944,7 +944,7 @@
 
   .dr-day:global([data-vis])::before {
     background: var(--dr-lit);
-    opacity: 0.55;
+    opacity: 0.8;
   }
 
   .dr-day:global([aria-current])::before {
@@ -994,7 +994,7 @@
 
   /* Between 85 and 88rem the margin holds the dates and the ticks but not the
      times: they stay in the tooltip. */
-  @media (max-width: 87.99rem) {
+  @media (width < 88rem) {
     .dr-dur {
       display: none;
     }

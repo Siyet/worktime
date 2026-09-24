@@ -553,6 +553,81 @@ test.describe("pinned running timers", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
+  test("a timer stopped elsewhere while the page scrolls lets the scroll finish", async ({ page, request, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 30);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    const now = Date.now();
+    const today = dayNine(0);
+    const stopping = { id: crypto.randomUUID(), description: "Stopped elsewhere", startedAt: now - 30 * 60_000, stoppedAt: null };
+    await seedServer(server.url, {
+      entries: [
+        ...[0, 1, 2, 3, 4, 5].map((index) => ({
+          description: `Today ${index}`,
+          startedAt: today + index * 20 * 60_000,
+          stoppedAt: today + index * 20 * 60_000 + 10 * 60_000,
+        })),
+        stopping,
+        ...timers(2, now),
+      ],
+    });
+    await page.goto(server.url + "/#/");
+    await scrollUntilVisible(page, "Day 8 task 0");
+    await expectStrip(page, 3, false);
+    // Stopped on another device: it lands in today's day, above the reader.
+    const stoppedAt = Date.now();
+    const pushed = await request.post(server.url + "/api/sync", {
+      data: {
+        since: Number.MAX_SAFE_INTEGER,
+        changes: {
+          time_entries: [
+            {
+              id: stopping.id,
+              project_id: null,
+              description: stopping.description,
+              tags: [],
+              started_at: stopping.startedAt,
+              stopped_at: stoppedAt,
+              created_at: stopping.startedAt,
+              updated_at: stoppedAt,
+              deleted_at: null,
+            },
+          ],
+        },
+      },
+    });
+    expect(pushed.ok()).toBe(true);
+    const outcome = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const sentinel = document.querySelector(".running-full + div")!;
+      // Up, but not so far that the strip lets go.
+      const lowest = sentinel.getBoundingClientRect().top + window.scrollY + 200;
+      const target = Math.max(lowest, window.scrollY - 2000);
+      window.scrollTo({ top: target, behavior: "smooth" });
+      await frame();
+      await frame();
+      window.dispatchEvent(new Event("online"));
+      let last = Number.NaN;
+      let still = 0;
+      let count = 0;
+      let shrankAt = -1;
+      while (still < 6 && count < 900) {
+        await frame();
+        count += 1;
+        if (shrankAt < 0 && document.querySelectorAll(".pinbar > ul > li").length === 2) shrankAt = count;
+        still = window.scrollY === last ? still + 1 : 0;
+        last = window.scrollY;
+      }
+      return { target, rest: window.scrollY, shrankAt, restedAt: count - 6 };
+    });
+    expect(outcome.shrankAt).toBeGreaterThan(0);
+    expect(outcome.shrankAt).toBeLessThan(outcome.restedAt);
+    expect(Math.abs(outcome.rest - outcome.target)).toBeLessThanOrEqual(2);
+    await expect(page.locator(".feed .item").filter({ hasText: "Stopped elsewhere" })).toHaveCount(1);
+    await expectStrip(page, 2, false);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
   test("the card held during a scroll is never shown cut to its old height", async ({ page, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 60);

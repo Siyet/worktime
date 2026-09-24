@@ -317,7 +317,7 @@ export class FeedScroller {
     // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.
-    this.#keepAnchor();
+    this.#keepAnchor(true);
     const feed = elements.feed;
     const width = feed.clientWidth;
     const feedTop = feed.getBoundingClientRect().top;
@@ -420,7 +420,7 @@ export class FeedScroller {
         signature: signatures.get(key) ?? "",
       });
     }
-    this.#keepAnchor();
+    this.#keepAnchor(false);
     this.schedule();
   };
 
@@ -432,7 +432,7 @@ export class FeedScroller {
   // a timer arriving by sync mid-fling would cut the fling short. Then the strip
   // simply covers one more line. The click on Repeat or Undo that started the
   // timer is no scroll, so it does not count.
-  #keepAnchor(): void {
+  #keepAnchor(absorb: boolean): void {
     const anchor = this.#anchor;
     if (anchor === null) return;
     let shift: number;
@@ -445,6 +445,23 @@ export class FeedScroller {
     }
     const line = this.#readingLine();
     const still = performance.now() - this.#scrolledAt >= IDLE_MS;
+    // While the page scrolls, the held card - hidden above the reader - takes the
+    // shift instead of the page: it gives up or gains exactly what changed above,
+    // a row landing in today's day, say, so the reader's row stays put without a
+    // scroll that would stop theirs. Once scrolling is quiet the card takes its
+    // real height and the page the net correction. A shift bigger than the whole
+    // card is left to the scroll, and so is one found inside the ResizeObserver
+    // callback: resizing the card there resizes the observed body again, a loop.
+    // A sync merge lands outside a frame, so the frame's own pass sees it first.
+    const held = this.#heldCard;
+    if (absorb && !still && held !== null && held.isConnected) {
+      const height = parseFloat(held.style.height) || 0;
+      const absorbed = Math.min(shift, height);
+      if (Math.abs(absorbed) >= 0.5) {
+        held.style.height = `${height - absorbed}px`;
+        shift -= absorbed;
+      }
+    }
     const correction = shift - (still ? Math.max(0, line - anchor.line) : 0);
     anchor.top += shift;
     anchor.dayTop += shift;

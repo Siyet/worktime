@@ -12,8 +12,10 @@
 //
 // Scroll anchoring is done here by hand rather than left to the browser: Safari
 // has none, and Chromium's own would hide every mistake made here from the tests.
-// .feed carries overflow-anchor: none so the browser never corrects the same
-// shift a second time.
+// The browser's is switched off for the whole document while the scroller runs,
+// so it never corrects the same shift a second time. That has to be on the body:
+// Chromium still anchors the page when only html, main or the feed opt out, and
+// a running card growing above the reader got corrected twice.
 //
 // A correction is an instant scroll, and an instant scroll cancels a smooth one in
 // progress - Home, a tap on the iOS status bar, a fling. Corrections come from
@@ -58,6 +60,8 @@ const PAGE_REPEAT_MS = 1000;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
+/** Where Space presses a control instead of scrolling the page. */
+const PRESSES_SPACE = `button, a[href], summary, [role=button], ${KEEPS_PAGE_KEYS}`;
 
 interface Anchor {
   element: Element;
@@ -104,6 +108,8 @@ export class FeedScroller {
   #frame = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   #readerActiveAt = 0;
+  /** The reader's last actual scroll - a scroll event, the wheel or a scrolling key, not a click. */
+  #scrolledAt = 0;
   /** Where our own last correction scrolled to, so its scroll event is not the reader's. */
   #ownScrollTarget: number | null = null;
   #scrollPadding = "";
@@ -136,6 +142,9 @@ export class FeedScroller {
     // ones outside this page such as the header wrapping.
     this.#observer.observe(document.body);
     for (const day of elements.feed.querySelectorAll<HTMLElement>(":scope > .day")) this.#observer.observe(day);
+    const body = document.body.style;
+    const anchoring = body.overflowAnchor;
+    body.overflowAnchor = "none";
     window.addEventListener("scroll", this.#onScroll, { passive: true });
     for (const type of READER_INPUTS) window.addEventListener(type, this.#onReaderInput, { capture: true, passive: true });
     window.addEventListener("resize", this.schedule);
@@ -157,6 +166,7 @@ export class FeedScroller {
       clearTimeout(this.#idleTimer);
       this.#elements = null;
       this.#setScrollPadding("");
+      body.overflowAnchor = anchoring;
     };
   }
 
@@ -210,6 +220,7 @@ export class FeedScroller {
       this.#ownScrollTarget = null;
     } else {
       this.#readerActiveAt = performance.now();
+      this.#scrolledAt = this.#readerActiveAt;
     }
     this.schedule();
   };
@@ -220,6 +231,16 @@ export class FeedScroller {
     // heading, so the next page key starts from wherever the page is.
     if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
     this.#readerActiveAt = performance.now();
+    // A press or a tap may still become a scroll, which is enough to hold the
+    // probe back, but it is not one: Repeat and Undo are pressed.
+    const pressed =
+      event.type === "pointerdown" ||
+      event.type === "touchstart" ||
+      (event instanceof KeyboardEvent &&
+        event.key === " " &&
+        event.target instanceof Element &&
+        event.target.closest(PRESSES_SPACE) !== null);
+    if (!pressed) this.#scrolledAt = this.#readerActiveAt;
   };
 
   // A page step under the stuck strip is a page less the strip, as the scroll
@@ -379,9 +400,10 @@ export class FeedScroller {
   // The anchor stays where it was on screen - unless the pinned strip grew over
   // it, in which case it moves down with the strip's bottom edge instead of being
   // buried: repeating a task deep in the feed must not hide the row just clicked.
-  // Only while the reader is idle, though: that move is a scroll, and a timer
-  // arriving by sync mid-fling would cut the fling short. Then the strip simply
-  // covers one more line.
+  // Only while the page is not being scrolled, though: that move is a scroll, and
+  // a timer arriving by sync mid-fling would cut the fling short. Then the strip
+  // simply covers one more line. The click on Repeat or Undo that started the
+  // timer is no scroll, so it does not count.
   #keepAnchor(): void {
     const anchor = this.#anchor;
     if (anchor === null) return;
@@ -394,8 +416,8 @@ export class FeedScroller {
       return;
     }
     const line = this.#readingLine();
-    const idle = performance.now() - this.#readerActiveAt >= IDLE_MS;
-    const correction = shift - (idle ? Math.max(0, line - anchor.line) : 0);
+    const still = performance.now() - this.#scrolledAt >= IDLE_MS;
+    const correction = shift - (still ? Math.max(0, line - anchor.line) : 0);
     anchor.top += shift;
     anchor.dayTop += shift;
     anchor.line = line;

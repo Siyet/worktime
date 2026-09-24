@@ -138,14 +138,17 @@
   }
 
   // The same entry and the same role on the other side. A project or tags
-  // trigger has no counterpart in the strip, so its row's title stands in; a row
-  // hidden behind "+N more" is reached through that line.
+  // trigger has no counterpart in the strip, so its row's title stands in; a
+  // session whose group is collapsed on the other side is reached through the
+  // group's line; a row hidden behind "+N more" through that line.
   function twinOf(control: HTMLElement, target: HTMLElement): HTMLElement | null {
     const key =
       control.closest<HTMLElement>("[data-twin]")?.dataset.twin ??
       control.closest(".item, .group-line")?.querySelector<HTMLElement>("[data-twin]")?.dataset.twin;
-    const find = (twin: string) => target.querySelector<HTMLElement>(`[data-twin="${CSS.escape(twin)}"]`);
-    return (key === undefined ? null : find(key)) ?? find("more") ?? target.querySelector<HTMLElement>("button");
+    const group = control.closest<HTMLElement>("[data-twin-group]")?.dataset.twinGroup;
+    const find = (twin: string | undefined) =>
+      twin === undefined ? null : target.querySelector<HTMLElement>(`[data-twin="${CSS.escape(twin)}"]`);
+    return find(key) ?? find(group) ?? find("more") ?? target.querySelector<HTMLElement>("button");
   }
 
   // Without scrolling: the reader may be deep in the feed, and stopping the last
@@ -570,7 +573,7 @@
     </span>
   </div>
   {#if shown}
-    <div class="members" id={listID}>
+    <div class="members" id={listID} data-twin-group={dayISO === "running" ? groupTwin(group.key) : undefined}>
       {#each group.entries as entry (entry.id)}
         {@render entryRow(entry, true)}
       {/each}

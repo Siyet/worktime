@@ -478,6 +478,46 @@ test.describe("pinned running timers", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
+  test("Repeat deep in the feed carries the pressed row down with the strip", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    const base = dayNine(-20) + 7 * HOUR;
+    await seedServer(server.url, {
+      entries: ["Weekly sync", "Weekly sync", "Retro", "Retro"].map((description, index) => ({
+        description,
+        startedAt: base + index * 20 * 60_000,
+        stoppedAt: base + index * 20 * 60_000 + 10 * 60_000,
+      })),
+    });
+    await page.goto(server.url + "/#/");
+    await page.addStyleTag({ content: "html { overflow-anchor: none !important; }" });
+    await scrollUntilVisible(page, "Day 20 task 0");
+    const groupLine = (task: string) => page.locator(".feed .group-line").filter({ hasText: task });
+
+    // The row sits at the very top, and the page has been still for a while.
+    await page.evaluate((top) => window.scrollBy(0, top - 4), (await groupLine("Retro").boundingBox())!.y);
+    await page.waitForTimeout(400);
+    const before = (await groupLine("Retro").boundingBox())!.y;
+    // The press is not a scroll: the row moves down with the strip that appears.
+    await tap(page, page.getByRole("button", { name: "Repeat Retro" }));
+    const geometry = await expectStrip(page, 1, false);
+    await settle(page);
+    expect(Math.abs((await groupLine("Retro").boundingBox())!.y - (before + geometry.bottom))).toBeLessThanOrEqual(1);
+
+    // Space on a button presses it rather than scrolling, so it carries too.
+    const lift = (await groupLine("Weekly sync").boundingBox())!.y - geometry.bottom - 4;
+    await page.evaluate((lift) => window.scrollBy(0, lift), lift);
+    await page.waitForTimeout(400);
+    const next = (await groupLine("Weekly sync").boundingBox())!.y;
+    await page.getByRole("button", { name: "Repeat Weekly sync" }).focus();
+    await page.keyboard.press("Space");
+    const grown = await expectStrip(page, 2, false);
+    await settle(page);
+    expect(Math.abs((await groupLine("Weekly sync").boundingBox())!.y - (next + grown.bottom - geometry.bottom))).toBeLessThanOrEqual(1);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
   test("Undo after Stop restarts the same row", async ({ page, request, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 40);
@@ -505,6 +545,31 @@ test.describe("pinned running timers", () => {
     const { changes } = (await response.json()) as { changes: { time_entries: Array<{ id: string; description: string; stopped_at: number | null; deleted_at: number | null }> } };
     const pinned = changes.time_entries.filter((entry) => entry.description === "Pinned work" && entry.deleted_at === null);
     expect(pinned.map((entry) => [entry.id, entry.stopped_at])).toEqual([[id, null]]);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("two quick Stops are undone together", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await seedServer(server.url, { entries: timers(3) });
+    await page.goto(server.url + "/#/");
+    await scrollUntilVisible(page, "Day 20 task 0");
+    await expectStrip(page, 3, false);
+
+    // The line below slides up under the pointer, so a second press stops it too.
+    const first = strip(page).getByRole("button", { name: "Stop" }).first();
+    await tap(page, first);
+    await expect(stripLines(page)).toHaveCount(2);
+    await tap(page, first);
+    await expect(stripLines(page)).toHaveCount(1);
+    const toast = page.locator(".toast");
+    await expect(toast).toContainText("Stopped");
+    await expect(toast).toContainText("2 timers");
+
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(stripLines(page)).toHaveCount(3);
+    await expect(toast).toHaveCount(0);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -549,7 +614,9 @@ test.describe("pinned running timers", () => {
     await expect(strip(page)).toHaveCount(0);
     await expect(page.getByPlaceholder("What are you working on?")).toBeFocused();
     await settle(page);
-    expect(Math.abs((await rowY(page, probe.text)) - probe.y)).toBeLessThanOrEqual(1);
+    // The card's height is fractional and WebKit keeps the scroll position in
+    // whole pixels, so the correction lands within a pixel and a half.
+    expect(Math.abs((await rowY(page, probe.text)) - probe.y)).toBeLessThanOrEqual(1.5);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -772,6 +839,42 @@ test.describe("pinned running timers under a thumb", () => {
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(strip(page)).not.toHaveClass(/stuck/);
     await expect(moreOverlay).toHaveCount(0);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("an overlay leaves Escape to a dialog opened from it and never reopens by itself", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url, 40);
+    await seedServer(server.url, { entries: timers(5) });
+    await page.goto(server.url + "/#/");
+    await scrollUntilVisible(page, "Day 20 task 0");
+    await expectStrip(page, 4, true);
+    const more = strip(page).locator(".pin-more");
+    const overlay = strip(page).locator(".pin-more + .pin-overlay");
+
+    // The editor of a timer behind "+N" closes on the first Escape.
+    await tap(page, more);
+    await tap(page, overlay.getByRole("button", { name: "Agent task 3" }));
+    const editor = page.locator("dialog.sheet[open]");
+    await expect(editor).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(editor).toHaveCount(0);
+
+    // A Stop from the keyboard inside the overlay that ends the overflow hands
+    // focus to the line the other hidden timer now has - not to an unrelated one.
+    await expect(overlay).toBeVisible();
+    await overlay.getByRole("button", { name: "Stop" }).first().focus();
+    await page.keyboard.press("Enter");
+    await expect(more).toHaveCount(0);
+    await expect(stripLines(page)).toHaveCount(4);
+    await expect(stripLines(page).filter({ hasText: "Agent task 4" }).locator(".pin-stop")).toBeFocused();
+
+    // "+N" comes back with the next timer, closed.
+    await seedServer(server.url, { entries: [{ description: "Arrived later", startedAt: Date.now() - 1_000, stoppedAt: null }] });
+    await triggerSync(page);
+    await expect(more).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await expect(strip(page).locator(".pin-overlay")).toHaveCount(0);
     expect(await pageErrors(page)).toEqual([]);
   });
 

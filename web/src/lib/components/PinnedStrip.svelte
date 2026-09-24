@@ -9,7 +9,7 @@
   // height is arithmetic - a fixed line height times the line count - so the box
   // can stick at the strip's bottom edge without measuring anything. Expanding
   // "+N more" or a group opens an overlay below the strip and never changes it.
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { displayEntryDescription, entryDurationMs, formatDuration, formatTime, sessionTag } from "../format";
   import { t } from "../i18n";
   import { projectByID } from "../state/app.svelte";
@@ -76,7 +76,8 @@
   const hidden = $derived(overflow ? groups.slice(cap - 1) : []);
   const lines = $derived(visible.length + (overflow ? 1 : 0));
   const hiddenEntries = $derived(hidden.flatMap((group) => group.entries));
-  const hiddenLate = $derived(hidden.filter((group) => groupLate(group)).length);
+  // Both halves of "+3 more · 1 over 8h" count timers, not lines.
+  const hiddenLate = $derived(hiddenEntries.filter((entry) => late(entry)).length);
 
   function late(entry: TimeEntry): boolean {
     return entryDurationMs(entry, now) >= LATE_MS;
@@ -93,16 +94,28 @@
   // One overlay at a time: "more", or the key of an expanded group.
   let openKey = $state<string | null>(null);
 
+  // Closed on unstick, and whenever its toggle goes away - "+N" when the hidden
+  // timers stop, a group when it is down to one session - so it cannot come back
+  // already open when a sync brings the toggle back.
   $effect(() => {
-    if (!stuck) openKey = null;
+    if (openKey === null) return;
+    const present =
+      openKey === "more" ? overflow : visible.some((group) => group.key === openKey && group.entries.length > 1);
+    if (!stuck || !present) openKey = null;
   });
 
   function toggle(key: string): void {
     openKey = openKey === key ? null : key;
   }
 
+  // Escape is the strip's only when focus is in it, or nowhere (WebKit leaves it on
+  // the page after a click). An entry editor opened from an overlay line gets its
+  // own Escape: a dialog does not close when its keydown is cancelled.
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || openKey === null) return;
+    if (event.key !== "Escape" || openKey === null || event.defaultPrevented) return;
+    const target = event.target;
+    const inStrip = section !== null && target instanceof Node && section.contains(target);
+    if (!inStrip && target !== document.body && target !== document.documentElement) return;
     event.preventDefault();
     const key = openKey;
     openKey = null;
@@ -121,12 +134,20 @@
   let suffixed = $state(new Set<string>());
   let measureCanvas: HTMLCanvasElement | null = null;
 
-  $effect(() => {
-    void widthTick;
+  // The groups are rebuilt every second for the ticking times; the titles, and so
+  // the measurement, change only when this key does.
+  const measured = $derived.by(() => {
     // The "+N more" overlay's lines sit right under the strip's, so they are
     // compared with them while it is open.
     const listed = openKey === "more" ? groups : visible;
-    const singles = listed.filter((group) => group.entries.length === 1).map((group) => group.entries[0]!);
+    return listed.filter((group) => group.entries.length === 1).map((group) => group.entries[0]!);
+  });
+  const measuredKey = $derived(measured.map((entry) => `${entry.id}\u0000${title(entry)}`).join("\u0001"));
+
+  $effect(() => {
+    void widthTick;
+    void measuredKey;
+    const singles = untrack(() => measured);
     if (section === null || singles.length < 2) {
       if (suffixed.size > 0) suffixed = new Set();
       return;
@@ -164,15 +185,20 @@
   }
 
   // Stop from the keyboard or a screen reader: focus goes to whatever took the
-  // stopped line's place, never to the page body.
+  // stopped line's place, never to the page body. The place is taken from the
+  // stopped timer's group, not from the DOM: stopping a session can unmount the
+  // overlay it sat in, and its index there means nothing in the main list.
   async function stop(entry: TimeEntry, event: MouseEvent): Promise<void> {
+    const button = event.currentTarget as HTMLElement;
     const fromKeyboard = event.detail === 0;
     // Held on to: stopping the last timer unmounts the strip, and the binding
     // goes null with it.
     const strip = section;
-    const overlay = (event.currentTarget as HTMLElement).closest<HTMLElement>("[data-pin-scroll]");
-    const line = (event.currentTarget as HTMLElement).closest("li");
-    const lineIndex = line === null ? -1 : [...(line.parentElement?.children ?? [])].indexOf(line);
+    const overlay = button.closest<HTMLElement>("[data-pin-scroll]");
+    const overlayIndex = overlay === null ? -1 : [...overlay.querySelectorAll(".pin-stop")].indexOf(button);
+    const key = groups.find((group) => group.entries.some((member) => member.id === entry.id))?.key ?? null;
+    const lineIndex = visible.findIndex((group) => group.key === key);
+    const place = lineIndex === -1 ? visible.length : lineIndex;
     await onstop(entry);
     if (!fromKeyboard || strip === null) return;
     await tick();
@@ -180,29 +206,55 @@
       onempty();
       return;
     }
+    const control = placeTaker(strip, overlay, overlayIndex, key, place);
+    if (control === null) {
+      onempty();
+      return;
+    }
+    control.focus({ preventScroll: true });
+  }
+
+  function placeTaker(
+    strip: HTMLElement,
+    overlay: HTMLElement | null,
+    overlayIndex: number,
+    key: string | null,
+    place: number,
+  ): HTMLElement | null {
+    // Still open: the next Stop in the same list, else the one above it.
     if (overlay !== null && overlay.isConnected) {
-      const next = overlay.querySelector<HTMLElement>(".pin-stop");
-      if (next !== null) {
-        next.focus({ preventScroll: true });
-        return;
-      }
+      const stops = overlay.querySelectorAll<HTMLElement>(".pin-stop");
+      const next = stops[overlayIndex] ?? stops[overlayIndex - 1];
+      if (next !== undefined) return next;
     }
     const items = [...strip.querySelectorAll<HTMLElement>(":scope > ul > li")];
-    const target = items[lineIndex] ?? items[lineIndex - 1] ?? items.at(-1);
-    const control =
-      target?.querySelector<HTMLElement>(":scope > .pin-stop, :scope > .pin-toggle") ??
-      strip.querySelector<HTMLElement>(".pin-more");
-    if (control) control.focus({ preventScroll: true });
-    else onempty();
+    const more = strip.querySelector<HTMLElement>(".pin-more");
+    // The timer's group is still running: its line, or "+N" if it is behind it.
+    const own = visible.findIndex((group) => group.key === key);
+    if (own !== -1) return lineControl(items[own]) ?? more;
+    if (hidden.some((group) => group.key === key)) return more;
+    // Gone: the line that moved into its place, else the one above, else "+N".
+    return lineControl(items[place] ?? items[place - 1]) ?? more;
+  }
+
+  function lineControl(line: HTMLElement | undefined): HTMLElement | null {
+    return line?.querySelector<HTMLElement>(":scope > .pin-stop, :scope > .pin-toggle") ?? null;
+  }
+
+  // Enter activates a button on keydown and focus moves on to the next Stop, so
+  // a held key would stop timer after timer; only the first press counts.
+  // Separate quick presses each stop one, and Undo brings them all back.
+  function onStopKeydown(event: KeyboardEvent): void {
+    if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault();
   }
 </script>
 
 <svelte:document onclick={onDocumentClick} onkeydown={onKeydown} />
 
-{#snippet entryLine(entry: TimeEntry, label: string, showDot: boolean)}
+{#snippet entryLine(entry: TimeEntry, label: string, showDot: boolean, twinGroup?: string)}
   {@const project = projectByID(entry.project_id)}
   {@const titleID = `${uid}-t-${entry.id}`}
-  <li class="pin-line">
+  <li class="pin-line" data-twin-group={twinGroup}>
     <span class="dot" style="background: {showDot ? (project?.color ?? 'var(--border)') : 'transparent'}"></span>
     <button
       type="button"
@@ -225,6 +277,7 @@
       aria-describedby={titleID}
       data-twin="stop:{entry.id}"
       onclick={(event) => void stop(entry, event)}
+      onkeydown={onStopKeydown}
     >
       <span class="face" aria-hidden="true"><span class="glyph"></span></span>
     </button>
@@ -235,7 +288,12 @@
      or start time. -->
 {#snippet sessions(group: TaskGroup)}
   {#each group.entries as entry (entry.id)}
-    {@render entryLine(entry, entry.agent_session_id ? `#${sessionTag(entry.agent_session_id)}` : formatTime(entry.started_at), false)}
+    {@render entryLine(
+      entry,
+      entry.agent_session_id ? `#${sessionTag(entry.agent_session_id)}` : formatTime(entry.started_at),
+      false,
+      groupTwin(group.key),
+    )}
   {/each}
 {/snippet}
 
@@ -542,6 +600,15 @@
 
   .pin-stop:focus-visible {
     outline: none;
+  }
+
+  /* Inset: a line clips whatever is drawn outside it, and the title, the group
+     toggle and "+N" all fill their line's height. */
+  .pin-title:focus-visible,
+  .pin-toggle:focus-visible,
+  .pin-more:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .pin-stop:focus-visible .face {

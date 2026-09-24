@@ -12,8 +12,10 @@
 //
 // Scroll anchoring is done here by hand rather than left to the browser: Safari
 // has none, and Chromium's own would hide every mistake made here from the tests.
-// .feed carries overflow-anchor: none so the browser never corrects the same
-// shift a second time.
+// The browser's is switched off for the whole document while the scroller runs,
+// so it never corrects the same shift a second time. That has to be on the body:
+// Chromium still anchors the page when only html, main or the feed opt out, and
+// a running card growing above the reader got corrected twice.
 //
 // A correction is an instant scroll, and an instant scroll cancels a smooth one in
 // progress - Home, a tap on the iOS status bar, a fling. Corrections come from
@@ -49,7 +51,7 @@ const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home
 const PAGE_KEYS = new Set(["PageUp", "PageDown", " "]);
 
 /** Input that may start a scroll before the first scroll event reports it. */
-const READER_INPUTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+const READER_INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydown"] as const;
 
 /** A page step keeps this much of the previous page on screen, as Chromium's own does. */
 const PAGE_OVERLAP = 40;
@@ -58,6 +60,8 @@ const PAGE_REPEAT_MS = 1000;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
+/** Where Space presses a control instead of scrolling the page (a link lets it scroll). */
+const PRESSES_SPACE = `button, summary, [role=button], ${KEEPS_PAGE_KEYS}`;
 
 interface Anchor {
   element: Element;
@@ -66,7 +70,7 @@ interface Anchor {
   /** Document coordinates, so scrolling between capture and check changes nothing. */
   top: number;
   dayTop: number;
-  /** The reading line when it was captured: the pinned card's bottom, or 0. */
+  /** The reading line when it was captured: the pinned strip's bottom, or 0. */
   line: number;
 }
 
@@ -79,9 +83,11 @@ interface Measurement {
 
 export interface FeedElements {
   feed: HTMLElement;
-  /** Zero-height marker at the pinned card's place in the flow. */
+  /** Zero-height marker right before the strip's box in the flow. */
   sentinel: () => HTMLElement | null;
   pinned: () => HTMLElement | null;
+  /** The full running card above the feed, hidden while the strip is stuck. */
+  card?: () => HTMLElement | null;
 }
 
 export class FeedScroller {
@@ -104,12 +110,17 @@ export class FeedScroller {
   #frame = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   #readerActiveAt = 0;
+  /** The reader's last actual scroll - a scroll event, the wheel or a scrolling key, not a click. */
+  #scrolledAt = 0;
   /** Where our own last correction scrolled to, so its scroll event is not the reader's. */
   #ownScrollTarget: number | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
   #focusInPinned = false;
+  /** The hidden running card, held at its height while the page scrolls. */
+  #heldCard: HTMLElement | null = null;
+  #releaseTimer: ReturnType<typeof setTimeout> | undefined;
   /** Where the last page key is scrolling to, so a quick repeat continues from there. */
   #page: { target: number; at: number } | null = null;
   #observer: ResizeObserver | null = null;
@@ -136,6 +147,9 @@ export class FeedScroller {
     // ones outside this page such as the header wrapping.
     this.#observer.observe(document.body);
     for (const day of elements.feed.querySelectorAll<HTMLElement>(":scope > .day")) this.#observer.observe(day);
+    const body = document.body.style;
+    const anchoring = body.overflowAnchor;
+    body.overflowAnchor = "none";
     window.addEventListener("scroll", this.#onScroll, { passive: true });
     for (const type of READER_INPUTS) window.addEventListener(type, this.#onReaderInput, { capture: true, passive: true });
     window.addEventListener("resize", this.schedule);
@@ -155,8 +169,11 @@ export class FeedScroller {
       cancelAnimationFrame(this.#frame);
       this.#frame = 0;
       clearTimeout(this.#idleTimer);
+      clearTimeout(this.#releaseTimer);
+      this.#releaseCard();
       this.#elements = null;
       this.#setScrollPadding("");
+      body.overflowAnchor = anchoring;
     };
   }
 
@@ -210,6 +227,7 @@ export class FeedScroller {
       this.#ownScrollTarget = null;
     } else {
       this.#readerActiveAt = performance.now();
+      this.#scrolledAt = this.#readerActiveAt;
     }
     this.schedule();
   };
@@ -220,13 +238,27 @@ export class FeedScroller {
     // heading, so the next page key starts from wherever the page is.
     if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
     this.#readerActiveAt = performance.now();
+    // A press or a tap may still become a scroll, which is enough to hold the
+    // probe back, but it is not one: Repeat and Undo are pressed.
+    const pressed =
+      event.type === "pointerdown" ||
+      event.type === "touchstart" ||
+      (event instanceof KeyboardEvent &&
+        event.key === " " &&
+        event.target instanceof Element &&
+        event.target.closest(PRESSES_SPACE) !== null);
+    if (pressed) return;
+    this.#scrolledAt = this.#readerActiveAt;
+    // The frame this asks for holds the hidden card before a scroll event
+    // would, in case a timer arrives between the two.
+    if (this.stuck && this.#heldCard === null) this.schedule();
   };
 
-  // A page step under the stuck card is a page less the card, as the scroll
+  // A page step under the stuck strip is a page less the strip, as the scroll
   // padding asks - but WebKit ignores that padding for page keys, and a full page
-  // would carry the next unread rows beneath the card. So the step is taken here,
+  // would carry the next unread rows beneath the strip. So the step is taken here,
   // in every engine, whenever the page itself is what the key would scroll. Also
-  // before the card sticks: the step that sticks it must not bury rows either.
+  // before the strip sticks: the step that sticks it must not bury rows either.
   #onKeydown = (event: KeyboardEvent): void => {
     const pinned = this.#elements?.pinned() ?? null;
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || pinned === null) return;
@@ -240,12 +272,12 @@ export class FeedScroller {
     const active = document.activeElement;
     const nothingFocused = active === null || active === document.body || active === document.documentElement;
     // Space presses a focused control; page keys belong to fields, dialogs and
-    // the pinned card while it can still scroll its own rows that way.
+    // an open overlay of the strip while it can still scroll that way.
     if (!nothingFocused) {
       if (event.key === " " || active.closest(KEEPS_PAGE_KEYS) !== null) return;
-      const card = pinned.firstElementChild;
-      if (card !== null && pinned.contains(active)) {
-        const room = direction > 0 ? card.scrollHeight - card.clientHeight - card.scrollTop : card.scrollTop;
+      const overlay = pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
+      if (overlay !== null) {
+        const room = direction > 0 ? overlay.scrollHeight - overlay.clientHeight - overlay.scrollTop : overlay.scrollTop;
         if (room > 1) return;
       }
     }
@@ -266,10 +298,26 @@ export class FeedScroller {
     const elements = this.#elements;
     if (elements === null) return;
     const days = this.#days();
-    // A change made outside a frame - a sync merge, Stop in the pinned card - is
+    // Released before the correction below, so that it is the correction that
+    // absorbs whatever the held card grew or shrank by - and at the latest in the
+    // frame the page unsticks, read fresh rather than from the last frame, so the
+    // card never shows cut to its old height. When it unsticks because the card
+    // is coming into view, the anchor from the stuck frame is dropped: the card
+    // takes its new height in view, as any change above the feed does once the
+    // strip lets go, because a correction would stop the reader's scroll -
+    // Safari's status-bar tap would end at the card instead of the top. A card
+    // that went away with its last timer is still corrected for.
+    if (this.#heldCard !== null) {
+      const unstuck = this.#pinnedRect() === null;
+      if (unstuck || this.#quietFor() >= IDLE_MS) {
+        if (unstuck && this.#heldCard.isConnected) this.#anchor = null;
+        this.#releaseCard();
+      }
+    }
+    // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.
-    this.#keepAnchor();
+    this.#keepAnchor(true);
     const feed = elements.feed;
     const width = feed.clientWidth;
     const feedTop = feed.getBoundingClientRect().top;
@@ -302,6 +350,7 @@ export class FeedScroller {
     if (gapBottom !== this.gapBottom) this.gapBottom = gapBottom;
     if ((stale !== null) !== this.measuring) this.measuring = stale !== null;
     const line = this.#updatePinned();
+    this.#holdCard();
     // Still the layout from before the writes above: Svelte applies them in a
     // microtask after this callback, so the ResizeObserver compares the mounts and
     // unmounts they cause against this position.
@@ -338,7 +387,7 @@ export class FeedScroller {
   }
 
   // The first row whose bottom is below the reading line - the top of the
-  // viewport, or the bottom of the pinned card while it is stuck: what the reader
+  // viewport, or the bottom of the pinned strip while it is stuck: what the reader
   // is looking at. Only while that line is inside the feed: above it the start
   // form and the running card are on screen, and a change there is meant to push
   // the feed down in plain view, as it always has.
@@ -371,15 +420,19 @@ export class FeedScroller {
         signature: signatures.get(key) ?? "",
       });
     }
-    this.#keepAnchor();
+    this.#keepAnchor(false);
     this.schedule();
   };
 
   // Runs after layout and before paint, so the jump it undoes is never shown.
-  // The anchor stays where it was on screen - unless the pinned card grew over it,
-  // in which case it moves down with the card's bottom edge instead of being
+  // The anchor stays where it was on screen - unless the pinned strip grew over
+  // it, in which case it moves down with the strip's bottom edge instead of being
   // buried: repeating a task deep in the feed must not hide the row just clicked.
-  #keepAnchor(): void {
+  // Only while the page is not being scrolled, though: that move is a scroll, and
+  // a timer arriving by sync mid-fling would cut the fling short. Then the strip
+  // simply covers one more line. The click on Repeat or Undo that started the
+  // timer is no scroll, so it does not count.
+  #keepAnchor(absorb: boolean): void {
     const anchor = this.#anchor;
     if (anchor === null) return;
     let shift: number;
@@ -391,7 +444,29 @@ export class FeedScroller {
       return;
     }
     const line = this.#readingLine();
-    const correction = shift - Math.max(0, line - anchor.line);
+    const still = performance.now() - this.#scrolledAt >= IDLE_MS;
+    // While the page scrolls, the held card - hidden above the reader - takes the
+    // shift instead of the page: it gives up exactly what was added above, a row
+    // landing in today's day, say, so the reader's row stays put without a
+    // scroll that would stop theirs. Once scrolling is quiet the card takes its
+    // real height and the page the net correction. The card only ever shrinks:
+    // growth above the reader bigger than the whole card is left to the scroll,
+    // and so is anything above it shrinking - a taller card would pull the strip's
+    // stick point down with it, and a scroll that ends near there would unstick the
+    // strip, snap the card back and jump the reader's row. So is a shift found
+    // inside the ResizeObserver callback: resizing the card there resizes the
+    // observed body again, a loop. A sync merge lands outside a frame, so the
+    // frame's own pass sees it first.
+    const held = this.#heldCard;
+    if (absorb && !still && held !== null && held.isConnected) {
+      const height = parseFloat(held.style.height) || 0;
+      const absorbed = Math.max(Math.min(shift, height), 0);
+      if (absorbed >= 0.5) {
+        held.style.height = `${height - absorbed}px`;
+        shift -= absorbed;
+      }
+    }
+    const correction = shift - (still ? Math.max(0, line - anchor.line) : 0);
     anchor.top += shift;
     anchor.dayTop += shift;
     anchor.line = line;
@@ -415,7 +490,7 @@ export class FeedScroller {
     return this.#pinnedRect()?.bottom ?? 0;
   }
 
-  // Where the pinned card's bottom edge is once it sticks, stuck yet or not: its
+  // Where the pinned strip's bottom edge is once it sticks, stuck yet or not: its
   // sticky offset (the safe area) plus its height.
   #stuckLine(): number {
     const pinned = this.#elements?.pinned() ?? null;
@@ -423,7 +498,43 @@ export class FeedScroller {
     return (parseFloat(getComputedStyle(pinned).top) || 0) + pinned.offsetHeight;
   }
 
-  // Returns the reading line: the pinned card's bottom while it is stuck.
+  #quietFor(): number {
+    return performance.now() - this.#scrolledAt;
+  }
+
+  // While the strip is stuck the full card above the reader is invisible, yet a
+  // timer arriving by sync still resizes it, and correcting for that is an
+  // instant scroll that would stop a fling or a smooth scroll dead. So while the
+  // page moves, the card keeps the height it had; it takes its real one, and the
+  // reader's row its correction, once scrolling has been quiet for IDLE_MS.
+  // Holding changes no layout, so it is safe at any point in a frame.
+  #holdCard(): void {
+    const card = this.#elements?.card?.() ?? null;
+    if (card !== this.#heldCard) this.#releaseCard();
+    if (card === null || !this.stuck) return;
+    const quiet = this.#quietFor();
+    if (quiet >= IDLE_MS) return;
+    if (this.#heldCard === null) {
+      card.style.height = `${card.getBoundingClientRect().height}px`;
+      card.style.overflow = "clip";
+      this.#heldCard = card;
+    }
+    clearTimeout(this.#releaseTimer);
+    this.#releaseTimer = setTimeout(this.schedule, IDLE_MS - quiet);
+  }
+
+  #releaseCard(): void {
+    const card = this.#heldCard;
+    if (card === null) return;
+    this.#heldCard = null;
+    card.style.removeProperty("height");
+    card.style.removeProperty("overflow");
+    this.schedule();
+  }
+
+  // Returns the reading line: the pinned strip's bottom while it is stuck. The
+  // pinned element is the strip's zero-height box, so its rect's bottom is its
+  // top, which is where the strip ends.
   #updatePinned(): number {
     const stuckRect = this.#pinnedRect();
     const stuck = stuckRect !== null;
@@ -437,7 +548,7 @@ export class FeedScroller {
     return stuckRect?.bottom ?? 0;
   }
 
-  // While focus is inside the pinned card the padding is lifted. Its controls sit
+  // While focus is inside the pinned strip the padding is lifted. Its controls sit
   // in the padded strip by design, and WebKit scrolls the page to "reveal" a
   // focused Stop there even with the negative scroll margin that settles it for
   // Chromium. Focus events fire before the browser scrolls the focused element
@@ -450,9 +561,9 @@ export class FeedScroller {
   };
 
   // The padding keeps PageDown and focus scrolling from moving rows under the
-  // stuck card. --pinned-offset lets the card's own controls cancel it out: they
-  // sit inside the padded strip by design, and without the negative scroll margin
-  // they get (see TimerPage) focusing Stop would scroll the page to "reveal" it.
+  // stuck strip. --pinned-offset lets the strip's own controls cancel it out: they
+  // sit inside the padded band by design, and without the negative scroll margin
+  // they get (see PinnedStrip) focusing Stop would scroll the page to "reveal" it.
   #setScrollPadding(padding: string): void {
     if (padding === this.#scrollPadding) return;
     this.#scrollPadding = padding;

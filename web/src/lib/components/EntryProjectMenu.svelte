@@ -2,7 +2,6 @@
   import { tick } from "svelte";
   import { appState, projectByID, updateEntry } from "../state/app.svelte";
   import { t } from "../i18n";
-  import { floatOutOfClip } from "../float-menu";
 
   interface Props {
     entryID: string;
@@ -131,6 +130,17 @@
     }
   }
 
+  // The Timer page closes the running card's quick menus when the pinned strip
+  // takes over from it; the event names the element whose menus must close.
+  $effect(() => {
+    const close = (event: Event): void => {
+      const scope = (event as CustomEvent<Element>).detail;
+      if (open && root !== null && scope.contains(root)) closeMenu();
+    };
+    document.addEventListener("worktime:close-menus", close);
+    return () => document.removeEventListener("worktime:close-menus", close);
+  });
+
   function onDocumentClick(event: MouseEvent): void {
     if (open && root && !event.composedPath().includes(root)) closeMenu();
   }
@@ -170,7 +180,6 @@
       role="listbox"
       aria-label={t("Project")}
       aria-busy={saving}
-      {@attach floatOutOfClip}
     >
       {#each options as option, index (option.id)}
         <button

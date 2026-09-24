@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import {
     appState,
     clock,
@@ -7,11 +7,10 @@
     projectByID,
     runningEntries,
     startTimer,
-    stopTimer,
     updateEntries,
     type GroupEntryPatch,
   } from "../lib/state/app.svelte";
-  import { deleteEntryWithUndo } from "../lib/state/undo.svelte";
+  import { deleteEntryWithUndo, stopTimerWithUndo } from "../lib/state/undo.svelte";
   import {
     entryDurationMs,
     displayEntryDescription,
@@ -23,6 +22,7 @@
   } from "../lib/format";
   import {
     groupDayEntries,
+    groupTwin,
     snapshotTaskGroup,
     suggestionWindowStart,
     taskSuggestions,
@@ -47,6 +47,7 @@
   import DescriptionInput from "../lib/components/DescriptionInput.svelte";
   import EntryEditor from "../lib/components/EntryEditor.svelte";
   import GroupEditor from "../lib/components/GroupEditor.svelte";
+  import PinnedStrip from "../lib/components/PinnedStrip.svelte";
   import EntryProjectMenu from "../lib/components/EntryProjectMenu.svelte";
   import EntryTagsMenu from "../lib/components/EntryTagsMenu.svelte";
   import ProjectSelect from "../lib/components/ProjectSelect.svelte";
@@ -109,10 +110,61 @@
   let feedElement = $state<HTMLElement | null>(null);
   let sentinelElement = $state<HTMLElement | null>(null);
   let pinnedElement = $state<HTMLElement | null>(null);
+  let fullCardElement = $state<HTMLElement | null>(null);
+  let stripElement = $state<HTMLElement | null>(null);
+
+  // The running timers exist twice: the full card, which scrolls away with the
+  // page and is where they are edited, and the compact strip, pinned while the
+  // page is scrolled into the feed. Exactly one is live. On the switch, focus
+  // moves to the same control in the other one before this one goes inert -
+  // inert would drop it to the page body - and a quick menu left open in the
+  // full card closes rather than waiting there for the reader's return.
+  $effect(() => {
+    const stuck = scroller.stuck;
+    const card = fullCardElement;
+    const strip = stripElement;
+    if (card === null || strip === null) return;
+    untrack(() => handOff(stuck, card, strip));
+  });
+
+  function handOff(stuck: boolean, card: HTMLElement, strip: HTMLElement): void {
+    const from = stuck ? card : strip;
+    const to = stuck ? strip : card;
+    to.inert = false;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && from.contains(active)) twinOf(active, to)?.focus({ preventScroll: true });
+    if (stuck) document.dispatchEvent(new CustomEvent("worktime:close-menus", { detail: card }));
+    from.inert = true;
+  }
+
+  // The same entry and the same role on the other side. A project or tags
+  // trigger has no counterpart in the strip, so its row's title stands in; a
+  // session whose group is collapsed on the other side is reached through the
+  // group's line; a row hidden behind "+N more" through that line.
+  function twinOf(control: HTMLElement, target: HTMLElement): HTMLElement | null {
+    const key =
+      control.closest<HTMLElement>("[data-twin]")?.dataset.twin ??
+      control.closest(".item, .group-line")?.querySelector<HTMLElement>("[data-twin]")?.dataset.twin;
+    const group = control.closest<HTMLElement>("[data-twin-group]")?.dataset.twinGroup;
+    const find = (twin: string | undefined) =>
+      twin === undefined ? null : target.querySelector<HTMLElement>(`[data-twin="${CSS.escape(twin)}"]`);
+    return find(key) ?? find(group) ?? find("more") ?? target.querySelector<HTMLElement>("button");
+  }
+
+  // Without scrolling: the reader may be deep in the feed, and stopping the last
+  // timer must not move the page any more than stopping another one does.
+  function focusStartForm(): void {
+    startForm?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }
 
   $effect(() => {
     if (feedElement === null) return;
-    return scroller.start({ feed: feedElement, sentinel: () => sentinelElement, pinned: () => pinnedElement });
+    return scroller.start({
+      feed: feedElement,
+      sentinel: () => sentinelElement,
+      pinned: () => pinnedElement,
+      card: () => fullCardElement,
+    });
   });
 
   // New data can move or resize the mounted days; the scroller replans on the
@@ -377,6 +429,7 @@
       <button
         type="button"
         class="desc"
+        data-twin={entry.stopped_at === null ? `title:${entry.id}` : undefined}
         use:registerEntryButton={entry.id}
         onclick={() => (editingID = entry.id)}
       >
@@ -391,7 +444,7 @@
       <span class="when">
         <span class="dur elapsed">{formatDuration(entryDurationMs(entry, clock.now))}</span>
       </span>
-      <button onclick={() => stopTimer(entry.id)}>{t("Stop")}</button>
+      <button data-twin="stop:{entry.id}" onclick={() => void stopTimerWithUndo(entry)}>{t("Stop")}</button>
     {:else}
       <span class="when">
         <!-- The entry is finished, so its duration is fixed; reading clock.now here
@@ -432,6 +485,7 @@
       class="row group-row"
       aria-expanded={shown}
       {...shown ? { "aria-controls": listID } : {}}
+      data-twin={dayISO === "running" ? groupTwin(group.key) : undefined}
       onclick={() => toggleGroup(dayISO, group)}
     >
       <svg
@@ -524,7 +578,7 @@
     </span>
   </div>
   {#if shown}
-    <div class="members" id={listID}>
+    <div class="members" id={listID} data-twin-group={dayISO === "running" ? groupTwin(group.key) : undefined}>
       {#each group.entries as entry (entry.id)}
         {@render entryRow(entry, true)}
       {/each}
@@ -555,24 +609,37 @@
   <button class="primary" type="submit">{t("Start")}</button>
 </form>
 
-<!-- Marks where the running card sits in the flow: once the card is further
-     down the screen than this marker, it is stuck to the top. -->
-<div bind:this={sentinelElement} aria-hidden="true"></div>
-
-<!-- The running timers stay pinned while the feed scrolls under them. -->
+<!-- The running timers: the full card scrolls with the page, and once its last
+     strip-sized slice passes under the top edge the compact strip takes over. -->
 {#if running.length > 0}
-  <div class="pinned" class:stuck={scroller.stuck} bind:this={pinnedElement}>
-    <div class="card" class:has-groups={runningGroups.some((group) => group.entries.length > 1)}>
-      <h3>{t("Running")}</h3>
-      {#each runningGroups as group, index (group.key)}
-        {#if group.entries.length === 1}
-          {@render entryRow(group.entries[0]!, false)}
-        {:else}
-          {@render groupRow("running", group, index)}
-        {/if}
-      {/each}
-    </div>
+  <div
+    class="card running-full"
+    class:stuck={scroller.stuck}
+    class:has-groups={runningGroups.some((group) => group.entries.length > 1)}
+    bind:this={fullCardElement}
+  >
+    <h3>{t("Running")}</h3>
+    {#each runningGroups as group, index (group.key)}
+      {#if group.entries.length === 1}
+        {@render entryRow(group.entries[0]!, false)}
+      {:else}
+        {@render groupRow("running", group, index)}
+      {/if}
+    {/each}
   </div>
+  <!-- Marks the strip's box in the flow: once the box is further down the
+       screen than this marker, it is stuck to the top. -->
+  <div bind:this={sentinelElement} aria-hidden="true"></div>
+  <PinnedStrip
+    groups={runningGroups}
+    now={clock.now}
+    stuck={scroller.stuck}
+    onedit={(entryID) => (editingID = entryID)}
+    onstop={stopTimerWithUndo}
+    onempty={focusStartForm}
+    bind:box={pinnedElement}
+    bind:section={stripElement}
+  />
 {/if}
 
 <!-- One day of the feed, in a wrapper that is measured as a whole, margin
@@ -624,7 +691,12 @@
      not mounted; a probe - stale days above the window, mounted for one frame to
      be measured again - splits the top gap in two. data-measuring is up while any
      such day is left, which the tests wait on. -->
-<div class="feed" bind:this={feedElement} data-measuring={scroller.measuring ? "" : undefined}>
+<div
+  class="feed"
+  class:below-running={running.length > 0}
+  bind:this={feedElement}
+  data-measuring={scroller.measuring ? "" : undefined}
+>
   <div class="feed-gap" style:height="{scroller.gapAbove}px"></div>
   {#each probeDays as day (day.iso)}
     {@render dayCard(day)}
@@ -683,54 +755,32 @@
     font-size: 0.95rem;
   }
 
-  /* Pinned under the top edge while the feed scrolls under it. Above the form's
-     popups (5 and 6) only once stuck - by then the form is off screen - and below
-     them before, when the description suggestions drop over this card. */
-  .pinned {
-    position: sticky;
-    top: env(safe-area-inset-top, 0px);
-    z-index: 3;
-    /* A margin rather than the card's own: the gap under a stuck card is then not
-       part of any box, so clicks there reach the rows scrolling beneath it. */
-    margin-bottom: 1rem;
+  /* The editing surface for running timers, uncapped and in the flow. The gap
+     below it belongs to the feed, so the strip's box - right after this card -
+     sits exactly at the card's bottom edge. While the strip is pinned the card
+     is hidden, but only once the strip has faded in over it. */
+  .running-full {
+    margin-bottom: 0;
     overflow-anchor: none;
   }
 
-  .pinned.stuck {
-    z-index: 7;
+  .running-full.stuck {
+    visibility: hidden;
+    transition: visibility 0s linear 120ms;
   }
 
-  /* While stuck, the page carries a scroll padding the height of this card (set by
-     the feed scroller), so focus and PageDown never leave a row hidden under it.
-     The card's own controls live inside that strip, though, and focusing Stop would
-     otherwise scroll the page to "reveal" a button that is already on screen. */
-  .pinned :global(*) {
-    scroll-margin-top: calc(-1 * var(--pinned-offset, 0px));
-  }
-
-  /* Capped so a room full of agent timers cannot bury the feed; beyond the cap the
-     card scrolls inside itself, and the row menus lift themselves out of that clip
-     (lib/float-menu.ts). svh rather than dvh: dvh changes as the iOS toolbars
-     collapse, which would resize the card - and move the feed - mid-scroll. The
-     scroll padding pairs with the negative scroll margin above: inside this
-     scroller they cancel out, so focus still scrolls a hidden Stop into view
-     within the card. */
-  .pinned > .card {
-    margin-bottom: 0;
-    max-height: 50vh;
-    max-height: 50svh;
-    overflow-y: auto;
-    scroll-padding-top: var(--pinned-offset, 0px);
-  }
-
-  .pinned.stuck > .card {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  @media (prefers-reduced-motion: reduce) {
+    .running-full.stuck {
+      transition: none;
+    }
   }
 
   .feed {
     overflow-anchor: none;
+  }
+
+  .feed.below-running {
+    margin-top: 1rem;
   }
 
   /* A block formatting context keeps the card's bottom margin inside the wrapper,
@@ -934,13 +984,6 @@
   }
 
   @media (max-width: 34rem) {
-    /* Two running rows in full - each with its project and tags line - and the
-       top of a third, so a card that scrolls looks like one. */
-    .pinned > .card {
-      max-height: min(50vh, 16rem);
-      max-height: min(50svh, 16rem);
-    }
-
     form.row {
       flex-wrap: wrap;
     }

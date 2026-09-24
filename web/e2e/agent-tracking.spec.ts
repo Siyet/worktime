@@ -272,6 +272,41 @@ test.describe("agent tracking", () => {
     });
   });
 
+  test("Undo after stopping an agent row hands the session its row back", async ({ page, request, agentServer }) => {
+    const sessionID = crypto.randomUUID();
+    const base = Date.now() - 2 * MINUTE;
+    await signal(request, agentServer.url, sessionID, "start", { started_at: base });
+    const opened = await signal(request, agentServer.url, sessionID, "heartbeat", { at: base });
+
+    await page.goto(agentServer.url + "/#/");
+    const card = runningCard(page);
+    await pollUI(page, async () => {
+      await expect(card.locator(".item")).toHaveCount(1);
+    });
+    const stopPushed = pushBarrier(page, '"stopped_at":1');
+    await card.getByRole("button", { name: "Stop" }).click();
+    await expect(page.getByRole("heading", { name: "Running" })).toHaveCount(0);
+    await stopPushed;
+
+    // The agent works on before the Undo: the session lets the stopped row go
+    // and opens a replacement.
+    const replaced = await signal(request, agentServer.url, sessionID, "heartbeat", { at: Date.now() });
+    expect(replaced.time_entry_id).not.toBe(opened.time_entry_id);
+
+    const restored = pushBarrier(page, '"stopped_at":null');
+    await page.locator(".toast").getByRole("button", { name: "Undo" }).click();
+    await restored;
+
+    // One running row, the original: the replacement nobody touched only
+    // duplicated its time and is gone, and the session writes into the original.
+    await pollUI(page, async () => {
+      await expect(runningCard(page).locator(".item")).toHaveCount(1);
+      await expect(page.locator(".item").filter({ hasText: "Claude Code" })).toHaveCount(1);
+    });
+    const resumed = await signal(request, agentServer.url, sessionID, "heartbeat", { at: Date.now() });
+    expect(resumed.time_entry_id).toBe(opened.time_entry_id);
+  });
+
   test("reconciliation closes a silent session at its last activity", async ({ page, request, agentServerStale }) => {
     const sessionID = crypto.randomUUID();
     const lastActivity = Date.now() - MINUTE;

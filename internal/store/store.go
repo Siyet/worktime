@@ -269,6 +269,40 @@ CREATE TABLE instance_settings (
 );
 INSERT INTO instance_settings (id, auto_update, updated_at) VALUES (1, 0, 0);
 `,
+	// 012: remember what the agent flow did to a row, so a sync write that brings
+	// the row back can tell the server's decisions from the user's. All three
+	// columns live on the server only - no DTO carries them, so the wire format is
+	// unchanged - and are compared by value, so a rename by anyone keeps them.
+	//
+	//   - agent_end is the stopped_at the agent flow wrote when it closed the row
+	//     (an idle split, a stop hook, reconciliation, a restore). A row pushed
+	//     running again whose stop equals it keeps that stop.
+	//   - agent_deleted_at is the deleted_at the agent flow wrote when it removed
+	//     the row (zero-minute technical cleanup, a replacement a restore made
+	//     redundant). A push that clears it gets the tombstone put back.
+	//   - agent_paused_from is set on a row the session opened after an idle
+	//     pause: the last billable moment before it, where an idle split closes
+	//     the row that ran until then. A restored earlier row closes there.
+	//
+	// Before this migration nothing recorded who ended a row, so every agent row
+	// that is already stopped or deleted counts as ended by the server: its stop
+	// becomes agent_end, its tombstone agent_deleted_at. That is the safe side. A
+	// server end taken for the user's would let a stale device reopen the row and
+	// bill the gap the server cut out; a user's end taken for the server's costs
+	// only an Undo still in flight across the upgrade, which keeps the stop. No
+	// pause before this migration is known, and rows outside the agent flow keep
+	// NULL everywhere. The backfill touches server-only columns, so no row gets a
+	// new server_seq and clients pull nothing. See agentRestores and
+	// settleRestoredAgentEntry.
+	`
+ALTER TABLE time_entries ADD COLUMN agent_end INTEGER;
+ALTER TABLE time_entries ADD COLUMN agent_deleted_at INTEGER;
+ALTER TABLE time_entries ADD COLUMN agent_paused_from INTEGER;
+UPDATE time_entries SET agent_end = stopped_at
+WHERE agent_session_id IS NOT NULL AND stopped_at IS NOT NULL;
+UPDATE time_entries SET agent_deleted_at = deleted_at
+WHERE agent_session_id IS NOT NULL AND deleted_at IS NOT NULL;
+`,
 }
 
 type Store struct {

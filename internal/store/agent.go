@@ -28,9 +28,10 @@ package store
 // visibly different rows. Ownership of the row is tracked through server_seq:
 // when it no longer matches what the session wrote last, the row was changed
 // outside the agent flow and the session either adopts it (a live row, edited)
-// or lets it go and opens a new one (deleted, or stopped by the user). A row the
-// user sets running again is taken back by its session in the same sync write
-// (see reclaimRestoredAgentEntry), so a let-go row can never run unowned.
+// or lets it go and opens a new one (deleted, or stopped by the user). A row a
+// sync write sets running again is settled in the same transaction (see
+// settleRestoredAgentEntry): the session takes it back or it is closed again,
+// so a let-go row can never run unowned.
 
 import (
 	"context"
@@ -38,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -775,10 +777,12 @@ func resolveAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, 
 		return nil, detachAgentEntry(ctx, transaction, userID, session, now)
 	}
 	// Adopted: whether the name is now the user's is decided by the name itself,
-	// while every outside edit is remembered separately for cleanup safety.
+	// while every outside edit is remembered separately for cleanup safety. A
+	// stale automatic name (a device that had not pulled the task rename yet) is
+	// not a choice, so the rename below brings it up to date.
 	return &agentEntry{
 		id: *session.TimeEntryID, description: description, stoppedAt: stoppedAt,
-		serverSeq: serverSeq, userNamed: description != agentEntryDescription(*session), userEdited: true,
+		serverSeq: serverSeq, userNamed: !isAutomaticAgentName(*session, description), userEdited: true,
 	}, nil
 }
 
@@ -792,145 +796,433 @@ func detachAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, s
 	return err
 }
 
-// reclaimRestoredAgentEntry runs inside Sync after an accepted write that leaves
-// an agent row running: the Timer page's Undo after Stop, any other restart of a
-// stopped row, or an offline client pushing a row it still believes is running.
-// By then the session may already have let that row go - a heartbeat after the
-// user's stop opens a replacement, the stop hook or reconciliation closes the
-// session - and nothing would ever close the row again. Reconciliation walks
-// sessions, not entries, so a running row no session points at is an orphan: it
-// runs forever and double counts next to the replacement. The rule looks only at
-// the state the write produced, so every order of Stop, Undo, heartbeat and stop
-// hook, and every replay, converges on the same outcome:
+// agentRestores collects, during one Sync, the agent rows the push may set
+// running again, and settles them once every pushed row has been written.
 //
-//   - an active session that already points at the row changes nothing here;
-//     the next signal adopts the outside edit as usual.
-//   - an active session that points elsewhere takes the row back as the write is
-//     applied, not on the next heartbeat, and releases what it held until now.
-//   - an ended session takes the row back closed at its end, because nothing
-//     after that moment was tracked, and releases what it held as well.
+// A row is restored when the push leaves it running and not deleted while its
+// stored version before the push was stopped or deleted: the Timer page's Undo
+// after a Stop or a delete, or an offline client pushing a row it still shows
+// running after the server closed or split the session. Reconciliation walks
+// sessions, not entries, so such a row must end up owned by its session or
+// closed again - a running row no session points at would run forever.
 //
-// The restored row is an outside write, so the session records it as edited and
-// as user-named when the description is not the automatic one, and carries the
-// row's project into later segments, as recordAcceptedAgentEntryMutation does
-// for the current row.
-func reclaimRestoredAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, pushed TimeEntry, now int64) error {
-	// The accepted write stored exactly the pushed stopped_at and deleted_at, so
-	// the ordinary push of a stopped or deleted row needs no query at all.
-	if pushed.StoppedAt != nil || pushed.DeletedAt != nil {
+// The rule runs once per row, on the state the whole push left it in, never per
+// pushed version, so the order of rows inside a push cannot change the outcome.
+type agentRestores struct {
+	// wanted holds the ids the push sends running and not deleted at least once.
+	// Only those can end the push running, so only those are read beforehand.
+	wanted map[string]bool
+	// seen marks rows whose state before the push is recorded: the state that
+	// matters is the one before this push first wrote the row.
+	seen      map[string]bool
+	restoring []restoredAgentEntry
+	// accepted holds every row the push wrote. The rule never tombstones one.
+	accepted map[string]bool
+}
+
+// restoredAgentEntry is an agent row as it was stored before the push first
+// wrote it, recorded because the push may leave it running again.
+type restoredAgentEntry struct {
+	id        string
+	sessionID string
+	// prevStoppedAt and prevDeletedAt are the row's end before the push. At least
+	// one is set: a row that was already running is not restored, only edited.
+	prevStoppedAt *int64
+	prevDeletedAt *int64
+	// prevAgentEnd is the end the agent flow wrote, when it wrote one.
+	prevAgentEnd *int64
+}
+
+// restoredAgentRow is a restored row in the state the whole push left it in.
+type restoredAgentRow struct {
+	restoredAgentEntry
+	startedAt   int64
+	description string
+	projectID   *string
+	serverSeq   int64
+}
+
+// sessionEntryRow is a live row of a session other than the restored one.
+type sessionEntryRow struct {
+	id        string
+	startedAt int64
+	stoppedAt *int64
+	serverSeq int64
+}
+
+func newAgentRestores(entries []TimeEntry) *agentRestores {
+	restores := &agentRestores{wanted: map[string]bool{}, seen: map[string]bool{}, accepted: map[string]bool{}}
+	for _, entry := range entries {
+		if entry.StoppedAt == nil && entry.DeletedAt == nil {
+			restores.wanted[entry.ID] = true
+		}
+	}
+	return restores
+}
+
+// remember records the stored state of a row before the push first writes it,
+// so it must run before the row's upsert.
+func (restores *agentRestores) remember(ctx context.Context, transaction *sql.Tx, userID, entryID string) error {
+	if !restores.wanted[entryID] || restores.seen[entryID] {
 		return nil
+	}
+	restores.seen[entryID] = true
+	restored := restoredAgentEntry{id: entryID}
+	var sessionID *string
+	err := transaction.QueryRowContext(ctx, `
+		SELECT agent_session_id, stopped_at, deleted_at, agent_end
+		FROM time_entries WHERE id = ? AND user_id = ?`, entryID, userID).
+		Scan(&sessionID, &restored.prevStoppedAt, &restored.prevDeletedAt, &restored.prevAgentEnd)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	// agent_session_id is server-owned and never pushed, so it comes from the row.
-	var (
-		sessionID   *string
-		projectID   *string
-		description string
-		stoppedAt   *int64
-		deletedAt   *int64
-		serverSeq   int64
-	)
-	err := transaction.QueryRowContext(ctx, `
-		SELECT agent_session_id, project_id, description, stopped_at, deleted_at, server_seq
-		FROM time_entries WHERE id = ? AND user_id = ?`, pushed.ID, userID).
-		Scan(&sessionID, &projectID, &description, &stoppedAt, &deletedAt, &serverSeq)
-	if errors.Is(err, sql.ErrNoRows) {
+	// A row that was running already is not a restore: the push only edits it,
+	// and the next signal adopts that edit as usual.
+	if sessionID == nil || (restored.prevStoppedAt == nil && restored.prevDeletedAt == nil) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if sessionID == nil || stoppedAt != nil || deletedAt != nil {
-		return nil
-	}
-	session, err := getAgentSession(ctx, transaction, userID, *sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
+	restored.sessionID = *sessionID
+	restores.restoring = append(restores.restoring, restored)
+	return nil
+}
 
-	ended := session.Status == agentStatusClosed
-	if !ended && session.TimeEntryID != nil && *session.TimeEntryID == pushed.ID {
-		return nil
-	}
+// accept notes a row the push wrote.
+func (restores *agentRestores) accept(entryID string) {
+	restores.accepted[entryID] = true
+}
 
-	// Anything the session held is released at the moment it stops being the
-	// session's row: now for a live session, its end for an ended one.
-	releaseAt := now
-	ownedSeq := serverSeq
-	if ended {
-		releaseAt = session.LastHeartbeatAt
-		if session.EndedAt != nil {
-			releaseAt = *session.EndedAt
+// settle applies settleRestoredAgentEntry to every remembered row the push wrote
+// and left running, session by session, in started_at order within a session:
+// an earlier row's outcome is what a later one of the same session sees.
+func (restores *agentRestores) settle(ctx context.Context, transaction *sql.Tx, userID string, idleMs, now int64) error {
+	bySession := map[string][]restoredAgentRow{}
+	sessions := []string{}
+	for _, restored := range restores.restoring {
+		if !restores.accepted[restored.id] {
+			continue
 		}
-		// closeAgentEntry clamps to started_at, so an end before the row's start
-		// leaves an empty row rather than a negative one.
-		seq, closed, err := closeAgentEntry(ctx, transaction, userID, &pushed.ID, releaseAt, now)
-		if err != nil {
+		row := restoredAgentRow{restoredAgentEntry: restored}
+		var stoppedAt, deletedAt *int64
+		if err := transaction.QueryRowContext(ctx, `
+			SELECT started_at, stopped_at, deleted_at, description, project_id, server_seq
+			FROM time_entries WHERE id = ? AND user_id = ?`, restored.id, userID).
+			Scan(&row.startedAt, &stoppedAt, &deletedAt, &row.description, &row.projectID, &row.serverSeq); err != nil {
 			return err
 		}
-		if closed {
-			ownedSeq = seq
+		if stoppedAt != nil || deletedAt != nil {
+			continue
+		}
+		if _, known := bySession[restored.sessionID]; !known {
+			sessions = append(sessions, restored.sessionID)
+		}
+		bySession[restored.sessionID] = append(bySession[restored.sessionID], row)
+	}
+	for _, sessionID := range sessions {
+		rows := bySession[sessionID]
+		sort.Slice(rows, func(left, right int) bool {
+			if rows[left].startedAt != rows[right].startedAt {
+				return rows[left].startedAt < rows[right].startedAt
+			}
+			return rows[left].id < rows[right].id
+		})
+		for _, row := range rows {
+			if err := settleRestoredAgentEntry(ctx, transaction, userID, row, restores.accepted, idleMs, now); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// settleRestoredAgentEntry decides one restored row P of session S. prevEnd is
+// the end P had before the push: its stop, or its tombstone when it was deleted
+// while running.
+//
+// When the server wrote prevEnd - agent_end holds that very value - an idle
+// split, a stop hook, reconciliation or this rule ended the row, and that end
+// stands: the pushed fields are kept, the end is put back, and S and every other
+// row are left alone. This is the stale offline client whose row the server cut
+// while it was away; reopening the row would bill the idle gap the cut removed.
+//
+// Otherwise the end was the user's - a Stop, a delete, or an Undo of either -
+// and the outcome depends on what S billed after it. later is S's live rows
+// other than P that start at or after P (rows of one session do not overlap);
+// current is the row S points at when that is not P.
+//
+//   - a: S is active and already on P. Nothing changes; the next signal adopts
+//     the edit as it adopts any other.
+//   - b: nothing later. S takes P back: running while S is active, so S's own
+//     machinery closes it at its last activity and no idle time is billed; closed
+//     at max(prevEnd, S's end) when S has ended, so never before the user's own
+//     stop, and a resume continues it.
+//   - c: the only later row is current, it opened within the idle threshold of
+//     prevEnd and nobody touched it. It only duplicates time P covers, so it is
+//     tombstoned and S takes P back as in (b).
+//   - d: as (c), but current was touched - edited, or written by this very push.
+//     It stays as it is and S stays on it, and P is closed where current begins,
+//     so the two neither overlap nor leave a hole between them.
+//   - e: anything else - the first later row opened beyond the idle threshold,
+//     several later rows, a later row S no longer points at. What came after is
+//     work of its own, so P is closed again at prevEnd with the pushed edits kept.
+//
+// Every write takes a fresh server_seq past the block Sync reserved and steps
+// updated_at past the stored value, so other devices pull it and the pushing
+// client's copy loses to it.
+func settleRestoredAgentEntry(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	row restoredAgentRow,
+	accepted map[string]bool,
+	idleMs, now int64,
+) error {
+	session, err := getAgentSession(ctx, transaction, userID, row.sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	prevEnd := row.prevStoppedAt
+	if prevEnd == nil {
+		prevEnd = row.prevDeletedAt
+	}
+
+	// A restore never keeps a stale automatic name. An Undo from a device that
+	// had not pulled set_agent_task's rename carries the old session tag, and
+	// under that name no later set_agent_task would ever find the row again.
+	correction := restoredEntryCorrection{}
+	description := row.description
+	if automatic := agentEntryDescription(session); description != automatic && isAutomaticAgentName(session, description) {
+		correction.description = &automatic
+		description = automatic
+	}
+
+	if row.prevAgentEnd != nil && *row.prevAgentEnd == *prevEnd {
+		if row.prevStoppedAt != nil {
+			correction.stoppedAt = row.prevStoppedAt
+		} else {
+			correction.deletedAt = row.prevDeletedAt
+		}
+		_, err := correctRestoredAgentEntry(ctx, transaction, userID, row, correction, now)
+		return err
+	}
+
+	active := session.Status == agentStatusActive
+	if active && session.TimeEntryID != nil && *session.TimeEntryID == row.id {
+		_, err := correctRestoredAgentEntry(ctx, transaction, userID, row, correction, now)
+		return err
+	}
+
+	currentID := ""
+	if session.TimeEntryID != nil && *session.TimeEntryID != row.id {
+		currentID = *session.TimeEntryID
+	}
+	live, err := liveSessionEntries(ctx, transaction, userID, session.ID, row.id, row.startedAt, currentID)
+	if err != nil {
+		return err
+	}
+	later := []sessionEntryRow{}
+	var current *sessionEntryRow
+	for index := range live {
+		if live[index].startedAt >= row.startedAt {
+			later = append(later, live[index])
+		}
+		if live[index].id == currentID {
+			current = &live[index]
 		}
 	}
 
-	userNamed := description != agentEntryDescription(session)
-	if _, err := transaction.ExecContext(ctx, `
+	switch {
+	case current != nil && current.stoppedAt == nil && current.startedAt < row.startedAt:
+		// S still runs a row that began before P, which only an edited start can
+		// produce. Taking P back would leave that row running with no session,
+		// so P is closed again as in (e).
+	case len(later) == 0:
+		return takeBackRestoredAgentEntry(ctx, transaction, userID, session, row, description, correction, *prevEnd, now)
+	case len(later) == 1 && current != nil && later[0].id == current.id && current.startedAt-*prevEnd <= idleMs:
+		untouched := session.EntryServerSeq != nil && *session.EntryServerSeq == current.serverSeq &&
+			!session.EntryUserEdited && !accepted[current.id]
+		if untouched {
+			if err := tombstoneReplacedAgentEntry(ctx, transaction, userID, current.id, current.serverSeq, now); err != nil {
+				return err
+			}
+			return takeBackRestoredAgentEntry(ctx, transaction, userID, session, row, description, correction, *prevEnd, now)
+		}
+		closeAt := max(*prevEnd, current.startedAt)
+		correction.stoppedAt = &closeAt
+		_, err := correctRestoredAgentEntry(ctx, transaction, userID, row, correction, now)
+		return err
+	}
+	closeAt := *prevEnd
+	correction.stoppedAt = &closeAt
+	_, err = correctRestoredAgentEntry(ctx, transaction, userID, row, correction, now)
+	return err
+}
+
+// takeBackRestoredAgentEntry points the session at the restored row as the
+// outside write it is: edited, user-named only under a name the session would
+// not give it, and carrying its project into later segments. An ended session
+// closes the row at its end, because nothing after that moment was tracked - but
+// never before prevEnd, the user's own stop.
+func takeBackRestoredAgentEntry(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	session AgentSession,
+	row restoredAgentRow,
+	description string,
+	correction restoredEntryCorrection,
+	prevEnd, now int64,
+) error {
+	if session.Status != agentStatusActive {
+		sessionEnd := session.LastHeartbeatAt
+		if session.EndedAt != nil {
+			sessionEnd = *session.EndedAt
+		}
+		closeAt := max(prevEnd, sessionEnd)
+		correction.stoppedAt = &closeAt
+	}
+	ownedSeq, err := correctRestoredAgentEntry(ctx, transaction, userID, row, correction, now)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions
 		SET time_entry_id = ?, entry_server_seq = ?, entry_user_edited = 1, entry_user_named = ?,
 		    project_id = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
-		pushed.ID, ownedSeq, userNamed, projectID, now, session.ID, userID); err != nil {
-		return err
-	}
-
-	if session.TimeEntryID == nil || *session.TimeEntryID == pushed.ID {
-		return nil
-	}
-	return releaseReplacedAgentEntry(ctx, transaction, userID, session, releaseAt, now)
+		row.id, ownedSeq, !isAutomaticAgentName(session, description), row.projectID, now, session.ID, userID)
+	return err
 }
 
-// releaseReplacedAgentEntry settles the row a session held before it took a
-// restored row back. A replacement the session still owns untouched - server_seq
-// is the value the session wrote and no outside edit was ever recorded for it -
-// only duplicates time the restored row already covers, so it is tombstoned. The
-// edit flag matters as much as the seq: a heartbeat that adopts an edited row
-// records the row's new seq as its own, and only the flag still remembers that
-// the user touched it. A touched row keeps its content, but is closed at closeAt
-// if it still runs, because no session will point at it anymore. Deleted and
-// already stopped rows are left exactly as they are.
-func releaseReplacedAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, session AgentSession, closeAt, now int64) error {
-	var (
-		serverSeq int64
-		deletedAt *int64
-	)
-	err := transaction.QueryRowContext(ctx, `
-		SELECT server_seq, deleted_at FROM time_entries WHERE id = ? AND user_id = ?`,
-		*session.TimeEntryID, userID).Scan(&serverSeq, &deletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+// restoredEntryCorrection is what the server changes on a restored row. Every
+// field is optional, and an empty correction writes nothing.
+type restoredEntryCorrection struct {
+	// description replaces a stale automatic name with the session's current one.
+	description *string
+	// stoppedAt closes the row, and agent_end records the close as the server's.
+	stoppedAt *int64
+	// deletedAt puts back a tombstone the agent flow wrote while the row ran.
+	deletedAt *int64
+}
+
+// correctRestoredAgentEntry applies a correction as one write with a fresh
+// server_seq and returns the row's server_seq afterwards. MAX() guards against an
+// edited started_at, as in closeAgentEntry, and agent_end takes exactly the stored
+// stop, so the value comparison of a later restore holds.
+func correctRestoredAgentEntry(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	row restoredAgentRow,
+	correction restoredEntryCorrection,
+	now int64,
+) (int64, error) {
+	assignments := []string{}
+	arguments := []any{}
+	if correction.description != nil {
+		assignments = append(assignments, "description = ?")
+		arguments = append(arguments, *correction.description)
 	}
+	if correction.stoppedAt != nil {
+		assignments = append(assignments, "stopped_at = MAX(started_at, ?)", "agent_end = MAX(started_at, ?)")
+		arguments = append(arguments, *correction.stoppedAt, *correction.stoppedAt)
+	}
+	if correction.deletedAt != nil {
+		assignments = append(assignments, "deleted_at = ?", "agent_end = ?")
+		arguments = append(arguments, *correction.deletedAt, *correction.deletedAt)
+	}
+	if len(assignments) == 0 {
+		return row.serverSeq, nil
+	}
+	seq, err := allocateServerSeq(transaction, 1)
+	if err != nil {
+		return 0, err
+	}
+	assignments = append(assignments, "updated_at = MAX(updated_at + 1, ?)", "server_seq = ?")
+	arguments = append(arguments, now, seq, row.id, userID, row.serverSeq)
+	result, err := transaction.ExecContext(ctx, "UPDATE time_entries SET "+strings.Join(assignments, ", ")+`
+		WHERE id = ? AND user_id = ? AND server_seq = ?`, arguments...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		return row.serverSeq, nil
+	}
+	return seq, nil
+}
+
+// tombstoneReplacedAgentEntry removes the replacement a session opened after the
+// user's stop and still owns untouched: the restored row covers its time. Being
+// untouched, a stopped_at on it is the agent's own and agent_end keeps it, while a
+// running one records the tombstone itself - so a device that pushes this row
+// running again gets the server's end back instead of reopening it.
+func tombstoneReplacedAgentEntry(ctx context.Context, transaction *sql.Tx, userID, entryID string, serverSeq, now int64) error {
+	seq, err := allocateServerSeq(transaction, 1)
 	if err != nil {
 		return err
 	}
-	if deletedAt != nil {
-		return nil
-	}
-	if session.EntryServerSeq != nil && *session.EntryServerSeq == serverSeq && !session.EntryUserEdited {
-		tombstoneSeq, err := allocateServerSeq(transaction, 1)
-		if err != nil {
-			return err
-		}
-		_, err = transaction.ExecContext(ctx, `
-			UPDATE time_entries
-			SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
-			WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
-			now, now, tombstoneSeq, *session.TimeEntryID, userID, serverSeq)
-		return err
-	}
-	_, _, err = closeAgentEntry(ctx, transaction, userID, session.TimeEntryID, closeAt, now)
+	_, err = transaction.ExecContext(ctx, `
+		UPDATE time_entries
+		SET deleted_at = ?, agent_end = COALESCE(stopped_at, ?), updated_at = MAX(updated_at + 1, ?), server_seq = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
+		now, now, now, seq, entryID, userID, serverSeq)
 	return err
+}
+
+// liveSessionEntries lists the session's live rows other than exceptID that
+// start at or after startedAt, plus the session's current row wherever it starts.
+func liveSessionEntries(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID, sessionID, exceptID string,
+	startedAt int64,
+	currentID string,
+) ([]sessionEntryRow, error) {
+	rows, err := transaction.QueryContext(ctx, `
+		SELECT id, started_at, stopped_at, server_seq FROM time_entries
+		WHERE user_id = ? AND agent_session_id = ? AND id <> ? AND deleted_at IS NULL
+		  AND (started_at >= ? OR id = ?)
+		ORDER BY started_at, id`, userID, sessionID, exceptID, startedAt, currentID)
+	if err != nil {
+		return nil, err
+	}
+	live := []sessionEntryRow{}
+	for rows.Next() {
+		var entry sessionEntryRow
+		if err := rows.Scan(&entry.id, &entry.startedAt, &entry.stoppedAt, &entry.serverSeq); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		live = append(live, entry)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
+	return live, nil
+}
+
+// isAutomaticAgentName reports whether a description is a name the session itself
+// gives its rows: the current one, or the session tag every row carries until a
+// task is set. The tag comes back after set_agent_task from any device that had
+// not pulled the rename yet - an Undo, an edit of another field - and that is not
+// the user choosing a name.
+func isAutomaticAgentName(session AgentSession, description string) bool {
+	if description == agentEntryDescription(session) {
+		return true
+	}
+	untitled := session
+	untitled.TaskKey, untitled.TaskTitle = "", ""
+	return description == agentEntryDescription(untitled)
 }
 
 // createAgentEntry opens a new running time entry (a segment) for the session.
@@ -961,7 +1253,9 @@ func createAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, s
 // and not deleted - a user who already stopped or removed the entry in the PWA
 // wins over the agent flow. MAX() guards against a manually edited started_at.
 // The reported flag says whether a row was actually written, which is what makes
-// the returned seq usable as the session's ownership marker.
+// the returned seq usable as the session's ownership marker. agent_end records
+// the stop as the server's own, so a later write that sets the row running again
+// puts this end back instead of reopening the row (see settleRestoredAgentEntry).
 func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, entryID *string, stoppedAt, now int64) (int64, bool, error) {
 	if entryID == nil {
 		return 0, false, nil
@@ -971,9 +1265,11 @@ func closeAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, en
 		return 0, false, err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET stopped_at = MAX(started_at, ?), updated_at = MAX(updated_at + 1, ?), server_seq = ?
+		UPDATE time_entries
+		SET stopped_at = MAX(started_at, ?), agent_end = MAX(started_at, ?),
+		    updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND stopped_at IS NULL AND deleted_at IS NULL`,
-		stoppedAt, now, seq, *entryID, userID)
+		stoppedAt, stoppedAt, now, seq, *entryID, userID)
 	if err != nil {
 		return 0, false, err
 	}
@@ -1076,12 +1372,15 @@ func discardZeroMinuteTechnicalEntry(
 	if err != nil {
 		return closedSeq, false, err
 	}
+	// The row was closed by closeAgentEntry in this same transaction, so agent_end
+	// already holds its stopped_at; the COALESCE only states the rule every agent
+	// delete follows (see tombstoneReplacedAgentEntry).
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE time_entries
-		SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?), server_seq = ?
+		SET deleted_at = ?, agent_end = COALESCE(stopped_at, ?), updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND stopped_at IS NOT NULL
 		  AND deleted_at IS NULL AND server_seq = ?`,
-		now, now, tombstoneSeq, *session.TimeEntryID, userID, closedSeq)
+		now, now, now, tombstoneSeq, *session.TimeEntryID, userID, closedSeq)
 	if err != nil {
 		return closedSeq, false, err
 	}
@@ -1096,7 +1395,8 @@ func discardZeroMinuteTechnicalEntry(
 }
 
 // reopenAgentEntry lets a revived session continue writing into the row it
-// already owns instead of opening a second one for the same work.
+// already owns instead of opening a second one for the same work. A running row
+// has no end, so the record of who wrote the last one goes with it.
 func reopenAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, entry *agentEntry, now int64) error {
 	if entry.stoppedAt == nil {
 		return nil
@@ -1106,7 +1406,7 @@ func reopenAgentEntry(ctx context.Context, transaction *sql.Tx, userID string, e
 		return err
 	}
 	result, err := transaction.ExecContext(ctx, `
-		UPDATE time_entries SET stopped_at = NULL, updated_at = MAX(updated_at + 1, ?), server_seq = ?
+		UPDATE time_entries SET stopped_at = NULL, agent_end = NULL, updated_at = MAX(updated_at + 1, ?), server_seq = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND server_seq = ?`,
 		now, seq, entry.id, userID, entry.serverSeq)
 	if err != nil {

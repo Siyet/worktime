@@ -104,9 +104,19 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 		nextSeq++
 	}
 	now := time.Now().UnixMilli()
+	// An agent row this push sets running again is settled once, after every
+	// pushed row is written, on the state the whole push left it in - so the
+	// order of rows inside a push cannot change the outcome.
+	restores := newAgentRestores(request.Changes.TimeEntries)
 	for _, entry := range request.Changes.TimeEntries {
+		if err := restores.remember(ctx, transaction, userID, entry.ID); err != nil {
+			return SyncResponse{}, err
+		}
 		// agent_session_id is server-owned: a literal NULL on insert and absent from
 		// the update list, so a pushed value cannot claim a foreign session.
+		// agent_end is server-owned too and survives every pushed write: it is
+		// compared by value, so a rename keeps an end the server wrote and a
+		// changed stopped_at makes the end the user's.
 		result, err := transaction.ExecContext(ctx, `
 			INSERT INTO time_entries (id, user_id, project_id, description, tags, started_at, stopped_at,
 			                          created_at, updated_at, deleted_at, server_seq, agent_session_id)
@@ -129,17 +139,18 @@ func (s *Store) Sync(ctx context.Context, userID string, request SyncRequest) (S
 			}
 			refused.timeEntries = append(refused.timeEntries, entry.ID)
 		} else {
+			restores.accept(entry.ID)
 			if err := recordAcceptedAgentEntryMutation(ctx, transaction, userID, entry); err != nil {
-				return SyncResponse{}, err
-			}
-			// The block reserved above covers the pushed rows only. Rows the rule
-			// writes on its own take fresh values past that block through
-			// allocateServerSeq, so no value is shared and every write is pulled.
-			if err := reclaimRestoredAgentEntry(ctx, transaction, userID, entry, now); err != nil {
 				return SyncResponse{}, err
 			}
 		}
 		nextSeq++
+	}
+	// The block reserved above covers the pushed rows only. Rows the rule writes on
+	// its own take fresh values past that block through allocateServerSeq, so no
+	// value is shared and every write is pulled.
+	if err := restores.settle(ctx, transaction, userID, s.agentIdleMs, now); err != nil {
+		return SyncResponse{}, err
 	}
 	for _, timeOff := range request.Changes.TimeOff {
 		result, err := transaction.ExecContext(ctx, `
@@ -269,10 +280,12 @@ func recordAcceptedAgentEntryMutation(
 		return err
 	}
 
-	automaticDescription := agentEntryDescription(AgentSession{
+	// The session tag coming back after a task was set is a device that had not
+	// pulled the rename yet (an Undo, an edit of another field), not a name the
+	// user chose; the next heartbeat or the restore rule brings it up to date.
+	userNamed := !isAutomaticAgentName(AgentSession{
 		ID: sessionID, Source: source, TaskKey: taskKey, TaskTitle: taskTitle,
-	})
-	userNamed := entry.Description != automaticDescription
+	}, entry.Description)
 	_, err = transaction.ExecContext(ctx, `
 		UPDATE agent_sessions
 		SET project_id = ?, entry_user_edited = 1,

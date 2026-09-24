@@ -48,8 +48,8 @@ const IDLE_MS = 250;
 
 /** Keys that scroll the page; any other key leaves the reader idle. */
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
-/** The scroll keys the scroller pages with itself while running timers are pinned. */
-const PAGE_KEYS = new Set(["PageUp", "PageDown", " "]);
+/** The scroll keys the scroller takes itself: a page step, and the ends of the page. */
+const PAGE_KEYS = new Set(["PageUp", "PageDown", " ", "Home", "End"]);
 
 /** Input that may start a scroll before the first scroll event reports it. */
 const READER_INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydown"] as const;
@@ -58,6 +58,8 @@ const READER_INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydo
 const PAGE_OVERLAP = 40;
 /** A page key pressed within this long of the last one continues from its target. */
 const PAGE_REPEAT_MS = 1000;
+/** How long after a jump a scroll nobody asked for is taken back, and how recent a scroll counts as the page still moving. */
+const JUMP_HOLD_MS = 200;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
@@ -134,6 +136,8 @@ export class FeedScroller {
   #placedAt: number | null = null;
   /** The page's scroll position as a scroll event, a placement or a captured anchor last saw it. */
   #seenScroll: number | null = null;
+  /** Where the last jump put the page, and when; corrections keep it current. */
+  #jump: { top: number; at: number } | null = null;
   #scrollPadding = "";
   /** The padding the stuck card asks for, whether or not it is applied right now. */
   #stuckPadding = "";
@@ -142,7 +146,7 @@ export class FeedScroller {
   #heldCard: HTMLElement | null = null;
   #releaseTimer: ReturnType<typeof setTimeout> | undefined;
   /** Where the last page key is scrolling to, so a quick repeat continues from there. */
-  #page: { target: number; at: number } | null = null;
+  #page: { target: number; at: number; edge: "top" | "bottom" | null } | null = null;
   #observer: ResizeObserver | null = null;
   #dayGap: number | null = null;
 
@@ -246,15 +250,28 @@ export class FeedScroller {
     if (day === null) return;
     this.#anchor = null;
     const line = this.#stuckLine();
-    this.#place(day.getBoundingClientRect().top + window.scrollY - line);
+    this.#jumpTo(day.getBoundingClientRect().top + window.scrollY - line);
     this.schedule();
   }
 
   /** The top of the page: the start form, the running timers and today. */
   revealTop(): void {
     this.#anchor = null;
-    this.#place(0);
+    this.#jumpTo(0);
     this.schedule();
+  }
+
+  // A jump while the page is still moving - a key's smooth step, a fling - cuts
+  // that scroll short, and Chromium, which runs it off the main thread, can still
+  // move the page a frame later; the reader did nothing, so #onScroll takes that
+  // back. A key's step under way goes where the jump went instead: carried on
+  // after a correction, it would take the page back.
+  #jumpTo(top: number): void {
+    const now = performance.now();
+    const moving = this.#page !== null || now - this.#scrolledAt < JUMP_HOLD_MS;
+    this.#page = null;
+    this.#place(top);
+    this.#jump = moving ? { top: this.#scrollBase(), at: now } : null;
   }
 
   #place(top: number): void {
@@ -276,6 +293,14 @@ export class FeedScroller {
   }
 
   #onScroll = (): void => {
+    // The scroll a jump cut short, moving the page a frame later (see #jumpTo).
+    const jump = this.#jump;
+    const own = this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1;
+    if (jump !== null && !own && performance.now() - jump.at < JUMP_HOLD_MS && Math.abs(window.scrollY - jump.top) >= 1) {
+      this.#ownScrollTarget = jump.top;
+      this.#place(jump.top);
+      return;
+    }
     this.#seenScroll = this.#scrollBase();
     if (this.#page !== null && Math.abs(window.scrollY - this.#page.target) < 1) this.#page = null;
     if (this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1) {
@@ -290,6 +315,8 @@ export class FeedScroller {
   #onReaderInput = (event: Event): void => {
     if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
     if (event.target instanceof Element && event.target.closest(OWN_SCROLL) !== null) return;
+    // The reader is scrolling on from the jump.
+    this.#jump = null;
     // Any other scroll moves the page away from where the last page step was
     // heading, so the next page key starts from wherever the page is.
     if (!(event instanceof KeyboardEvent) || !PAGE_KEYS.has(event.key)) this.#page = null;
@@ -315,39 +342,53 @@ export class FeedScroller {
   // would carry the next unread rows beneath the strip. So the step is taken here,
   // in every engine, whenever the page itself is what the key would scroll. Also
   // before the strip sticks: the step that sticks it must not bury rows either.
+  // Home and End as well, and all of them with no strip at all: a correction
+  // landing while the page is on its way - the days above a far jump being
+  // measured, for seconds - cancels a smooth scroll, and one taken here is
+  // carried on (see #keepAnchor) where the browser's own would stop dead.
   #onKeydown = (event: KeyboardEvent): void => {
-    const pinned = this.#elements?.pinned() ?? null;
-    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || pinned === null) return;
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || this.#elements === null) return;
+    const edge = event.key === "Home" ? "top" : event.key === "End" ? "bottom" : null;
     const direction =
-      event.key === "PageDown" || (event.key === " " && !event.shiftKey)
+      event.key === "PageDown" || event.key === "End" || (event.key === " " && !event.shiftKey)
         ? 1
-        : event.key === "PageUp" || (event.key === " " && event.shiftKey)
+        : event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)
           ? -1
           : 0;
     if (direction === 0) return;
+    const pinned = this.#elements.pinned();
     const active = document.activeElement;
     const nothingFocused = active === null || active === document.body || active === document.documentElement;
     // Space presses a focused control; page keys belong to fields, dialogs and
     // an open overlay of the strip while it can still scroll that way.
     if (!nothingFocused) {
       if ((event.key === " " && active.closest(PRESSES_SPACE) !== null) || active.closest(KEEPS_PAGE_KEYS) !== null) return;
-      const overlay = pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
+      const overlay = pinned !== null && pinned.contains(active) ? active.closest("[data-pin-scroll]") : null;
       if (overlay !== null) {
         const room = direction > 0 ? overlay.scrollHeight - overlay.clientHeight - overlay.scrollTop : overlay.scrollTop;
         if (room > 1) return;
       }
     }
     event.preventDefault();
-    const visible = window.innerHeight - this.#stuckLine();
-    const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
     const now = performance.now();
-    const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
     const bottom = document.documentElement.scrollHeight - window.innerHeight;
-    const target = Math.min(bottom, Math.max(0, from + direction * step));
-    this.#page = { target, at: now };
+    let target: number;
+    if (edge !== null) {
+      target = edge === "top" ? 0 : bottom;
+    } else {
+      const visible = window.innerHeight - this.#stuckLine();
+      const step = Math.max(visible * 0.875, visible - PAGE_OVERLAP);
+      const from = this.#page !== null && now - this.#page.at < PAGE_REPEAT_MS ? this.#page.target : window.scrollY;
+      target = Math.min(bottom, Math.max(0, from + direction * step));
+    }
+    this.#page = { target, at: now, edge };
+    this.#stepPage(target);
+  };
+
+  #stepPage(target: number): void {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: target, behavior: reduced ? "instant" : "smooth" });
-  };
+  }
 
   #update = (): void => {
     this.#frame = 0;
@@ -370,6 +411,11 @@ export class FeedScroller {
         this.#releaseCard();
       }
     }
+    // A scroll that no wheel, key or touch announced - a scrollbar drag, Safari's
+    // status-bar tap - holds the card only from its first frame, and a sync merge
+    // can land in that same frame: held first, the card absorbs it below instead
+    // of a correction cancelling the scroll.
+    if (this.#heldCard === null && this.stuck && this.#pinnedRect() !== null) this.#holdCard();
     // A change made outside a frame - a sync merge, Stop in the pinned strip - is
     // already laid out by now, and the ResizeObserver only reports it after this
     // callback. Correct against the old anchor before measuring anything.
@@ -597,11 +643,18 @@ export class FeedScroller {
     anchor.dayTop += shift;
     anchor.line = line;
     if (Math.abs(correction) < 0.5) return;
-    // The correction cancels a smooth page step; the next key starts afresh.
-    this.#page = null;
     const target = this.#correctionBase() + correction;
     this.#ownScrollTarget = target;
     this.#place(target);
+    if (this.#jump !== null) this.#jump.top = this.#scrollBase();
+    // The correction cancels a key's smooth step under way: it goes on from
+    // here, to the same place in the feed or to the same end of the page.
+    const page = this.#page;
+    if (page === null) return;
+    const bottom = document.documentElement.scrollHeight - window.innerHeight;
+    page.target =
+      page.edge === "top" ? 0 : page.edge === "bottom" ? bottom : Math.min(bottom, Math.max(0, page.target + correction));
+    if (Math.abs(window.scrollY - page.target) >= 1) this.#stepPage(page.target);
   }
 
   // Where a correction starts from. A layout that shortens the page under the

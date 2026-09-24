@@ -301,6 +301,89 @@ test.describe("day ruler", () => {
     landed = await landing(page, target);
     expect(Math.abs(landed.day - landed.line)).toBeLessThanOrEqual(1.5);
     await expect(current(page)).toHaveAttribute("data-iso", iso);
+
+    // The reader scrolls on right after another far jump: whatever row the
+    // scroll stopped at stays at the line while the days above are measured.
+    const atLine = () =>
+      page.evaluate(() => {
+        const line = document.querySelector(".pinbar.stuck")?.getBoundingClientRect().bottom ?? 0;
+        const rows = [...document.querySelectorAll<HTMLElement>(".feed > .day [data-anchor]")];
+        const row = rows.find((each) => each.getBoundingClientRect().bottom > line)!;
+        return { text: row.textContent, offset: row.getBoundingClientRect().top - line };
+      });
+    await row(page, nearest(600, false)).click();
+    await pointAtFeed(page);
+    await page.mouse.wheel(0, 700);
+    await page.waitForTimeout(300);
+    await settle(page);
+    const scrolled = await atLine();
+    await page.waitForTimeout(3_000);
+    await settle(page);
+    const later = await atLine();
+    expect(later.text).toBe(scrolled.text);
+    expect(Math.abs(later.offset - scrolled.offset)).toBeLessThanOrEqual(1.5);
+
+    // Home while the days above a far jump are still being measured reaches the top.
+    await row(page, nearest(750, false)).click();
+    await page.waitForTimeout(700);
+    await page.keyboard.press("Home");
+    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 5_000 }).toBe(0);
+
+    // The oldest day: the page ends before it reaches the line, and it stays put.
+    const oldest = page.locator(".dr-day").last();
+    const oldestISO = (await oldest.getAttribute("data-iso"))!;
+    await oldest.click();
+    const bottomDay = page.locator(`.feed > .day[data-key="${oldestISO}"]`);
+    await expect(bottomDay).toHaveClass(/landed/);
+    await settle(page);
+    const first = (await bottomDay.boundingBox())!.y;
+    await page.waitForTimeout(3_000);
+    await settle(page);
+    expect(Math.abs((await bottomDay.boundingBox())!.y - first)).toBeLessThanOrEqual(1.5);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("with no timer running, the keys after a mouse jump scroll the page and Tab goes on from where it landed", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    await open(page, server.url);
+    const scrollY = () => page.evaluate(() => window.scrollY);
+    const rulerTop = () => page.locator(".dr-scroll").evaluate((element) => element.scrollTop);
+    const target = recordedFrom(40);
+    await row(page, target).click();
+    const day = page.locator(`.feed > .day[data-key="${isoDay(dayNine(-target))}"]`);
+    await expect(day).toHaveClass(/landed/);
+    // The pointer stays on the ruler, so the ruler does not follow the page:
+    // anything that moves it now is a key that went to it. WebKit can spend the
+    // first arrow after a mouse click without scrolling anything; the second
+    // must move the page.
+    const press = async (key: string) => {
+      const before = await scrollY();
+      for (let attempt = 0; attempt < 2 && (await scrollY()) === before; attempt++) {
+        await page.keyboard.press(key);
+        await page.waitForTimeout(300);
+      }
+      expect(await scrollY(), key).toBeGreaterThan(before);
+    };
+    const ruled = await rulerTop();
+    for (const key of ["ArrowDown", "Space", "End"]) await press(key);
+    expect(await rulerTop()).toBe(ruled);
+    // End scrolls smoothly; the reader waits for the page to stop.
+    await expect.poll(async () => {
+      const before = await scrollY();
+      await settle(page);
+      return (await scrollY()) - before;
+    }).toBe(0);
+
+    // Today is the top: the arrows scroll the page from there, and Tab goes on
+    // into the start form.
+    await page.locator(".dr-day.today").click();
+    await expect.poll(scrollY).toBe(0);
+    const top = await rulerTop();
+    await press("ArrowDown");
+    expect(await rulerTop()).toBe(top);
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("combobox", { name: "Description" })).toBeFocused();
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -326,9 +409,12 @@ test.describe("day ruler", () => {
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(landedAt + 100);
     await expect(description).toHaveValue("half a thought");
 
-    // Today is the top of the page: the start form and the running timers.
+    // Today is the top of the page: the start form and the running timers. The
+    // Space step may still be under way; the jump cuts it short for good.
     await page.locator(".dr-day.today").click();
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
     // A month header: that month's newest day with entries.
     const lastMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);

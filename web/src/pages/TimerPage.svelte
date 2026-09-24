@@ -134,7 +134,7 @@
     landedISO = null;
     if (target === "top") {
       scroller.revealTop();
-      if (takeFocus && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if (takeFocus && topLanding !== null && startForm !== null) focusLanded(topLanding, startForm);
       return;
     }
     await scroller.reveal(target);
@@ -146,21 +146,35 @@
     landedTimer = setTimeout(() => (landedISO = null), 1200);
   }
 
-  // WebKit starts Tab over from the top of the page when focus is on an element
-  // outside the tab order, so Tab from a landed day is taken to its first
-  // control here, as the ruler does after Enter.
-  function focusLanded(day: HTMLElement): void {
-    if (document.activeElement === day) return;
+  // Focus where a jump landed: a day, or the mark above the start form. WebKit
+  // starts Tab over from the top of the page when focus is on an element outside
+  // the tab order, so Tab from there is taken to the first control of what
+  // landed here, as the ruler does after Enter.
+  let topLanding = $state<HTMLElement | null>(null);
+
+  function focusLanded(landing: HTMLElement, controls: HTMLElement = landing): void {
+    if (document.activeElement === landing) return;
+    // Focusable only while it holds the landing, so a click on a card does not
+    // focus the card.
+    const lent = !landing.hasAttribute("tabindex");
+    if (lent) landing.tabIndex = -1;
     const onkeydown = (event: KeyboardEvent) => {
-      if (event.key !== "Tab" || event.shiftKey || event.target !== day) return;
-      const control = day.querySelector<HTMLElement>(`:is(button, [href], input, [tabindex="0"])`);
+      if (event.key !== "Tab" || event.shiftKey || event.target !== landing) return;
+      const control = controls.querySelector<HTMLElement>(`:is(button, [href], input, [tabindex="0"])`);
       if (control === null) return;
       event.preventDefault();
       control.focus();
     };
-    day.addEventListener("keydown", onkeydown);
-    day.addEventListener("blur", () => day.removeEventListener("keydown", onkeydown), { once: true });
-    day.focus({ preventScroll: true });
+    landing.addEventListener("keydown", onkeydown);
+    landing.addEventListener(
+      "blur",
+      () => {
+        landing.removeEventListener("keydown", onkeydown);
+        if (lent) landing.removeAttribute("tabindex");
+      },
+      { once: true },
+    );
+    landing.focus({ preventScroll: true });
   }
 
   $effect(() => () => clearTimeout(landedTimer));
@@ -652,6 +666,9 @@
   </div>
 {/if}
 
+<!-- Where focus goes after a mouse jump to the top of the page. WebKit scrolls
+     no page for the arrow keys while a form itself has focus. -->
+<div class="top-landing" tabindex="-1" bind:this={topLanding}></div>
 <form class="card row" bind:this={startForm} onsubmit={submitStart}>
   <DescriptionInput
     bind:value={description}
@@ -720,7 +737,7 @@
   {@const groups = groupDayEntries(day.entries)}
   {@const tracked = dayTotal(groups)}
   {@const wall = wallClockMs(day.entries, 0)}
-  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} tabindex="-1" {@attach scroller.observeDay}>
+  <div class="day" class:landed={landedISO === day.iso} data-key={day.iso} {@attach scroller.observeDay}>
     <div class="card" class:has-groups={groups.some((group) => group.entries.length > 1)}>
       <div class="row" data-anchor>
         <h3>{formatDay(day.entries[0]!.started_at, currentYear)}</h3>
@@ -858,8 +875,10 @@
     display: flow-root;
   }
 
-  /* Focused only as the place a jump landed, which its ring already shows. */
-  .day:focus {
+  /* Focused only as the place a jump landed, which its ring (or the top of the
+     page) already shows. */
+  .day:focus,
+  .top-landing:focus {
     outline: none;
   }
 

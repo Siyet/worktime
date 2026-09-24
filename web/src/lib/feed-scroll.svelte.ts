@@ -446,22 +446,22 @@ export class FeedScroller {
     const line = this.#readingLine();
     const still = performance.now() - this.#scrolledAt >= IDLE_MS;
     // While the page scrolls, the held card - hidden above the reader - takes the
-    // shift instead of the page: it gives up or gains exactly what changed above,
-    // a row landing in today's day, say, so the reader's row stays put without a
+    // shift instead of the page: it gives up exactly what was added above, a row
+    // landing in today's day, say, so the reader's row stays put without a
     // scroll that would stop theirs. Once scrolling is quiet the card takes its
-    // real height and the page the net correction. Growth above the reader bigger
-    // than the whole card is left to the scroll (something shrinking above it only
-    // makes the card that much taller), and so is a shift found inside the ResizeObserver
-    // callback: resizing the card there resizes the observed body again, a loop.
-    // A sync merge lands outside a frame, so the frame's own pass sees it first.
+    // real height and the page the net correction. The card only ever shrinks:
+    // growth above the reader bigger than the whole card is left to the scroll,
+    // and so is anything above it shrinking - a taller card would pull the strip's
+    // stick point down with it, and a scroll that ends near there would unstick the
+    // strip, snap the card back and jump the reader's row. So is a shift found
+    // inside the ResizeObserver callback: resizing the card there resizes the
+    // observed body again, a loop. A sync merge lands outside a frame, so the
+    // frame's own pass sees it first.
     const held = this.#heldCard;
     if (absorb && !still && held !== null && held.isConnected) {
       const height = parseFloat(held.style.height) || 0;
-      // Growing, the card must not push the strip's box back below its stick
-      // point: the strip would let go for a frame and the card would snap back
-      // with nothing to correct it. Only the room past that point is taken.
-      const absorbed = Math.max(Math.min(shift, height), -this.#stuckRoom());
-      if (Math.abs(absorbed) >= 0.5) {
+      const absorbed = Math.max(Math.min(shift, height), 0);
+      if (absorbed >= 0.5) {
         held.style.height = `${height - absorbed}px`;
         shift -= absorbed;
       }
@@ -476,15 +476,6 @@ export class FeedScroller {
     const target = window.scrollY + correction;
     this.#ownScrollTarget = target;
     window.scrollTo({ top: target, behavior: "instant" });
-  }
-
-  // How far the strip's box is past its natural place in the flow: how much the
-  // content above it could still grow before it would stop being stuck.
-  #stuckRoom(): number {
-    const pinned = this.#elements?.pinned() ?? null;
-    const sentinel = this.#elements?.sentinel() ?? null;
-    if (pinned === null || sentinel === null) return 0;
-    return Math.max(0, pinned.getBoundingClientRect().top - sentinel.getBoundingClientRect().top - 1);
   }
 
   #pinnedRect(): DOMRect | null {

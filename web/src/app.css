@@ -871,6 +871,12 @@ dialog.sheet::backdrop {
     min-height: 2.75rem;
   }
 
+  /* .toast button sets its own, smaller height and would win on specificity;
+     Undo is exactly the button a thumb must not miss. */
+  .toast button {
+    min-height: 2.75rem;
+  }
+
   .seg button {
     min-height: 2.6rem;
   }

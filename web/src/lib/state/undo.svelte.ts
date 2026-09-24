@@ -1,37 +1,59 @@
-// Undo state for entry deletion. Lives at module level so the toast can be
-// mounted in the app shell: in-app navigation must not dismiss the 8-second
-// undo window, only the timer or an explicit action does.
+// Undo state for deleting an entry and for stopping a timer. Lives at module
+// level so the toast can be mounted in the app shell: in-app navigation must not
+// dismiss the 8-second undo window, only the timer or an explicit action does.
+// One action is undoable at a time; a newer delete or stop replaces the last.
 import type { TimeEntry } from "../types";
-import { deleteEntry, restoreEntry } from "./app.svelte";
+import { deleteEntry, restoreEntry, stopTimer, updateEntry } from "./app.svelte";
 
 const UNDO_WINDOW_MS = 8000;
 
-export const undoState = $state({ deleted: null as TimeEntry | null });
+export const undoState = $state({ deleted: null as TimeEntry | null, stopped: null as TimeEntry | null });
 
 let timer: ReturnType<typeof setTimeout> | null = null;
+
+function openWindow(): void {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => {
+    undoState.deleted = null;
+    undoState.stopped = null;
+    timer = null;
+  }, UNDO_WINDOW_MS);
+}
 
 export async function deleteEntryWithUndo(entry: TimeEntry): Promise<void> {
   // Snapshot before the delete removes the row from appState: the toast needs
   // the description, and $state proxies must not leak out of the store.
   const snapshot = $state.snapshot(entry) as TimeEntry;
   await deleteEntry(entry.id);
+  undoState.stopped = null;
   undoState.deleted = snapshot;
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(() => {
-    undoState.deleted = null;
-    timer = null;
-  }, UNDO_WINDOW_MS);
+  openWindow();
 }
 
-export async function undoDelete(): Promise<void> {
-  const entry = undoState.deleted;
-  if (!entry) return;
+// A Stop is one tap in the pinned strip, right where the thumb rests, so it gets
+// the same way back as a delete. The undo restarts the same row rather than a
+// copy: it keeps its original start, and for an agent row the server hands the
+// session back to it (see docs/agent-tracking.md).
+export async function stopTimerWithUndo(entry: TimeEntry): Promise<void> {
+  if (entry.stopped_at !== null) return;
+  const snapshot = $state.snapshot(entry) as TimeEntry;
+  await stopTimer(entry.id);
+  undoState.deleted = null;
+  undoState.stopped = snapshot;
+  openWindow();
+}
+
+export async function undoLast(): Promise<void> {
+  const deleted = undoState.deleted;
+  const stopped = undoState.stopped;
   dismissUndo();
-  await restoreEntry(entry.id);
+  if (deleted) await restoreEntry(deleted.id);
+  if (stopped) await updateEntry(stopped.id, { stopped_at: null });
 }
 
 export function dismissUndo(): void {
   if (timer) clearTimeout(timer);
   timer = null;
   undoState.deleted = null;
+  undoState.stopped = null;
 }

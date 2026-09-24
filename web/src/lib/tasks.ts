@@ -25,6 +25,15 @@ export interface TaskGroup {
   lastStoppedAt: number | null;
 }
 
+/**
+ * The key the pinned strip and the full running card share for a group's
+ * control, so focus can move between them. The group key carries NUL separators,
+ * so the DOM only ever sees an encoded form.
+ */
+export function groupTwin(key: string): string {
+  return `group:${encodeURIComponent(key)}`;
+}
+
 export interface TaskGroupSnapshot {
   key: string;
   entryIDs: string[];

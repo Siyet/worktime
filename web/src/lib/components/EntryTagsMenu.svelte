@@ -2,7 +2,6 @@
   import { tick, untrack } from "svelte";
   import { updateEntry } from "../state/app.svelte";
   import { t } from "../i18n";
-  import { floatOutOfClip } from "../float-menu";
   import TagChips from "./TagChips.svelte";
   import TagPicker from "./TagPicker.svelte";
 
@@ -82,6 +81,17 @@
     }
   }
 
+  // The Timer page closes the running card's quick menus when the pinned strip
+  // takes over from it; the event names the element whose menus must close.
+  $effect(() => {
+    const close = (event: Event): void => {
+      const scope = (event as CustomEvent<Element>).detail;
+      if (open && root !== null && scope.contains(root)) cancelMenu();
+    };
+    document.addEventListener("worktime:close-menus", close);
+    return () => document.removeEventListener("worktime:close-menus", close);
+  });
+
   function onDocumentClick(event: MouseEvent): void {
     // A create-tag click removes its own button before the event bubbles to the
     // document. composedPath still records that the click originated inside.
@@ -121,7 +131,7 @@
     {/if}
   </button>
   {#if open}
-    <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")} {@attach floatOutOfClip}>
+    <span class="entry-quick-menu tags-menu" id={menuID} role="dialog" aria-label={t("Tags")}>
       <TagPicker selected={draftTags} onchange={change} />
       <span class="menu-actions">
         <button type="button" onclick={() => cancelMenu(true)} disabled={saving}>{t("Cancel")}</button>

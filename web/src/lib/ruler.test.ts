@@ -80,6 +80,17 @@ describe("buildRuler", () => {
     expect(model.byISO.get("2026-09-22")!.count).toBe(0);
   });
 
+  it("carries the day header's clock time: work that ran in parallel counts once", () => {
+    // 09:00-11:00 and 10:00-11:30 in parallel, then 14:00-14:30 on its own.
+    const parallel = [entry("2026-09-22", 9, 120), entry("2026-09-22", 10, 90), entry("2026-09-22", 14, 30)];
+    const model = ruler([...history, ...parallel], TODAY);
+    const row = model.byISO.get("2026-09-22")!;
+    expect(row.clockMs).toBe((150 + 30) * MINUTE);
+    expect(row.trackedMs).toBe((120 + 90 + 30) * MINUTE);
+    // With nothing in parallel the two are the same figure.
+    expect(model.byISO.get("2026-09-23")!.clockMs).toBe((120 + 35) * MINUTE);
+  });
+
   it("counts finished entries only, like today's card", () => {
     const running: TimeEntry = { ...entry(TODAY, 11, 10), stopped_at: null };
     const model = ruler([...history, running], TODAY);
@@ -153,7 +164,6 @@ describe("buildRuler", () => {
     expect(august!.top).toBe(september!.height);
     expect(model.byISO.get("2026-08-31")!.top).toBe(september!.height + RULER_HEAD);
     expect(model.height).toBe(september!.height + august!.height);
-    expect(model.spineEnd).toBe(model.rows.at(-1)!.top + RULER_PITCH / 2);
   });
 
   it("adds a year row above the months of a past year", () => {

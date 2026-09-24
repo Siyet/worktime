@@ -174,8 +174,11 @@ test.describe("day ruler", () => {
 
   test("appears only on a wide window, and only once there is a day before today", async ({ page, server }) => {
     await trackErrors(page);
+    // Today's, whatever the time of day: an hour back would be yesterday before 1 am.
+    const now = Date.now();
+    const midnight = new Date(now).setHours(0, 0, 0, 0);
     await seedServer(server.url, {
-      entries: [{ description: "Only today", startedAt: Date.now() - HOUR, stoppedAt: Date.now() - HOUR / 2 }],
+      entries: [{ description: "Only today", startedAt: Math.max(midnight, now - HOUR), stoppedAt: now }],
     });
     await page.goto(server.url + "/#/");
     await expect(page.locator(".feed .item")).toHaveCount(1);
@@ -186,7 +189,7 @@ test.describe("day ruler", () => {
     });
     await triggerSync(page);
     await expect(ruler(page)).toBeVisible();
-    // Below 85rem there is no room for it beside the column: not rendered at all.
+    // Below 88rem there is no room for it beside the column: not rendered at all.
     await page.setViewportSize({ width: 1300, height: 900 });
     await expect(ruler(page)).toHaveCount(0);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -219,9 +222,23 @@ test.describe("day ruler", () => {
       return date.getDay() !== 1 && date.getDate() !== 1;
     })!;
     const first = [...Array(40).keys()].map((index) => index + 1).find((offset) => new Date(dayNine(-offset)).getDate() === 1)!;
-    expect(await tick(plain)).toBe(6);
-    expect(await tick(monday)).toBe(11);
-    expect(await tick(first)).toBe(17);
+    expect(await tick(plain)).toBe(12);
+    expect(await tick(monday)).toBe(20);
+    expect(await tick(first)).toBe(28);
+    // Every tick ends flush with the right edge of the window - at the page's
+    // scrollbar gutter, where the platform reserves one.
+    const edge = (offset: number) =>
+      row(page, offset).evaluate((button) => button.getBoundingClientRect().right - parseFloat(getComputedStyle(button, "::before").right));
+    const windowEdge = await page.evaluate(() => {
+      const probe = document.createElement("div");
+      probe.style.cssText = "position: fixed; right: 0; width: 0; height: 0";
+      document.body.append(probe);
+      const right = probe.getBoundingClientRect().right;
+      probe.remove();
+      return right;
+    });
+    expect(windowEdge).toBeGreaterThan(page.viewportSize()!.width - 20);
+    for (const offset of [plain, monday, first]) expect(await edge(offset)).toBe(windowEdge);
 
     const band = (offset: number) => row(page, offset).locator("xpath=..").getAttribute("data-band");
     expect(await band(nearest(1, true))).toBe("weekend");
@@ -239,6 +256,46 @@ test.describe("day ruler", () => {
     await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 2 entries/);
     await expect(page.locator(".dr-day.today")).toHaveAccessibleName(/20m, 1 entry$/);
     await expect(row(page, SICK)).toHaveAccessibleName(/sick leave/);
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a day with work in parallel shows the header's clock time, the figure before the slash", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    // Inside the day's first entry: 40 more minutes tracked, not one more on the clock.
+    const weekday = recordedFrom(1);
+    await seedServer(server.url, {
+      entries: [{ description: "In parallel", startedAt: dayNine(-weekday) + 10 * 60_000, stoppedAt: dayNine(-weekday) + 50 * 60_000 }],
+    });
+    await open(page, server.url);
+    const header = page.locator(`.feed > .day[data-key="${isoDay(dayNine(-weekday))}"] .card > .row`);
+    await expect(header.locator(".wall")).toHaveText("1h 30m");
+    await expect(header.locator(".tracked")).toHaveText("2h 10m");
+    await expect(row(page, weekday).locator(".dr-dur")).toHaveText("1h 30m");
+    await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 3 entries/);
+    // The tooltip spells both out, as the header's own title does.
+    await row(page, weekday).hover();
+    await expect(page.locator(".dr-tip")).toContainText("1h 30m on the clock, 2h 10m tracked");
+    expect(await pageErrors(page)).toEqual([]);
+  });
+
+  test("a tick under the pointer grows and comes up to full strength", async ({ page, server }) => {
+    await trackErrors(page);
+    await seedHistory(server.url);
+    await open(page, server.url);
+    const target = row(page, nearest(20, false));
+    const tick = () =>
+      target.evaluate((button) => {
+        const style = getComputedStyle(button, "::before");
+        return { width: parseFloat(style.width), opacity: Number(style.opacity) };
+      });
+    const rest = await tick();
+    expect(rest.opacity).toBeLessThan(1);
+    await target.hover();
+    // Past the transition: it settles 10px longer, at full opacity.
+    await expect.poll(tick).toEqual({ width: rest.width + 10, opacity: 1 });
+    await pointAtFeed(page);
+    await expect.poll(tick).toEqual(rest);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -486,9 +543,11 @@ test.describe("day ruler", () => {
     const scroller = page.locator(".dr-scroll");
     const scrollTop = () => scroller.evaluate((element) => element.scrollTop);
     const inView = async () => {
-      const box = (await page.locator(".dr-thumb").boundingBox())!;
+      const lit = page.locator(".dr-day[data-vis]");
+      const first = (await lit.first().boundingBox())!;
+      const last = (await lit.last().boundingBox())!;
       const frame = (await scroller.boundingBox())!;
-      return box.y >= frame.y && box.y + box.height <= frame.y + frame.height;
+      return first.y >= frame.y && last.y + last.height <= frame.y + frame.height;
     };
 
     // Deep in the feed - a jump, then the reader scrolling on from there.

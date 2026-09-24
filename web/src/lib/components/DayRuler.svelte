@@ -1,7 +1,8 @@
 <!-- The day ruler: every calendar day from today back to the first recorded one,
-     in the right margin of wide screens, scrolled on its own. A click jumps the
-     feed to the day; an accent thumb over the spine marks what the feed shows and
-     the ruler follows it, except while the reader is using the ruler itself.
+     at the right edge of wide screens, scrolled on its own - a tick per day
+     against the edge, like the outline of a Notion page. A click jumps the feed
+     to the day; the ticks of the days the feed shows light up in the accent, and
+     the ruler follows them, except while the reader is using the ruler itself.
      Spec: design/components/day-ruler.html. The model is lib/ruler.ts. -->
 <script lang="ts">
   import { tick, untrack } from "svelte";
@@ -67,7 +68,9 @@
   let scroller = $state<HTMLElement | null>(null);
   let tipElement = $state<HTMLElement | null>(null);
 
-  let thumb = $state<{ top: number; bottom: number } | null>(null);
+  // What the feed shows, in track px: the span its lit ticks cover. Drawn by the
+  // ticks alone, so only the ruler's scrolling and the chip read it.
+  let thumb: { top: number; bottom: number } | null = null;
   let more = $state(false);
   /** `cover` hides the part of a row between the stuck headers and the chip. */
   let chip = $state<{ up: boolean; top: number | null; cover: number; label: string } | null>(null);
@@ -120,7 +123,7 @@
   function dayLabel(row: RulerRow): string {
     const full = formats.full.format(dateOfISO(row.iso));
     let label = row.today ? `${t("Today")}, ${full}` : capitalise(full);
-    if (row.count > 0) label += `, ${formatDurationShort(row.trackedMs)}, ${entriesLabel(row.count)}`;
+    if (row.count > 0) label += `, ${formatDurationShort(row.clockMs)}, ${entriesLabel(row.count)}`;
     if (row.off !== null) label += `, ${kindLabel(row.off)}`;
     if (row.count === 0 && row.off === null) label += `, ${t("no entries")}`;
     return label;
@@ -256,7 +259,7 @@
     return row?.past ? 2 * RULER_HEAD : RULER_HEAD;
   }
 
-  // Keeps the thumb inside a comfort band, moving the ruler the least it can.
+  // Keeps the lit ticks inside a comfort band, moving the ruler the least it can.
   // Always instant: in lock-step with the page, and a long smooth scroll of
   // dates in the corner of the eye pulls attention from the feed. Only the
   // chip, clicked while looking at the ruler, animates a short distance.
@@ -281,7 +284,7 @@
   }
 
   // The fade at the bottom while there is more below, and the chip that says
-  // where the thumb went once the reader scrolled the ruler away from it. The
+  // where the lit ticks went once the reader scrolled the ruler away from them. The
   // chip is for the pointer: it would cover the row keyboard focus moves to,
   // and focus lands on the current day anyway.
   function updateChrome(view: View | null = viewOf()): void {
@@ -519,7 +522,12 @@
       const date = dateOfISO(row.iso);
       const day = row.year === currentYear ? formats.tipDay.format(date) : formats.full.format(date);
       const lines: { text: string; time?: string; kind?: TimeOffKind }[] = [];
-      if (row.count > 0) lines.push({ time: formatDurationShort(row.trackedMs), text: `· ${entriesLabel(row.count)}` });
+      if (row.count > 0) lines.push({ time: formatDurationShort(row.clockMs), text: `· ${entriesLabel(row.count)}` });
+      // The header's two readings, spelled out as its own title does.
+      if (row.clockMs !== row.trackedMs) {
+        const both = { wall: formatDurationShort(row.clockMs), tracked: formatDurationShort(row.trackedMs) };
+        lines.push({ text: t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once", both) });
+      }
       if (row.off !== null) lines.push({ kind: row.off, text: kindLabel(row.off) });
       if (row.count === 0) {
         const where = whereTo(row.target, false);
@@ -599,10 +607,6 @@
   >
     <div class="dr-scroll" class:more bind:this={scroller} {onscroll}>
       <div class="dr-track">
-        <div class="dr-spine" style:height="{model.spineEnd}px"></div>
-        {#if thumb !== null}
-          <div class="dr-thumb" style:top="{thumb.top.toFixed(1)}px" style:height="{(thumb.bottom - thumb.top).toFixed(1)}px"></div>
-        {/if}
         {#each model.years as year, yearIndex (year.year)}
           <div class="dr-year" class:past={year.past}>
             {#if year.past}
@@ -636,7 +640,7 @@
                         <span class="dr-wd">{formats.weekday.format(dateOfISO(row.iso))}</span>
                         <span class="dr-n">{row.date}</span>
                         {#if row.count > 0}
-                          <span class="dr-dur">{formatDurationShort(row.trackedMs)}</span>
+                          <span class="dr-dur">{formatDurationShort(row.clockMs)}</span>
                         {/if}
                       </button>
                     </li>
@@ -689,37 +693,38 @@
   .dr {
     /* Geometry. Every size is fixed, so every offset in the ruler is arithmetic
        (lib/ruler.ts): nothing here is measured. */
-    --dr-w: 7.875rem;
-    --dr-pitch: 1rem;
-    --dr-head: 1.5rem;
-    --dr-spine-x: 4px;
-    --dr-tick-day: 6px;
-    --dr-tick-week: 11px;
-    --dr-tick-month: 17px;
-    --dr-label-x: 1.625rem;
-    --dr-wd-w: 1.5rem;
-    --dr-font: 0.6875rem;
-    --dr-dur-font: 0.65625rem;
+    --dr-w: min(11rem, calc(50% - 33.75rem));
+    --dr-pitch: 1.25rem;
+    --dr-head: 1.75rem;
+    /* Ticks: 2px bars against the right edge, a Monday longer than a day and the
+       1st longer still; a hovered one grows by --dr-tick-grow. The labels keep
+       clear of the longest a tick can get. */
+    --dr-tick-h: 2px;
+    --dr-tick-day: 12px;
+    --dr-tick-week: 20px;
+    --dr-tick-month: 28px;
+    --dr-tick-grow: 10px;
+    --dr-ticks: calc(var(--dr-tick-month) + var(--dr-tick-grow) + 6px);
+    --dr-label-x: 0.375rem;
+    --dr-wd-w: 1.75rem;
+    --dr-font: 0.75rem;
+    --dr-dur-font: 0.6875rem;
     --dr-dur-gap: 8px;
-    --dr-pad-r: 4px;
 
     /* Labels sit on the bands too, so they are a touch brighter than --text-dim. */
     --dr-label: color-mix(in srgb, var(--text-dim) 90%, var(--text));
     --dr-strong: var(--text);
     --dr-today: var(--accent);
-    --dr-thumb: var(--accent);
-    --dr-spine: color-mix(in srgb, var(--text-dim) 38%, transparent);
-    --dr-tick: color-mix(in srgb, var(--text-dim) 75%, transparent);
-    --dr-tick-quiet: color-mix(in srgb, var(--text-dim) 42%, transparent);
-    --dr-tick-week-c: var(--text-dim);
-    --dr-tick-month-c: var(--text);
+    --dr-lit: var(--accent);
+    --dr-tick: var(--text);
 
-    /* Fixed in the right margin of the 68rem shell, 12px clear of the cards. */
+    /* Fixed against the right edge of the window, as wide as the margin beside
+       the 68rem shell allows, 12px clear of the cards. */
     position: fixed;
     z-index: 6;
     top: 0.75rem;
     bottom: 0;
-    left: calc(50% + 33.75rem);
+    right: 0;
     width: var(--dr-w);
     display: flex;
     flex-direction: column;
@@ -731,7 +736,7 @@
     .dr {
       --dr-label: color-mix(in srgb, var(--text-dim) 80%, var(--text));
       --dr-today: color-mix(in srgb, var(--accent) 55%, var(--text));
-      --dr-thumb: color-mix(in srgb, var(--accent) 75%, var(--text));
+      --dr-lit: color-mix(in srgb, var(--accent) 75%, var(--text));
     }
   }
 
@@ -743,13 +748,16 @@
   }
 
   /* The ruler's own scroller: never chains into the page, no scrollbar - the
-     fade at the bottom and the wheel are the affordance. */
+     fade at the bottom and the wheel are the affordance. The rows under the
+     reader are kept in place by hand when midnight adds a day at the top, so
+     the browser's own scroll anchoring would move them twice. */
   .dr-scroll {
     position: relative;
     flex: 1;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
+    overflow-anchor: none;
     overscroll-behavior: contain;
     scrollbar-width: none;
     scroll-padding: calc(2 * var(--dr-head)) 0 2.5rem;
@@ -769,25 +777,6 @@
     padding-bottom: 1.5rem;
   }
 
-  /* The spine ends at the oldest day's tick: the start of the history. */
-  .dr-spine {
-    position: absolute;
-    top: 0;
-    left: var(--dr-spine-x);
-    width: 1px;
-    background: var(--dr-spine);
-  }
-
-  /* What the feed shows. Above the headers, so a month boundary never cuts it. */
-  .dr-thumb {
-    position: absolute;
-    z-index: 5;
-    left: calc(var(--dr-spine-x) - 1px);
-    width: 3px;
-    border-radius: 2px;
-    background: var(--dr-thumb);
-  }
-
   .dr-days {
     list-style: none;
     margin: 0;
@@ -805,8 +794,7 @@
     content-visibility: visible;
   }
 
-  /* Headers stick to the top of the ruler, the spine drawn into their
-     background so it never breaks under one. */
+  /* Headers stick to the top of the ruler. */
   .dr-yhead,
   .dr-mhead {
     position: sticky;
@@ -815,9 +803,7 @@
     display: flex;
     align-items: flex-end;
     white-space: nowrap;
-    background:
-      linear-gradient(var(--dr-spine), var(--dr-spine)) var(--dr-spine-x) 0 / 1px 100% no-repeat,
-      var(--bg);
+    background: var(--bg);
   }
 
   .dr-mhead {
@@ -836,7 +822,7 @@
     align-items: flex-end;
     width: 100%;
     height: calc(var(--dr-head) - 4px);
-    padding: 0 0 0.3rem calc(var(--dr-label-x) - 4px);
+    padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
     border-radius: 4px;
     font-size: var(--dr-font);
     font-weight: 600;
@@ -857,14 +843,13 @@
   /* A past year: its own row above its months, a hairline across the ruler. */
   .dr-yhead {
     z-index: 3;
-    padding: 0 0 0.3rem calc(var(--dr-label-x) - 4px);
-    font-size: 0.75rem;
+    padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
+    font-size: 0.8125rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--dr-strong);
     background:
-      linear-gradient(var(--border), var(--border)) var(--dr-spine-x) 0 / 100% 1px no-repeat,
-      linear-gradient(var(--dr-spine), var(--dr-spine)) var(--dr-spine-x) 0 / 1px 100% no-repeat,
+      linear-gradient(var(--border), var(--border)) 0 0 / 100% 1px no-repeat,
       var(--bg);
   }
 
@@ -879,7 +864,7 @@
   .dr-li[data-band]::before {
     content: "";
     position: absolute;
-    inset: 0 0 0 calc(var(--dr-spine-x) + 1px);
+    inset: 0;
     background: var(--dr-band);
   }
 
@@ -902,6 +887,8 @@
   }
 
   .dr-day {
+    --dr-len: var(--dr-tick-day);
+    --dr-op: 0.22;
     all: unset;
     box-sizing: border-box;
     position: relative;
@@ -910,7 +897,7 @@
     align-items: center;
     width: 100%;
     height: 100%;
-    padding: 0 var(--dr-pad-r) 0 var(--dr-label-x);
+    padding: 0 var(--dr-ticks) 0 var(--dr-label-x);
     border-radius: 4px;
     font-size: var(--dr-font);
     line-height: 1;
@@ -919,33 +906,59 @@
     cursor: pointer;
   }
 
-  /* The tick. Its length is the calendar, nothing else. */
+  /* The tick, flush with the right edge of the window. Its length is the
+     calendar, its strength whether the day has entries; the days the feed shows
+     light up in the accent, and the one at the reading line glows. */
   .dr-day::before {
     content: "";
     position: absolute;
-    left: calc(var(--dr-spine-x) + 1px);
-    top: calc(50% - 0.5px);
-    width: var(--dr-tick-day);
-    height: 1px;
-    background: var(--dr-tick-quiet);
-  }
-
-  .dr-day.rec::before {
+    right: 0;
+    top: calc(50% - var(--dr-tick-h) / 2);
+    width: var(--dr-len);
+    height: var(--dr-tick-h);
+    border-radius: 1px 0 0 1px;
     background: var(--dr-tick);
+    opacity: var(--dr-op);
+    transition:
+      width 180ms ease,
+      opacity 180ms ease,
+      background-color 180ms ease,
+      box-shadow 180ms ease;
   }
 
-  .dr-day.mon::before {
-    width: var(--dr-tick-week);
-    background: var(--dr-tick-week-c);
+  .dr-day.rec {
+    --dr-op: 0.45;
   }
 
-  .dr-day.first::before {
-    width: var(--dr-tick-month);
-    background: var(--dr-tick-month-c);
+  .dr-day.mon {
+    --dr-len: var(--dr-tick-week);
   }
 
-  .dr-day.today::before {
-    background: var(--dr-today);
+  .dr-day.first {
+    --dr-len: var(--dr-tick-month);
+  }
+
+  .dr-day:global([data-vis])::before {
+    background: var(--dr-lit);
+    opacity: 1;
+  }
+
+  .dr-day:global([aria-current])::before {
+    box-shadow: 0 0 4px var(--dr-lit);
+  }
+
+  /* The row under the pointer, or keyboard focus: its tick reaches out and
+     comes up to full strength. */
+  .dr-day:hover::before,
+  .dr-day:focus-visible::before {
+    width: calc(var(--dr-len) + var(--dr-tick-grow));
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dr-day::before {
+      transition: none;
+    }
   }
 
   .dr-wd {
@@ -999,10 +1012,6 @@
     color: var(--dr-today);
   }
 
-  .dr-day:hover {
-    background: var(--hover);
-  }
-
   .dr-day:hover .dr-wd,
   .dr-day:hover .dr-n,
   .dr-day:hover .dr-dur {
@@ -1014,7 +1023,7 @@
     outline-offset: -2px;
   }
 
-  /* Shown when the thumb is scrolled out of the ruler: says where it is. */
+  /* Shown when the lit ticks are scrolled out of the ruler: says where they are. */
   .dr-return {
     position: absolute;
     z-index: 6;
@@ -1115,12 +1124,11 @@
   }
 
   @media (forced-colors: active) {
-    .dr-spine,
     .dr-day::before {
       background: CanvasText;
     }
 
-    .dr-thumb {
+    .dr-day:global([data-vis])::before {
       background: Highlight;
     }
 

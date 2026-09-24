@@ -60,6 +60,10 @@ const PAGE_OVERLAP = 40;
 const PAGE_REPEAT_MS = 1000;
 /** How long after a jump a scroll nobody asked for is taken back, and how recent a scroll counts as the page still moving. */
 const JUMP_HOLD_MS = 200;
+/** The most such a scroll moves: the tail of a smooth scroll is a frame's worth, a drag is not. */
+const JUMP_TAIL_PX = 150;
+/** How long a key's step is carried on through corrections; one that old has stalled. */
+const PAGE_CARRY_MS = 2000;
 
 /** Controls that take page keys and Space for themselves. */
 const KEEPS_PAGE_KEYS = "input, textarea, select, [contenteditable], dialog, [role=dialog], [role=listbox]";
@@ -296,7 +300,8 @@ export class FeedScroller {
     // The scroll a jump cut short, moving the page a frame later (see #jumpTo).
     const jump = this.#jump;
     const own = this.#ownScrollTarget !== null && Math.abs(window.scrollY - this.#ownScrollTarget) < 1;
-    if (jump !== null && !own && performance.now() - jump.at < JUMP_HOLD_MS && Math.abs(window.scrollY - jump.top) >= 1) {
+    const moved = Math.abs(window.scrollY - (jump?.top ?? 0));
+    if (jump !== null && !own && performance.now() - jump.at < JUMP_HOLD_MS && moved >= 1 && moved < JUMP_TAIL_PX) {
       this.#ownScrollTarget = jump.top;
       this.#place(jump.top);
       return;
@@ -650,9 +655,14 @@ export class FeedScroller {
     this.#place(target);
     if (this.#jump !== null) this.#jump.top = this.#scrollBase();
     // The correction cancels a key's smooth step under way: it goes on from
-    // here, to the same place in the feed.
+    // here, to the same place in the feed - unless it is so old it has stalled,
+    // when carrying it on would move the page by itself.
     const page = this.#page;
     if (page === null) return;
+    if (performance.now() - page.at > PAGE_CARRY_MS) {
+      this.#page = null;
+      return;
+    }
     const bottom = document.documentElement.scrollHeight - window.innerHeight;
     page.target = Math.min(bottom, Math.max(0, page.target + correction));
     if (Math.abs(window.scrollY - page.target) >= 1) this.#stepPage(page.target);

@@ -189,16 +189,24 @@ test.describe("day ruler", () => {
     });
     await triggerSync(page);
     await expect(ruler(page)).toBeVisible();
-    // Below 88rem there is no room for it beside the column: not rendered at all.
+    // Below 85rem there is no room for it beside the column: not rendered at all.
     await page.setViewportSize({ width: 1300, height: 900 });
     await expect(ruler(page)).toHaveCount(0);
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // Up to 88rem it fits without the times, which stay in the tooltip.
+    const time = ruler(page).locator(".dr-dur").first();
+    await page.setViewportSize({ width: 1380, height: 900 });
     await expect(ruler(page)).toBeVisible();
-    // It sits in the margin, clear of the cards.
-    const cards = (await page.locator(".feed .card").first().boundingBox())!;
-    const nav = (await ruler(page).boundingBox())!;
-    expect(nav.x).toBeGreaterThanOrEqual(cards.x + cards.width + 8);
-    expect(nav.x + nav.width).toBeLessThanOrEqual(1440);
+    await expect(time).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(time).toBeVisible();
+    // It sits in the margin, clear of the cards, at every width it is shown at.
+    for (const width of [1380, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const cards = (await page.locator(".feed .card").first().boundingBox())!;
+      const nav = (await ruler(page).boundingBox())!;
+      expect(nav.x).toBeGreaterThanOrEqual(cards.x + cards.width + 8);
+      expect(nav.x + nav.width).toBeLessThanOrEqual(width);
+    }
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -272,10 +280,10 @@ test.describe("day ruler", () => {
     await expect(header.locator(".wall")).toHaveText("1h 30m");
     await expect(header.locator(".tracked")).toHaveText("2h 10m");
     await expect(row(page, weekday).locator(".dr-dur")).toHaveText("1h 30m");
-    await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 3 entries/);
-    // The tooltip spells both out, as the header's own title does.
+    // The tooltip and the name add the header's second figure.
+    await expect(row(page, weekday)).toHaveAccessibleName(/1h 30m, 2h 10m tracked - work that ran in parallel is counted once, 3 entries/);
     await row(page, weekday).hover();
-    await expect(page.locator(".dr-tip")).toContainText("1h 30m on the clock, 2h 10m tracked");
+    await expect(page.locator(".dr-tip .ts")).toHaveText(["1h 30m · 3 entries", "2h 10m tracked - work that ran in parallel is counted once"]);
     expect(await pageErrors(page)).toEqual([]);
   });
 
@@ -582,10 +590,10 @@ test.describe("day ruler", () => {
     for (const iso of shown) expect(marked).toContain(iso);
     // The day at the reading line is where the reader is.
     await expect(page.locator(".dr-day[aria-current='location']")).toHaveAttribute("data-iso", atLine!);
-    // The page scroll brought the thumb into the ruler's view.
+    // The page scroll brought the lit ticks into the ruler's view.
     expect(await inView()).toBe(true);
 
-    // The reader takes the ruler back to today: the chip says the thumb is below.
+    // The reader takes the ruler back to today: the chip says the lit ticks are below.
     const frame = (await scroller.boundingBox())!;
     await page.mouse.move(frame.x + frame.width / 2, frame.y + 200);
     await page.mouse.wheel(0, -20_000);
@@ -607,7 +615,7 @@ test.describe("day ruler", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
-  test("the wheel over the ruler scrolls the ruler, never the page, and the chip brings the thumb back", async ({ page, server }) => {
+  test("the wheel over the ruler scrolls the ruler, never the page, and the chip brings the lit ticks back", async ({ page, server }) => {
     await trackErrors(page);
     await seedHistory(server.url, 2);
     await open(page, server.url);
@@ -619,7 +627,7 @@ test.describe("day ruler", () => {
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
     await settle(page);
     expect(await page.evaluate(() => window.scrollY)).toBe(before);
-    // The thumb is up at today: the chip points up and scrolls the ruler back.
+    // The lit ticks are up at today: the chip points up and scrolls the ruler back.
     const chip = page.locator(".dr-return");
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("▲");
@@ -645,7 +653,7 @@ test.describe("day ruler", () => {
 
     await page.keyboard.press("End");
     expect(await focused()).toBe(isoDay(dayNine(-OLDEST)));
-    // Far from the thumb, and no chip over the rows focus moves to.
+    // Far from the lit ticks, and no chip over the rows focus moves to.
     await expect(page.locator(".dr-return")).toHaveCount(0);
     await page.keyboard.press("PageUp");
     expect(await focusCovered(page)).toBe(false);
@@ -760,7 +768,7 @@ test.describe("day ruler", () => {
     await trackErrors(page);
     await seedHistory(server.url);
     // Late January, with a screenful of January days: the history reaches back
-    // into a past year, and the thumb stays up in January.
+    // into a past year, and the lit ticks stay up in January.
     const year = new Date().getFullYear() + 1;
     const january = [];
     for (let date = 4; date <= 19; date++) {
@@ -847,7 +855,7 @@ test.describe("day ruler", () => {
     await settle(page);
     expect(await scrollTop()).toBe(explored);
 
-    // The next page scroll brings the thumb back into view.
+    // The next page scroll brings the lit ticks back into view.
     await page.evaluate(() => window.scrollBy(0, 200));
     await settle(page);
     expect(await scrollTop()).toBeLessThan(explored);

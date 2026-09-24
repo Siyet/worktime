@@ -70,7 +70,7 @@
 
   // What the feed shows, in track px: the span its lit ticks cover. Drawn by the
   // ticks alone, so only the ruler's scrolling and the chip read it.
-  let thumb: { top: number; bottom: number } | null = null;
+  let shown: { top: number; bottom: number } | null = null;
   let more = $state(false);
   /** `cover` hides the part of a row between the stuck headers and the chip. */
   let chip = $state<{ up: boolean; top: number | null; cover: number; label: string } | null>(null);
@@ -123,10 +123,16 @@
   function dayLabel(row: RulerRow): string {
     const full = formats.full.format(dateOfISO(row.iso));
     let label = row.today ? `${t("Today")}, ${full}` : capitalise(full);
-    if (row.count > 0) label += `, ${formatDurationShort(row.clockMs)}, ${entriesLabel(row.count)}`;
+    if (row.count > 0) label += `, ${formatDurationShort(row.clockMs)}${trackedNote(row, ", ")}, ${entriesLabel(row.count)}`;
     if (row.off !== null) label += `, ${kindLabel(row.off)}`;
     if (row.count === 0 && row.off === null) label += `, ${t("no entries")}`;
     return label;
+  }
+
+  // The header's second figure, where parallel work makes it differ from the first.
+  function trackedNote(row: RulerRow, lead: string): string {
+    if (row.trackedMs === row.clockMs) return "";
+    return lead + t("{tracked} tracked - work that ran in parallel is counted once", { tracked: formatDurationShort(row.trackedMs) });
   }
 
   function entriesLabel(count: number): string {
@@ -195,11 +201,11 @@
       // style: one layout a frame, not one per read.
       const view = viewOf();
       if (range === null || current.rows.length === 0) {
-        thumb = null;
+        shown = null;
       } else {
         const top = rulerOffset(current, range.top);
         const bottom = Math.max(top + 4, rulerOffset(current, range.bottom));
-        thumb = { top, bottom };
+        shown = { top, bottom };
         if (view !== null && following()) view.scrollTop = follow(false, view);
         const first = rowFrom(current, top);
         const at = range.current === null ? 0 : (current.byISO.get(range.current)?.index ?? 0);
@@ -266,14 +272,14 @@
   // Returns where the ruler is scrolled to.
   function follow(fromChip: boolean, view: View | null = viewOf()): number {
     const element = scroller;
-    if (element === null || view === null || thumb === null) return view?.scrollTop ?? 0;
+    if (element === null || view === null || shown === null) return view?.scrollTop ?? 0;
     const { height, scrollTop } = view;
-    const heads = stuckHeight(thumb.top);
+    const heads = stuckHeight(shown.top);
     const bandTop = heads + 0.15 * (height - heads);
     const bandBottom = 0.8 * height;
     let target = scrollTop;
-    if (fromChip || thumb.top < scrollTop + bandTop) target = thumb.top - bandTop;
-    else if (thumb.bottom > scrollTop + bandBottom) target = Math.min(thumb.bottom - bandBottom, thumb.top - bandTop);
+    if (fromChip || shown.top < scrollTop + bandTop) target = shown.top - bandTop;
+    else if (shown.bottom > scrollTop + bandBottom) target = Math.min(shown.bottom - bandBottom, shown.top - bandTop);
     target = Math.min(Math.max(0, target), view.scrollHeight - height);
     if (Math.abs(target - scrollTop) < 0.5) return scrollTop;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -292,13 +298,13 @@
     const { scrollTop, height } = view;
     const hasMore = scrollTop + height < view.scrollHeight - 1;
     if (hasMore !== more) more = hasMore;
-    if (thumb === null || model.rows.length === 0 || keyboard) {
+    if (shown === null || model.rows.length === 0 || keyboard) {
       chip = null;
       return;
     }
     const heads = stuckHeight(scrollTop + RULER_HEAD);
-    const up = thumb.bottom < scrollTop + heads;
-    const down = thumb.top > scrollTop + height - 8;
+    const up = shown.bottom < scrollTop + heads;
+    const down = shown.top > scrollTop + height - 8;
     if (!up && !down) {
       chip = null;
       return;
@@ -523,11 +529,7 @@
       const day = row.year === currentYear ? formats.tipDay.format(date) : formats.full.format(date);
       const lines: { text: string; time?: string; kind?: TimeOffKind }[] = [];
       if (row.count > 0) lines.push({ time: formatDurationShort(row.clockMs), text: `· ${entriesLabel(row.count)}` });
-      // The header's two readings, spelled out as its own title does.
-      if (row.clockMs !== row.trackedMs) {
-        const both = { wall: formatDurationShort(row.clockMs), tracked: formatDurationShort(row.trackedMs) };
-        lines.push({ text: t("{wall} on the clock, {tracked} tracked - work that ran in parallel is counted once", both) });
-      }
+      if (row.clockMs !== row.trackedMs) lines.push({ text: trackedNote(row, "") });
       if (row.off !== null) lines.push({ kind: row.off, text: kindLabel(row.off) });
       if (row.count === 0) {
         const where = whereTo(row.target, false);
@@ -832,7 +834,7 @@
   }
 
   .dr-mbtn:hover {
-    background: var(--hover);
+    color: var(--dr-lit);
   }
 
   .dr-mbtn:focus-visible {
@@ -975,8 +977,8 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* The day header's own figure, right-aligned at the edge like the feed's
-     totals. Muted, never accented; only on days with entries. */
+  /* The day header's first figure, right-aligned against the ticks like the
+     feed's totals. Muted, never accented; only on days with entries. */
   .dr-dur {
     flex: none;
     margin-left: auto;
@@ -985,6 +987,14 @@
     font-size: var(--dr-dur-font);
     font-variant-numeric: tabular-nums;
     color: var(--dr-label);
+  }
+
+  /* Between 85 and 88rem the margin holds the dates and the ticks but not the
+     times: they stay in the tooltip. */
+  @media (max-width: 87.99rem) {
+    .dr-dur {
+      display: none;
+    }
   }
 
   .dr-day.rec .dr-n {
@@ -1124,12 +1134,19 @@
   }
 
   @media (forced-colors: active) {
+    /* Opacity and the glow are the ordinary marks; here every tick is solid
+       and the day at the reading line reaches out instead. */
     .dr-day::before {
       background: CanvasText;
+      opacity: 1;
     }
 
     .dr-day:global([data-vis])::before {
       background: Highlight;
+    }
+
+    .dr-day:global([aria-current])::before {
+      width: calc(var(--dr-len) + var(--dr-tick-grow));
     }
 
     /* Time off keeps a mark; the weekend band goes - the weekday says it. */

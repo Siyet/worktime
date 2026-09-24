@@ -111,7 +111,7 @@
 
   // The day ruler: wide windows with a mouse, and only once there is a day
   // before today to navigate to.
-  const RULER_MEDIA = "(min-width: 88rem) and (hover: hover) and (pointer: fine)";
+  const RULER_MEDIA = "(min-width: 85rem) and (hover: hover) and (pointer: fine)";
   let rulerRoom = $state(false);
   $effect(() => {
     const query = window.matchMedia(RULER_MEDIA);

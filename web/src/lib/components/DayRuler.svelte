@@ -885,9 +885,13 @@
   }
 
   /* The chart's hatch: its 7px tile clips half of the 1.6px stroke, so 0.8px is
-     what it shows. */
+     what it shows. Each row draws its own stripes, so their period is the pitch
+     over 2√2 (8.13px at 23px) rather than the chart's 7px: two periods at 45°
+     span a row exactly, and the stripes run on from day to day instead of
+     stepping at every row. */
   .dr-li[data-band="sick"] {
-    --dr-band: repeating-linear-gradient(135deg, rgba(224, 82, 82, 0.38) 0 0.8px, transparent 0.8px 7px), rgba(224, 82, 82, 0.1);
+    --dr-hatch: calc(var(--dr-pitch) / 2.828427);
+    --dr-band: repeating-linear-gradient(135deg, rgba(224, 82, 82, 0.38) 0 0.8px, transparent 0.8px var(--dr-hatch)), rgba(224, 82, 82, 0.1);
   }
 
   .dr-day {

@@ -966,10 +966,14 @@
     }
   }
 
+  /* The column is measured at the regular weight; today's bold weekday can be
+     a pixel or two wider, and a flex end spills that into the padding on the
+     left instead of into the gap before the date. */
   .dr-wd {
     flex: none;
+    display: flex;
+    justify-content: flex-end;
     width: var(--dr-wd-w);
-    text-align: right;
   }
 
   .dr-n {
@@ -1092,7 +1096,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-    font-size: 0.8rem;
+    font-size: 0.875rem;
     line-height: 1.35;
     white-space: nowrap;
   }
@@ -1112,7 +1116,7 @@
     align-items: center;
     gap: 0.35rem;
     color: var(--text-dim);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
   }
 
   .num {

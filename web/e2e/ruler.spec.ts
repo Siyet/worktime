@@ -199,8 +199,10 @@ test.describe("day ruler", () => {
       await expect(ruler(page)).toBeVisible();
       await expect(time).toBeHidden();
     }
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await expect(time).toBeVisible();
+    for (const width of [1424, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(time).toBeVisible();
+    }
     // It sits in the margin, clear of the cards, at every width it is shown at.
     for (const width of [1380, 1440]) {
       await page.setViewportSize({ width, height: 900 });

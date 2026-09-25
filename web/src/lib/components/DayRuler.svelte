@@ -711,8 +711,8 @@
     --dr-ticks: calc(var(--dr-tick-month) + var(--dr-tick-grow) + 6px);
     --dr-label-x: 0.375rem;
     --dr-wd-w: 1.75rem;
-    --dr-font: 0.75rem;
-    --dr-dur-font: 0.6875rem;
+    --dr-font: 0.8125rem;
+    --dr-dur-font: 0.75rem;
     --dr-dur-gap: 8px;
 
     /* Labels sit on the bands too, so they are a touch brighter than --text-dim. */
@@ -848,7 +848,7 @@
   .dr-yhead {
     z-index: 3;
     padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--dr-strong);
@@ -992,9 +992,11 @@
     color: var(--dr-label);
   }
 
-  /* Between 85 and 88rem the margin holds the dates and the ticks but not the
-     times: they stay in the tooltip. */
-  @media (width < 88rem) {
+  /* Between 85 and 89rem the margin holds the dates and the ticks but not the
+     times: they stay in the tooltip. A full row at this type needs about 159px
+     in the widest locale, which 89rem gives with about 5px to spare even beside
+     a classic scrollbar; 88rem would leave it about 3px short. */
+  @media (width < 89rem) {
     .dr-dur {
       display: none;
     }
@@ -1051,7 +1053,7 @@
     height: var(--dr-pitch);
     min-height: 0;
     padding: 0 0.4rem;
-    font-size: 0.65625rem;
+    font-size: 0.75rem;
     font-weight: 600;
     line-height: 1;
     color: var(--dr-today);

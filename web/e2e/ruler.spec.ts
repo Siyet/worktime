@@ -192,11 +192,13 @@ test.describe("day ruler", () => {
     // Below 85rem there is no room for it beside the column: not rendered at all.
     await page.setViewportSize({ width: 1300, height: 900 });
     await expect(ruler(page)).toHaveCount(0);
-    // Up to 88rem it fits without the times, which stay in the tooltip.
+    // Up to 89rem it fits without the times, which stay in the tooltip.
     const time = ruler(page).locator(".dr-dur").first();
-    await page.setViewportSize({ width: 1380, height: 900 });
-    await expect(ruler(page)).toBeVisible();
-    await expect(time).toBeHidden();
+    for (const width of [1380, 1408]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(ruler(page)).toBeVisible();
+      await expect(time).toBeHidden();
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(time).toBeVisible();
     // It sits in the margin, clear of the cards, at every width it is shown at.

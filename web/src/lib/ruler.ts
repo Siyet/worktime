@@ -12,7 +12,7 @@ import type { TimeOffKind } from "./types";
 
 /** One calendar day, in px - the --dr-pitch of the component, which is px too:
  * in rem, a browser's larger default font would stretch the rows past the model. */
-export const RULER_PITCH = 20;
+export const RULER_PITCH = 23;
 /** A month header, and a past year's row above its months - --dr-head. */
 export const RULER_HEAD = 28;
 

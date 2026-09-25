@@ -711,8 +711,8 @@
     --dr-ticks: calc(var(--dr-tick-month) + var(--dr-tick-grow) + 6px);
     --dr-label-x: 0.375rem;
     --dr-wd-w: 1.75rem;
-    --dr-font: 0.75rem;
-    --dr-dur-font: 0.6875rem;
+    --dr-font: 0.8125rem;
+    --dr-dur-font: 0.75rem;
     --dr-dur-gap: 8px;
 
     /* Labels sit on the bands too, so they are a touch brighter than --text-dim. */
@@ -848,7 +848,7 @@
   .dr-yhead {
     z-index: 3;
     padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--dr-strong);
@@ -966,10 +966,14 @@
     }
   }
 
+  /* The column is measured at the regular weight; today's bold weekday can be
+     a pixel or two wider, and a flex end spills that into the padding on the
+     left instead of into the gap before the date. */
   .dr-wd {
     flex: none;
+    display: flex;
+    justify-content: flex-end;
     width: var(--dr-wd-w);
-    text-align: right;
   }
 
   .dr-n {
@@ -992,9 +996,11 @@
     color: var(--dr-label);
   }
 
-  /* Between 85 and 88rem the margin holds the dates and the ticks but not the
-     times: they stay in the tooltip. */
-  @media (width < 88rem) {
+  /* Between 85 and 89rem the margin holds the dates and the ticks but not the
+     times: they stay in the tooltip. A full row at this type needs about 159px
+     in the widest locale, which 89rem gives with about 5px to spare even beside
+     a classic scrollbar; 88rem would leave it about 3px short. */
+  @media (width < 89rem) {
     .dr-dur {
       display: none;
     }
@@ -1051,7 +1057,7 @@
     height: var(--dr-pitch);
     min-height: 0;
     padding: 0 0.4rem;
-    font-size: 0.65625rem;
+    font-size: 0.75rem;
     font-weight: 600;
     line-height: 1;
     color: var(--dr-today);
@@ -1090,7 +1096,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-    font-size: 0.8rem;
+    font-size: 0.875rem;
     line-height: 1.35;
     white-space: nowrap;
   }
@@ -1110,7 +1116,7 @@
     align-items: center;
     gap: 0.35rem;
     color: var(--text-dim);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
   }
 
   .num {

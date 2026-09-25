@@ -251,17 +251,20 @@
   .dr-dur { display: none; }
 }
 /* A day with entries has a bright date; a day without keeps the dim one. */
-.dr-day.rec .dr-n { color: var(--dr-strong); }
 .dr-day.first .dr-n { font-weight: 600; }
+/* A row's labels rest muted, the date as quiet as the rest - the ticks say
+   which days have entries and which the feed shows. Under the pointer, or with
+   keyboard focus, they come up to full strength along with the tick. */
+.dr-wd, .dr-n, .dr-dur { transition: color 180ms ease; }
+@media (prefers-reduced-motion: reduce) { .dr-wd, .dr-n, .dr-dur { transition: none; } }
+/* Days the feed shows right now. */
+
+/* No hover band on a day: the labels go bright and the tick grows. */
+.dr-day:hover :is(.dr-wd, .dr-n, .dr-dur),
+.dr-day:focus-visible :is(.dr-wd, .dr-n, .dr-dur) { color: var(--dr-strong); }
+/* Today stays marked, pointer or not. */
 .dr-day.today .dr-wd,
 .dr-day.today .dr-n { color: var(--dr-today); font-weight: 600; }
-/* Days the feed shows right now. */
-.dr-day.vis .dr-wd,
-.dr-day.vis .dr-n { color: var(--dr-strong); }
-.dr-day.today.vis .dr-wd,
-.dr-day.today.vis .dr-n { color: var(--dr-today); }
-/* No hover band on a day: the labels go bright and the tick grows. */
-.dr-day:hover .dr-wd, .dr-day:hover .dr-n, .dr-day:hover .dr-dur { color: var(--dr-strong); }
 .dr-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Shown when the lit ticks are scrolled out of the ruler: says where they are. */
@@ -460,7 +463,8 @@ pre.sketch b { color: var(--text); font-weight: 600; }
    never the viewer's window, which the app's own (width < 88rem) rule reads. */
 .m-frame .dr-dur, .dr.static .dr-dur { display: inline; }
 .m-frame[data-compact] .dr-dur, .frag.compact .dr-dur { display: none; }
-.dr .dr-day.is-hover .dr-wd, .dr .dr-day.is-hover .dr-n, .dr .dr-day.is-hover .dr-dur { color: var(--dr-strong); }
+.dr .dr-day:is(.is-hover, .is-focus) :is(.dr-wd, .dr-n, .dr-dur) { color: var(--dr-strong); }
+.dr .dr-day.today:is(.is-hover, .is-focus) :is(.dr-wd, .dr-n) { color: var(--dr-today); }
 .dr .dr-day.is-hover::before, .dr .dr-day.is-focus::before { width: calc(var(--dr-len) + var(--dr-tick-grow)); opacity: 1; }
 .dr .dr-day.is-focus, .dr .dr-mbtn.is-focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 .figs { display: flex; flex-wrap: wrap; gap: 1.4rem 1.8rem; align-items: flex-start; }
@@ -537,7 +541,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <div class="tldr">
     <div><b>Right edge, from 85rem with a mouse.</b><span>Fixed to the viewport against the right edge of the window, from the header's top to the bottom of the window: as wide as the margin right of the cards less 12px, at most 176px. It lives in the free margin only - it never covers the feed or the strip. From 1360 to 1407px it is compact, without the times; below 1360px, or on any touch-only device (tablets included), it is not rendered at all.</span></div>
     <div><b>One tick per day, 20px apart, flush with the edge.</b><span>2px bars against the window's edge, no spine: 12px a day, 20px a Monday, 28px the 1st. Length is the calendar; strength is whether the day has entries (<code>--text</code> at 45%, or 22% without). About 41 days fit a 900px window.</span></div>
-    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 12px, weekday dim, date bright when the day has entries and dim when it has none. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
+    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 12px, weekday, date and time all in the same muted grey; under the pointer the row comes up to <code>--text</code> with its tick. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
     <div><b>The day's clock time, as quiet text.</b><span><i>2h 30m</i> right-aligned just left of the ticks, muted mono - the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i>: work that ran in parallel counts once. Only on days with entries, never accented; below 88rem only in the tooltip. Behind the rows, the Reports chart's bands: blue weekends, teal vacation, purple day off, hatched red sick; time off wins over a weekend.</span></div>
     <div><b>Lit ticks say where you are.</b><span>The ticks of the days the feed shows light up in the accent at 80% - brighter than an unlit tick, fainter than the current one - and the day at the reading line comes up to full strength with a glow. They move continuously with the page. The ruler scrolls itself only to keep them in view, and never while the pointer or keyboard focus is in it. A hovered tick reaches out 10px and comes up to full strength.</span></div>
     <div><b>Click jumps, instantly.</b><span>Any day, including an empty one: an empty day lands where it would be in the feed (the next older day with entries). A month header lands on the month's newest day with entries. Today goes to the top of the page. The landed card gets a ring that fades in 1.2s.</span></div>
@@ -652,7 +656,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <h2 style="margin-top:1.2rem">Behaviour</h2>
   <ol class="rules">
     <li><b>Range.</b> <span>From today (the top row, always, entries or not) down to the oldest day with a finished entry, every calendar day in between. Not rounded to the month's start: every row maps to a real place in the feed, and the ruler simply ends at the first recorded day's tick. Future time off is not shown.</span></li>
-    <li><b>What a day row says.</b> <span>Tick length = calendar (day, Monday, 1st). Tick strength and date brightness = has entries. The time = how long by the clock, the day header's first figure. Band = weekend or time off (time off wins). Accent label = today. Lit tick = the feed shows the day; full strength and a glow = the day at the reading line. Nothing else varies. Empty days stay quiet - fainter tick, dim date, no time; the band, not the dimming, is what says "weekend".</span></li>
+    <li><b>What a day row says.</b> <span>Tick length = calendar (day, Monday, 1st). Tick strength = has entries; the labels stay muted either way and brighten only under the pointer or focus. The time = how long by the clock, the day header's first figure. Band = weekend or time off (time off wins). Accent label = today. Lit tick = the feed shows the day; full strength and a glow = the day at the reading line. Nothing else varies. Empty days stay quiet - fainter tick, no time; the band, not the dimming, is what says "weekend".</span></li>
     <li><b>Click or Enter jumps the feed, instantly.</b> <span>A day with entries: <code>scroller.reveal(iso)</code> - its top under the pinned strip. A day without: <code>reveal</code> of the nearest older day with entries - the place the day would occupy in a newest-first feed. Today, and any empty day newer than the newest recorded day: the top of the page (<code>scrollTo(0)</code>), where the start form and running timers are. A month header: the month's newest day with entries - the top of the page when that is today, as for today's row; a month without entries lands where the month would be (its oldest day's target). Then the landing ring.</span></li>
     <li><b>Why not smooth.</b> <span>A distant jump would stream through unmounted months, and every <code>FeedScroller</code> anchor correction is an instant scroll that cancels a smooth one. The ring does the orientation work a smooth scroll would have done. (Try "Smooth" in the demo: fine in a mock with everything mounted, not in the real feed.)</span></li>
     <li><b>The lit ticks follow the feed continuously.</b> <span>The reading line (the strip's bottom when stuck, else the window top) and the window bottom are each mapped into the ruler (<code>rulerOffset</code>): inside a day's card at fraction f → that row's top + f × 20; inside the gap after it → linearly across the empty rows (and any header) down to the next recorded row; above the feed → today's row. The rows that span overlaps are the visible range, and their ticks light up; so the lit run moves with the page and crosses a weekend as the feed crosses the gap between Friday and Monday. The day at the reading line is <code>aria-current</code>, and its tick is lit above the rest - full strength and a glow. Nothing draws the span itself: it only steers the ruler's scrolling and the chip.</span></li>
@@ -1745,12 +1749,12 @@ function renderAnatomy() {
     node.style.top = y - base.top + "px";
   }
   const legend = [
-    [1, "Weekday · date", "12px from x = 6. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "weekday <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; date <code>--text</code> with entries"],
+    [1, "Weekday · date", "12px from x = 6. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "both <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; <code>--text</code> on hover or focus, a 180ms colour transition"],
     [2, "Day tick", "12 × 2 px, flush with the right edge of the window, <code>border-radius: 1px 0 0 1px</code>, vertically centred", "<code>--text</code> at 45% on a day with entries"],
     [3, "Clock time", "<code>formatDurationShort(clockMs)</code> - the day header's first figure, parallel work counted once; 11px <code>--mono</code> tabular; right edge 44px from the window's edge, at least 8px after the date; only on days with entries, and only from 88rem", "<code>--dr-label</code>, never accented; <code>--text</code> on hover"],
     [4, "Current day", "The lit tick at the reading line (<code>aria-current</code>), above the rest of the range", "<code>--dr-lit</code> at opacity 1, <code>box-shadow: 0 0 4px --dr-lit</code>"],
     [5, "1st of month tick", "28 × 2 px; wins over Monday", "as any tick"],
-    [6, "Lit ticks", "The days the feed shows, mapped continuously from it; lengths unchanged; weekday and date <code>--text</code>", "<code>--dr-lit</code> at opacity 0.8: <code>--accent</code>; light <code>color-mix(accent 60%, text)</code>"],
+    [6, "Lit ticks", "The days the feed shows, mapped continuously from it; lengths unchanged; the labels stay muted", "<code>--dr-lit</code> at opacity 0.8: <code>--accent</code>; light <code>color-mix(accent 60%, text)</code>"],
     [7, "Month header (button)", "28px, text bottom-aligned 0.35rem up, from x = 2; sticky; the button is its bottom 24px across the full width, radius 4", "12px 600 <code>--text</code> on <code>--bg</code>; hover: the name <code>--dr-lit</code>, no band"],
     [8, "Monday tick", "20 × 2 px", "as any tick"],
     [9, "Day without entries", "Same tick length, fainter; dim date, no time", "tick <code>--text</code> at 22%"],

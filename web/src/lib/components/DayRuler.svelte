@@ -1000,35 +1000,37 @@
     }
   }
 
-  .dr-day.rec .dr-n {
-    color: var(--dr-strong);
-  }
-
   .dr-day.first .dr-n {
     font-weight: 600;
   }
 
+  /* A row's labels rest muted, the date as quiet as the rest - the ticks say
+     which days have entries and which the feed shows. Under the pointer, or
+     with keyboard focus, they come up to full strength along with the tick. */
+  .dr-wd,
+  .dr-n,
+  .dr-dur {
+    transition: color 180ms ease;
+  }
+
+  .dr-day:hover :is(.dr-wd, .dr-n, .dr-dur),
+  .dr-day:focus-visible :is(.dr-wd, .dr-n, .dr-dur) {
+    color: var(--dr-strong);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dr-wd,
+    .dr-n,
+    .dr-dur {
+      transition: none;
+    }
+  }
+
+  /* Today stays marked, pointer or not. */
   .dr-day.today .dr-wd,
   .dr-day.today .dr-n {
     color: var(--dr-today);
     font-weight: 600;
-  }
-
-  /* Days the feed shows right now. */
-  .dr-day:global([data-vis]) .dr-wd,
-  .dr-day:global([data-vis]) .dr-n {
-    color: var(--dr-strong);
-  }
-
-  .dr-day.today:global([data-vis]) .dr-wd,
-  .dr-day.today:global([data-vis]) .dr-n {
-    color: var(--dr-today);
-  }
-
-  .dr-day:hover .dr-wd,
-  .dr-day:hover .dr-n,
-  .dr-day:hover .dr-dur {
-    color: var(--dr-strong);
   }
 
   .dr-day:focus-visible {

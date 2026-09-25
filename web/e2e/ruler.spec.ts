@@ -310,23 +310,43 @@ test.describe("day ruler", () => {
     expect(await pageErrors(page)).toEqual([]);
   });
 
-  test("a tick under the pointer grows and comes up to full strength", async ({ page, server }) => {
+  test("a row under the pointer comes up to full strength: its tick grows, its labels brighten", async ({ page, server }) => {
     await trackErrors(page);
     await seedHistory(server.url);
     await open(page, server.url);
-    const target = row(page, nearest(20, false));
+    // A day with entries, whose date once stood out bright at rest.
+    const target = row(page, recordedFrom(20));
     const tick = () =>
       target.evaluate((button) => {
         const style = getComputedStyle(button, "::before");
         return { width: parseFloat(style.width), opacity: Number(style.opacity) };
       });
+    const labels = () =>
+      target.evaluate((button) =>
+        [".dr-wd", ".dr-n", ".dr-dur"].map((selector) => getComputedStyle(button.querySelector(selector)!).color),
+      );
+    const text = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--text)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
     const rest = await tick();
     expect(rest.opacity).toBeLessThan(1);
+    // At rest the weekday, the date and the time are one muted colour.
+    const muted = await labels();
+    expect(new Set(muted).size).toBe(1);
+    expect(muted[0]).not.toBe(text);
     await target.hover();
-    // Past the transition: it settles 10px longer, at full opacity.
+    // Past the transition: the tick settles 10px longer at full opacity, and
+    // the labels in the text colour.
     await expect.poll(tick).toEqual({ width: rest.width + 10, opacity: 1 });
+    await expect.poll(labels).toEqual([text, text, text]);
     await pointAtFeed(page);
     await expect.poll(tick).toEqual(rest);
+    await expect.poll(labels).toEqual(muted);
     expect(await pageErrors(page)).toEqual([]);
   });
 

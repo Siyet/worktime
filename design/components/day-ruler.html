@@ -24,7 +24,7 @@
    like the outline of a Notion page, and the ticks of the days the feed shows
    light up, the one at the reading line brightest. The spec marks those rows
    with .vis; the component sets data-vis. Rows and headers are px, the model's
-   own numbers; the type is rem. Between 85 and 88rem the ruler is compact: the
+   own numbers; the type is rem. Between 85 and 89rem the ruler is compact: the
    times drop out and stay in the tooltip.
    ======================================================================== */
 
@@ -49,8 +49,8 @@
   --dr-ticks: calc(var(--dr-tick-month) + var(--dr-tick-grow) + 6px); /* 44px */
   --dr-label-x: 0.375rem;  /* 6px: labels start here, headers 4px before     */
   --dr-wd-w: 1.75rem;      /* replaced per locale: the widest short weekday  */
-  --dr-font: 0.75rem;      /* 12px                                           */
-  --dr-dur-font: 0.6875rem; /* 11px mono: the day's clock time               */
+  --dr-font: 0.8125rem;    /* 13px                                           */
+  --dr-dur-font: 0.75rem;  /* 12px mono: the day's clock time                */
   --dr-dur-gap: 8px;       /* at least this much between date and time       */
 
   /* Colour, dark (the default theme). Labels sit on the bands too, so they
@@ -84,9 +84,10 @@
   }
 }
 /* Shown from 85rem (1360px), where the ruler gets 140px - 131.5 less a classic
-   17px scrollbar. The widest full row needs about 150px (engineering notes),
-   which 88rem (1408px) gives even with that scrollbar: 155.5px. Below it the
-   ruler is compact - the times drop out, the rest needs about 95px. Mouse only
+   17px scrollbar. The widest full row needs about 158px (engineering notes),
+   which 89rem (1424px) gives even with that scrollbar: 163.5px, about 5px to
+   spare; 88rem (155.5px) would leave it about 3px short. Below 89rem the ruler
+   is compact - the times drop out, the rest needs about 98px. Mouse only
    (owner's decision): every part of it (hover, 20px rows) assumes a fine pointer. */
 @media (min-width: 85rem) and (hover: hover) and (pointer: fine) {
   .dr { display: flex; }
@@ -160,7 +161,7 @@
 .dr-yhead {
   z-index: 3;
   padding: 0 0 0.35rem calc(var(--dr-label-x) - 4px);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--dr-strong);
@@ -245,9 +246,11 @@
   font-variant-numeric: tabular-nums;
   color: var(--dr-label);
 }
-/* Between 85 and 88rem the margin holds the dates and the ticks but not the
-   times: they stay in the tooltip. */
-@media (width < 88rem) {
+/* Between 85 and 89rem the margin holds the dates and the ticks but not the
+   times: they stay in the tooltip. A full row at this type needs about 158px in
+   the widest locale, which 89rem gives with about 5px to spare even beside a
+   classic scrollbar; 88rem would leave it about 3px short. */
+@media (width < 89rem) {
   .dr-dur { display: none; }
 }
 /* A day with entries has a bright date; a day without keeps the dim one. */
@@ -280,7 +283,7 @@
   height: var(--dr-pitch);
   min-height: 0;
   padding: 0 0.4rem;
-  font-size: 0.65625rem;
+  font-size: 0.75rem;
   font-weight: 600;
   line-height: 1;
   color: var(--dr-today);
@@ -460,7 +463,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 .frag .dr-tip { position: absolute; }
 .dr .dr-mbtn.is-hover { color: var(--dr-lit); }
 /* Compact or not follows the mock window's width, or a fragment's own class -
-   never the viewer's window, which the app's own (width < 88rem) rule reads. */
+   never the viewer's window, which the app's own (width < 89rem) rule reads. */
 .m-frame .dr-dur, .dr.static .dr-dur { display: inline; }
 .m-frame[data-compact] .dr-dur, .frag.compact .dr-dur { display: none; }
 .dr .dr-day:is(.is-hover, .is-focus) :is(.dr-wd, .dr-n, .dr-dur) { color: var(--dr-strong); }
@@ -535,14 +538,15 @@ pre.sketch b { color: var(--text); font-weight: 600; }
     time became quiet text; month headers became clickable; weekends and time off are the Reports chart's bands; the ruler is mouse-only. <b>Revision 3</b> applies the second, with Notion's outline as the model:
     a larger scale (20px rows, 12px type); no spine and no thumb - 2px ticks flush with the right edge of the window, and the ticks of the days the feed shows lit in the accent;
     a hovered tick grows and comes up to full strength; the time is the day header's clock time, parallel work counted once. After review the rows went to px (the model's own units),
-    the range is lit at 80% under a full-strength current day, and 85-88rem windows got a compact ruler without the times instead of none. The feed it drives is the live one
+    the range is lit at 80% under a full-strength current day, and 85-88rem windows got a compact ruler without the times instead of none. Then, at the user's request, the type went
+    up a step - 13px labels, 12px times, a 14px year row and a 12px chip, the rows unchanged - and the times moved to 89rem to make room. The feed it drives is the live one
     (<code>feed.ts</code> + <code>FeedScroller</code>): newest first, virtualised, with <code>reveal(iso)</code> able to put any day under the pinned strip.
   </p>
   <div class="tldr">
-    <div><b>Right edge, from 85rem with a mouse.</b><span>Fixed to the viewport against the right edge of the window, from the header's top to the bottom of the window: as wide as the margin right of the cards less 12px, at most 176px. It lives in the free margin only - it never covers the feed or the strip. From 1360 to 1407px it is compact, without the times; below 1360px, or on any touch-only device (tablets included), it is not rendered at all.</span></div>
+    <div><b>Right edge, from 85rem with a mouse.</b><span>Fixed to the viewport against the right edge of the window, from the header's top to the bottom of the window: as wide as the margin right of the cards less 12px, at most 176px. It lives in the free margin only - it never covers the feed or the strip. From 1360 to 1423px it is compact, without the times; below 1360px, or on any touch-only device (tablets included), it is not rendered at all.</span></div>
     <div><b>One tick per day, 20px apart, flush with the edge.</b><span>2px bars against the window's edge, no spine: 12px a day, 20px a Monday, 28px the 1st. Length is the calendar; strength is whether the day has entries (<code>--text</code> at 45%, or 22% without). About 41 days fit a 900px window.</span></div>
-    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 12px, weekday, date and time all in the same muted grey; under the pointer the row comes up to <code>--text</code> with its tick. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
-    <div><b>The day's clock time, as quiet text.</b><span><i>2h 30m</i> right-aligned just left of the ticks, muted mono - the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i>: work that ran in parallel counts once. Only on days with entries, never accented; below 88rem only in the tooltip. Behind the rows, the Reports chart's bands: blue weekends, teal vacation, purple day off, hatched red sick; time off wins over a weekend.</span></div>
+    <div><b>Every tick labelled, calmly.</b><span><i>пн 22</i> / <i>Mon 22</i> at 13px, weekday, date and time all in the same muted grey; under the pointer the row comes up to <code>--text</code> with its tick. Month headers stick to the top and are buttons; a past year gets its own row above its months.</span></div>
+    <div><b>The day's clock time, as quiet text.</b><span><i>2h 30m</i> right-aligned just left of the ticks, muted mono - the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i>: work that ran in parallel counts once. Only on days with entries, never accented; below 89rem only in the tooltip. Behind the rows, the Reports chart's bands: blue weekends, teal vacation, purple day off, hatched red sick; time off wins over a weekend.</span></div>
     <div><b>Lit ticks say where you are.</b><span>The ticks of the days the feed shows light up in the accent at 80% - brighter than an unlit tick, fainter than the current one - and the day at the reading line comes up to full strength with a glow. They move continuously with the page. The ruler scrolls itself only to keep them in view, and never while the pointer or keyboard focus is in it. A hovered tick reaches out 10px and comes up to full strength.</span></div>
     <div><b>Click jumps, instantly.</b><span>Any day, including an empty one: an empty day lands where it would be in the feed (the next older day with entries). A month header lands on the month's newest day with entries. Today goes to the top of the page. The landed card gets a ring that fades in 1.2s.</span></div>
   </div>
@@ -552,13 +556,14 @@ pre.sketch b { color: var(--text); font-weight: 600; }
       <tr><td>1920 × 1080</td><td class="mono">432 px</td><td class="mono">176 px <span class="pct">· 256 px</span></td><td class="mono">≈ 50</td></tr>
       <tr class="new"><td>1440 × 900 (MacBook Air)</td><td class="mono">192 px <span class="pct">(183.5 with a 17px scrollbar)</span></td><td class="mono">176 px <span class="pct">· 16 px (171.5 · 12)</span></td><td class="mono">≈ 41</td></tr>
       <tr><td>1432 and wider</td><td class="mono">≥ 188 px</td><td class="mono">176 px <span class="pct">· ≥ 12 px</span></td><td class="mono">-</td></tr>
-      <tr><td>1408, the times come in (88rem)</td><td class="mono">176 px <span class="pct">(167.5)</span></td><td class="mono">164 px <span class="pct">· 12 px (155.5 · 12)</span></td><td class="mono">≈ 41 at 900 high</td></tr>
+      <tr><td>1424, the times come in (89rem)</td><td class="mono">184 px <span class="pct">(175.5)</span></td><td class="mono">172 px <span class="pct">· 12 px (163.5 · 12)</span></td><td class="mono">≈ 41 at 900 high</td></tr>
+      <tr><td>1408 (88rem) - compact</td><td class="mono">176 px <span class="pct">(167.5)</span></td><td class="mono">164 px <span class="pct">· 12 px (155.5 · 12)</span></td><td class="mono">≈ 41 at 900 high</td></tr>
       <tr><td>1366 × 768 - compact</td><td class="mono">155 px <span class="pct">(146.5)</span></td><td class="mono">143 px <span class="pct">· 12 px (134.5 · 12)</span></td><td class="mono">≈ 34</td></tr>
       <tr><td>1360, the breakpoint (85rem) - compact</td><td class="mono">152 px <span class="pct">(143.5)</span></td><td class="mono">140 px <span class="pct">· 12 px (131.5 · 12)</span></td><td class="mono">≈ 34 at 768 high</td></tr>
       <tr><td>1359 and narrower (1280 included), any touch-only device</td><td class="mono">-</td><td class="mono">not rendered</td><td class="mono">-</td></tr>
     </tbody>
   </table>
-  <p class="note">Days at once = (window height − 12px top − 28px stuck month header − about 1.5 month headers in view) / 20px. The ruler is the margin right of the cards less 12px, capped at 176px. Its widest full row needs about 150px (the budget is in the engineering notes): 1379px of window with overlay scrollbars, 1396px with a classic 17px one - so the times come in at 88rem (1408px), with 6px to spare in the worst case; 87rem (1392px) would miss by 2px with a classic scrollbar. Without the times a row needs about 95px, so from 85rem (1360px), revision 2's breakpoint, to 88rem the ruler is compact: dates and ticks, the time in the tooltip.</p>
+  <p class="note">Days at once = (window height − 12px top − 28px stuck month header − about 1.5 month headers in view) / 20px. The ruler is the margin right of the cards less 12px, capped at 176px. Its widest full row needs about 158px (the budget is in the engineering notes): 1396px of window with overlay scrollbars, 1413px with a classic 17px one - so the times come in at 89rem (1424px), with about 5px to spare in the worst case; 88rem (1408px) would leave them about 3px short beside a classic scrollbar. Without the times a row needs about 98px, so from 85rem (1360px), revision 2's breakpoint, to 89rem the ruler is compact: dates and ticks, the time in the tooltip - 131.5px at 85rem with a classic scrollbar holds that with 33px to spare.</p>
 </div>
 </div>
 
@@ -587,7 +592,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <div class="bleed hscroll"><div class="m-frame th-dark" id="m-frame"></div></div>
   <div class="wrap">
     <div class="demo-read" id="readout" aria-live="off"></div>
-    <p class="note">The window's own scrollbar is hidden, as macOS shows it. In the mock the ruler is the first Tab stop (it lives in the window's fixed layer); in the app it comes after the running timers, before the feed. "This window" sizes the mock to your browser and applies the real breakpoint to your real window width; 1440 keeps the full ruler, 1366 shows the compact one (85-88rem: no times on the rows, the tooltip has them), 1280 shows it gone. The ticks sit against the mock window's right edge, as against a real one. Everything here is plain DOM; nothing is measured in the ruler - row positions are arithmetic.</p>
+    <p class="note">The window's own scrollbar is hidden, as macOS shows it. In the mock the ruler is the first Tab stop (it lives in the window's fixed layer); in the app it comes after the running timers, before the feed. "This window" sizes the mock to your browser and applies the real breakpoint to your real window width; 1440 keeps the full ruler, 1366 shows the compact one (85-89rem: no times on the rows, the tooltip has them), 1280 shows it gone. The ticks sit against the mock window's right edge, as against a real one. Everything here is plain DOM; nothing is measured in the ruler - row positions are arithmetic.</p>
   </div>
 </section>
 
@@ -611,14 +616,14 @@ pre.sketch b { color: var(--text); font-weight: 600; }
 
 <div class="card sec">
   <h2>Placement and breakpoints</h2>
-  <p class="sub">The shell is one width on every page (68rem, cards 66rem), so the ruler cannot borrow space from the column without moving the header between pages. It lives only in the free margin, against the window's right edge; the margin is wide enough for dates and ticks from 85rem, and for the times too from 88rem.</p>
+  <p class="sub">The shell is one width on every page (68rem, cards 66rem), so the ruler cannot borrow space from the column without moving the header between pages. It lives only in the free margin, against the window's right edge; the margin is wide enough for dates and ticks from 85rem, and for the times too from 89rem.</p>
   <div class="sch" id="schematics"></div>
   <div class="bp" id="bp"></div>
   <ul class="plain" style="margin-top:0.9rem">
     <li><b>Horizontal.</b> <span><code>right: 0; width: min(11rem, calc(50% - 33.75rem))</code> of the viewport: flush with the right edge of the window (the left edge of a classic scrollbar), so the ticks sit against it as Notion's outline does. The width is the margin right of the cards less 12px, capped at 11rem (176px): from 1360 to 1432px wide the ruler is exactly 12px clear of the cards, and a wider window only adds air between the cards and the labels - never between the ticks and the edge.</span></li>
     <li><b>Vertical.</b> <span>Fixed, from <code>top: 0.75rem</code> (level with the header's content when the page is at the top) to the bottom of the window. The header is not sticky and scrolls away; the ruler does not follow it, because a ruler whose top moved with the page would push its own bottom rows off-screen at the top of the page. The pinned strip lives inside the column, so the two never meet.</span></li>
     <li><b>Never over content.</b> <span>The ruler itself only ever occupies the margin. The tooltip is the one thing that crosses into the column - it is transient, appears only while the ruler is being pointed at, and never on its own.</span></li>
-    <li><b>Compact between 85 and 88rem.</b> <span><code>@media (width &lt; 88rem) { .dr-dur { display: none } }</code> - a range query, so no fractional width between 87.99 and 88rem is left with the times in a ruler too narrow for them: the margin holds the weekday, the date and the ticks (about 95px) but not the times, so they drop out of the rows and stay in the tooltip and the accessible name. Nothing else changes - no second layout, no other size.</span></li>
+    <li><b>Compact between 85 and 89rem.</b> <span><code>@media (width &lt; 89rem) { .dr-dur { display: none } }</code> - a range query, so no fractional width just under 89rem is left with the times in a ruler too narrow for them: the margin holds the weekday, the date and the ticks (about 98px) but not the times, so they drop out of the rows and stay in the tooltip and the accessible name. Nothing else changes - no second layout, no other size.</span></li>
     <li><b>Hidden means not rendered.</b> <span>Below 85rem, or without a fine hovering pointer, the component does not mount: no DOM, no landmark, no tab stop, no scroll listener. A window resized across 85rem mounts or unmounts it (<code>matchMedia</code> listener on <code>(min-width: 85rem) and (hover: hover) and (pointer: fine)</code> in <code>TimerPage.svelte</code>).</span></li>
     <li><b>Mouse only.</b> <span>No touch version for now (owner's decision). A tablet - an iPad Pro in landscape is 1366px wide - has no hovering pointer, so it gets no ruler, whatever its width. A touchscreen laptop with a mouse or trackpad does get it.</span></li>
     <li><b>Only the Timer page.</b> <span>The other pages have no day feed.</span></li>
@@ -635,19 +640,19 @@ pre.sketch b { color: var(--text); font-weight: 600; }
   <table class="spec">
     <thead><tr><th>Element</th><th>Size</th><th>Tokens and notes</th></tr></thead>
     <tbody>
-      <tr><td>Ruler</td><td class="n">131.5-176 × (100vh − 12)</td><td><code>nav.dr</code>, <code>position: fixed; top: 0.75rem; bottom: 0; right: 0; width: min(11rem, calc(50% - 33.75rem)); z-index: 6</code> - flush with the right edge of the window, and at least 12px clear of the cards (exactly 12px up to 1432px). Shown only under <code>(min-width: 85rem) and (hover: hover) and (pointer: fine)</code>: mouse only, no touch variant. Compact under <code>(width &lt; 88rem)</code>: the times are hidden (see Clock time).</td></tr>
+      <tr><td>Ruler</td><td class="n">131.5-176 × (100vh − 12)</td><td><code>nav.dr</code>, <code>position: fixed; top: 0.75rem; bottom: 0; right: 0; width: min(11rem, calc(50% - 33.75rem)); z-index: 6</code> - flush with the right edge of the window, and at least 12px clear of the cards (exactly 12px up to 1432px). Shown only under <code>(min-width: 85rem) and (hover: hover) and (pointer: fine)</code>: mouse only, no touch variant. Compact under <code>(width &lt; 89rem)</code>: the times are hidden (see Clock time).</td></tr>
       <tr><td>Scroller</td><td class="n">flex: 1</td><td><code>overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; scroll-padding: 56px 0 40px</code> (two stuck header rows). Bottom fade: <code>mask-image</code> 2rem, only while there is more below. No spine anywhere: not in the track, not drawn into the headers.</td></tr>
       <tr><td>Day row</td><td class="n">full width × 20</td><td>A <code>&lt;button&gt;</code> inside an <code>&lt;li&gt;</code>, <code>--dr-pitch: 20px</code> (<code>RULER_PITCH</code> 20 in <code>ruler.ts</code>) - px, not rem: every offset in the model is px, and with a 20px default browser font a 1.25rem row grew to 25px and following lost the current day. The type stays rem. Labels start at x = 6 (<code>--dr-label-x</code>); the right padding is the tick zone, <code>--dr-ticks: calc(--dr-tick-month + --dr-tick-grow + 6px)</code> = 44px, so the labels keep clear of the longest a tick can get. Hover: <b>no band</b> - labels and time <code>--text</code>, and the tick grows. Radius 4px, for the focus ring.</td></tr>
       <tr><td>Tick</td><td class="n">12 / 20 / 28 × 2</td><td>The row's <code>::before</code>: <code>position: absolute; right: 0</code>, vertically centred, <code>--dr-tick-h</code> 2px, <code>border-radius: 1px 0 0 1px</code> - flush with the right edge of the window. Length by the calendar through a per-row <code>--dr-len</code>: <code>--dr-tick-day</code> 12px, <code>--dr-tick-week</code> 20px (Monday), <code>--dr-tick-month</code> 28px (the 1st; a Monday that is the 1st takes it). Colour <code>--text</code> at opacity 0.45 on a day with entries, 0.22 without (dark 3.7:1 / 1.8:1, light 2.6 / 1.5 - decorative: the labels say the same). Today's tick is not accented; its label is. Hover or <code>:focus-visible</code>: <code>+ --dr-tick-grow</code> (10px) and opacity 1, <code>transition: width, opacity, background-color, box-shadow 180ms ease</code>; none under reduced motion.</td></tr>
       <tr><td>Lit ticks</td><td class="n">same sizes</td><td>The ticks of the days the feed shows (<code>.vis</code> here; <code>[data-vis]</code> in the component, set by hand): <code>--dr-lit</code> at opacity 0.8 - <code>--accent</code>, light <code>color-mix(accent 60%, text)</code> (5.6:1 dark, 3.3 light) - so the range sits between an unlit tick and the current one in both themes. The day at the reading line (<code>aria-current</code>) is lit above the rest, as Notion lights a single dash: opacity 1 (8.1:1, light 4.9) and <code>box-shadow: 0 0 4px var(--dr-lit)</code>. Their weekday and date go <code>--text</code>. Which rows: those the continuous mapping of the feed covers (behaviour 5). No thumb element - the ticks alone draw what the feed shows.</td></tr>
-      <tr><td>Weekday</td><td class="n">12px, w = widest</td><td><code>--dr-font: 0.75rem</code>. <code>Intl</code> <code>weekday: "short"</code> in the UI locale (<i>пн</i>, <i>Mon</i>, <i>Mo</i>, <i>lun.</i>, <i>lun</i>, <i>周一</i>), right-aligned in a column as wide as the locale's widest (measured once per locale; here: ru 15px, de 18, zh 24, es 25, en 26, fr 27); <code>--dr-wd-w: 1.75rem</code> until measured. <code>--dr-label</code>: dark <code>color-mix(text-dim 90%, text)</code>, light <code>color-mix(text-dim 80%, text)</code> - a step brighter than <code>--text-dim</code> so the label keeps 4.5:1 on every band.</td></tr>
-      <tr><td>Date</td><td class="n">12px, 2ch</td><td>Tabular, right-aligned, 3px after the weekday. With entries <code>--text</code>; without, the weekday's colour; the 1st weight 600.</td></tr>
-      <tr><td>Clock time</td><td class="n">11px, ≤ 7ch</td><td><code>formatDurationShort(clockMs)</code>, <code>clockMs = wallClockMs(day.entries, 0)</code> (<code>lib/tasks.ts</code>): the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i> - work that ran in parallel counts once. On a day without parallel work the header shows one figure, and it is this one. The model row keeps both: <code>clockMs</code> (shown) and <code>trackedMs</code> (the sum, for the tooltip). Finished entries only. <code>--dr-dur-font: 0.6875rem</code> <code>--mono</code>, tabular, <code>--dr-label</code> - muted, never accented, today included; <code>--text</code> only on hover. Right-aligned just left of the tick zone (44px from the window's edge), at least 8px after the date. Not shown on days without entries, nor on any row below 88rem (compact: <code>display: none</code>) - the tooltip and the name still carry it. Not localised (neither is the header's).</td></tr>
+      <tr><td>Weekday</td><td class="n">13px, w = widest</td><td><code>--dr-font: 0.8125rem</code>. <code>Intl</code> <code>weekday: "short"</code> in the UI locale (<i>пн</i>, <i>Mon</i>, <i>Mo</i>, <i>lun.</i>, <i>lun</i>, <i>周一</i>), right-aligned in a column as wide as the locale's widest (measured once per locale; here, in Chromium: ru 16px, de 19, zh 26, es 27, en 28, fr 29); <code>--dr-wd-w: 1.75rem</code> until measured. <code>--dr-label</code>: dark <code>color-mix(text-dim 90%, text)</code>, light <code>color-mix(text-dim 80%, text)</code> - a step brighter than <code>--text-dim</code> so the label keeps 4.5:1 on every band.</td></tr>
+      <tr><td>Date</td><td class="n">13px, 2ch</td><td>Tabular, right-aligned, 3px after the weekday. With entries <code>--text</code>; without, the weekday's colour; the 1st weight 600.</td></tr>
+      <tr><td>Clock time</td><td class="n">12px, ≤ 7ch</td><td><code>formatDurationShort(clockMs)</code>, <code>clockMs = wallClockMs(day.entries, 0)</code> (<code>lib/tasks.ts</code>): the day header's first figure, the one before the slash in <i>⏱ 2h 30m / 4h 30m</i> - work that ran in parallel counts once. On a day without parallel work the header shows one figure, and it is this one. The model row keeps both: <code>clockMs</code> (shown) and <code>trackedMs</code> (the sum, for the tooltip). Finished entries only. <code>--dr-dur-font: 0.75rem</code> <code>--mono</code>, tabular, <code>--dr-label</code> - muted, never accented, today included; <code>--text</code> only on hover. Right-aligned just left of the tick zone (44px from the window's edge), at least 8px after the date. Not shown on days without entries, nor on any row below 89rem (compact: <code>display: none</code>) - the tooltip and the name still carry it. Not localised (neither is the header's).</td></tr>
       <tr><td>Bands</td><td class="n">full width × 20</td><td>Behind the row (<code>inset: 0</code>), the Reports chart's exact values (<code>DailyChart.svelte</code>), square ends, no gap between rows: weekend (Sat, Sun) <code>rgba(96,125,190,0.13)</code>; vacation <code>rgba(64,190,196,0.15)</code>; day off <code>rgba(181,125,232,0.17)</code>; sick <code>rgba(224,82,82,0.10)</code> hatched with <code>rgba(224,82,82,0.38)</code> "/" stripes, 7px apart: <code>repeating-linear-gradient(135deg, stripe 0 0.8px, transparent 0.8px 7px)</code> (why 0.8px: open questions). Precedence as in the chart: sick, then other time off, then weekend - a vacation over a weekend is teal. <b>Light theme: nothing different</b> - the chart uses these same rgba values in both themes, and so does the ruler; only the text over them is a step darker (weekday, today).</td></tr>
       <tr><td>Today</td><td class="n">first row</td><td>Weekday and date weight 600 in <code>--accent</code> (dark 8.1:1); light <code>color-mix(accent 55%, text)</code> (5.3:1, 4.5 on the palest band). Neither its tick nor its time takes the colour: the tick is lit only while the feed shows today, like any day's.</td></tr>
-      <tr><td>Month header</td><td class="n">28px, sticky</td><td><code>--dr-head: 28px</code> (<code>RULER_HEAD</code> 28; px for the same reason as the rows). Standalone month name (<code>Intl</code> <code>month: "long"</code>, first letter capitalised), 12px 600 <code>--text</code>, bottom-aligned with 0.35rem below, from x = 2 (the ruler's full width for it; widest <i>septiembre</i>, 69px). <code>position: sticky; top: 0</code> (28px in a past year). Background plain <code>--bg</code>. The name is a <code>&lt;button&gt;</code> filling the header's bottom 24px, full width, radius 4: hover turns the name <code>--dr-lit</code> - no band anywhere in the ruler; focus the 2px accent ring; a tooltip like a day's. Click or Enter: the month's newest day with entries (see behaviour 3).</td></tr>
-      <tr><td>Year row</td><td class="n">28px, sticky</td><td>Only for years other than the current one, above their newest month: 13px (0.8125rem) 700 tabular <code>--text</code>, 0.35rem below, a 1px <code>--border</code> hairline across its full width from x = 0. Sticks above the month header. Not a button (open question).</td></tr>
-      <tr><td>Return chip</td><td class="n">(w − 4) × 20 pill</td><td>Only when the lit ticks are scrolled out of the ruler: <i>▲ Tue 22</i> exactly over the first whole row under the stuck headers, the part of a row above it covered in <code>--bg</code>, or <i>▼ Tue 22</i> 4px above the bottom - the full width less 2px a side, so it never shows half a label. Hidden while keyboard focus is in the ruler: it would cover the row focus moves to. 10.5px 600 in the today colour, <code>--bg</code>, 1px <code>--border</code>. Scrolls the ruler back; decorative for assistive tech (focus lands on the current day anyway).</td></tr>
+      <tr><td>Month header</td><td class="n">28px, sticky</td><td><code>--dr-head: 28px</code> (<code>RULER_HEAD</code> 28; px for the same reason as the rows). Standalone month name (<code>Intl</code> <code>month: "long"</code>, first letter capitalised), 13px 600 <code>--text</code>, bottom-aligned with 0.35rem below, from x = 2 (the ruler's full width for it; widest <i>septiembre</i>, 74px). <code>position: sticky; top: 0</code> (28px in a past year). Background plain <code>--bg</code>. The name is a <code>&lt;button&gt;</code> filling the header's bottom 24px, full width, radius 4: hover turns the name <code>--dr-lit</code> - no band anywhere in the ruler; focus the 2px accent ring; a tooltip like a day's. Click or Enter: the month's newest day with entries (see behaviour 3).</td></tr>
+      <tr><td>Year row</td><td class="n">28px, sticky</td><td>Only for years other than the current one, above their newest month: 14px (0.875rem) 700 tabular <code>--text</code>, 0.35rem below, a 1px <code>--border</code> hairline across its full width from x = 0. Sticks above the month header. Not a button (open question).</td></tr>
+      <tr><td>Return chip</td><td class="n">(w − 4) × 20 pill</td><td>Only when the lit ticks are scrolled out of the ruler: <i>▲ Tue 22</i> exactly over the first whole row under the stuck headers, the part of a row above it covered in <code>--bg</code>, or <i>▼ Tue 22</i> 4px above the bottom - the full width less 2px a side, so it never shows half a label. Hidden while keyboard focus is in the ruler: it would cover the row focus moves to. 12px (0.75rem) 600 in the today colour, <code>--bg</code>, 1px <code>--border</code>. Scrolls the ruler back; decorative for assistive tech (focus lands on the current day anyway).</td></tr>
       <tr><td>Tooltip</td><td class="n">auto</td><td>Fixed, right edge 8px left of the ruler, centred on the row, clamped to the window. <code>--surface</code>, <code>--border</code>, radius 8px, the strip's shadow. Title 0.8rem 600: full date (<i>Tuesday, September 22</i>, year when not the current one, <i>Today, …</i>). Then at 0.75rem <code>--text-dim</code>: <i>7h 35m · 5 entries</i> (the clock time, mono <code>--text</code>); when the clock time and the tracked sum differ, a second line naming the sum, <i>4h 30m tracked - work that ran in parallel is counted once</i>; the time off kind with an 8px swatch; or <i>No entries · jumps to Fri 18</i>. On a month header: <i>September 2026</i>, then <i>Jumps to Tue 22</i> (<i>Jumps to the top</i> when that is today; <i>No entries · jumps to …</i> for a month without any).</td></tr>
       <tr><td>Landing ring</td><td class="n">2px, 1.2s</td><td><code>box-shadow: 0 0 0 2px --accent</code> on the landed day's card, fading out. Reduced motion: static for 1.2s, then removed.</td></tr>
     </tbody>
@@ -713,7 +718,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
       <span>attributes set by hand on the few rows that change, never rendered per row</span>
 
 <b>TimerPage.svelte</b>
-  const RULER_MEDIA = "(min-width: 85rem) and (hover: hover) and (pointer: fine)"   <span>- compact below 88rem is CSS only</span>
+  const RULER_MEDIA = "(min-width: 85rem) and (hover: hover) and (pointer: fine)"   <span>- compact below 89rem is CSS only</span>
   &lt;form&gt;…&lt;/form&gt;  {running card, sentinel, PinnedStrip}
   {#if showRuler}   <span>- the media query, and a finished day before today</span>
     <b>&lt;DayRuler {days} timeOff={appState.timeOff} {todayISO} visible={scroller.visible}</b>
@@ -733,7 +738,7 @@ pre.sketch b { color: var(--text); font-weight: 600; }
     <li><b>No ResizeObserver, no measuring</b> <span>in the ruler: pitch and header heights are constants, the lit span and every row's top are arithmetic. The only DOM reads are the ruler's own <code>scrollTop</code>/<code>clientHeight</code> and the tooltip's size.</span></li>
     <li><b>Lit ticks are marks, not an element.</b> <span>The component sets <code>data-vis</code> and <code>aria-current</code> by hand on the rows that change (a few per frame of scrolling), and clears them when the model is rebuilt; toggling a class on thousands of rows reactively would rerun every row each frame. The tick's colour, opacity (0.8 for the range, 1 for the current day) and glow are CSS on those attributes, so there is no thumb to position and nothing a month header can cut.</span></li>
     <li><b>Rows in px, type in rem.</b> <span>The model's offsets - <code>RULER_PITCH</code>, <code>RULER_HEAD</code>, every row's <code>top</code> - are px, so <code>--dr-pitch</code> and <code>--dr-head</code> are px too. In rem, a reader's 20px default font made every row 25px: the rows drifted away from the offsets the lit span and following are computed in, and following lost the day at the reading line. The e2e suite pins it: at a 20px default font a row is 20px and a header 28px.</span></li>
-    <li><b>Clock time</b> <span>comes from the same helper as the card header's first figure - <code>formatDurationShort(wallClockMs(day.entries, 0))</code> - computed once per day in the model, not per render; <code>trackedMs</code> sits beside it for the tooltip and the name, which add <i>{tracked} tracked - work that ran in parallel is counted once</i> only when the two differ. The width budget is the widest locale: 6 (labels start) + 27 (fr weekday at 12px) + 3 + 15.1 (date, 2ch) + 8 + 46.4 (<i>10h 12m</i>, 7 characters of 11px mono) + 44 (the tick zone) = 149.5px, measured here. The ruler gets at least 155.5px from 88rem (with a classic scrollbar; 164 with overlay scrollbars), 176 from 1432px. Below 88rem the time and its gap go - 95.1px - and the ruler gets at least 131.5px (85rem, classic scrollbar). Seven characters hold anything up to <i>99h 59m</i>, and with parallel work counted once a day's clock time only passes 24h when an entry runs on past midnight - the tracked sum, which could (<i>31h 05m</i> of parallel agents), is no longer what the ruler shows.</span></li>
+    <li><b>Clock time</b> <span>comes from the same helper as the card header's first figure - <code>formatDurationShort(wallClockMs(day.entries, 0))</code> - computed once per day in the model, not per render; <code>trackedMs</code> sits beside it for the tooltip and the name, which add <i>{tracked} tracked - work that ran in parallel is counted once</i> only when the two differ. The width budget is the widest locale: 6 (labels start) + 29 (fr weekday at 13px, 28.8 rounded up as the column is) + 3 + 16.4 (date, 2ch at 13px) + 8 + 50.6 (<i>23h 59m</i>, 7 characters of 12px mono) + 44 (the tick zone) = 157px by its parts, measured here in Chromium. Rendered, with two years of data in every locale, the widest row (fr) takes 157.9px in Chromium and 159.1 in WebKit, whose mono is wider (51.9). The ruler gets at least 163.5px from 89rem (with a classic 17px scrollbar - 5.6px to spare in Chromium, 4.4 in WebKit; 164.5 beside a 15px one, 172 with overlay scrollbars), 176 from 1432px. 88rem would give 155.5px beside a classic scrollbar - 2.4px short in Chromium, 3.6 in WebKit - so the times moved to 89rem with the type. Below 89rem the time and its gap go - 98.4px (98.2 in WebKit) - and the ruler gets at least 131.5px (85rem, classic scrollbar), 33px to spare. Seven characters hold anything up to <i>99h 59m</i>, and with parallel work counted once a day's clock time only passes 24h when an entry runs on past midnight - the tracked sum, which could (<i>31h 05m</i> of parallel agents), is no longer what the ruler shows.</span></li>
     <li><b>Bands</b> <span>share their values with <code>DailyChart</code>: move <code>BAND_COLORS</code>, the weekend colour and the hatch into one module (or tokens) when this lands, so the two can never drift. The chart's hatch is an SVG pattern; the ruler's is the CSS gradient above, checked side by side against it.</span></li>
     <li><b>Strings (new).</b> <span><code>t("Days")</code> (nav), <code>t("No entries")</code>, <code>t("jumps to {day}")</code>, <code>t("jumps to the top")</code>, <code>t("Today")</code>, <code>t("{month}, go to the newest day with entries")</code>, <code>t("{month}, no entries, {jump}")</code>. <code>t("{tracked} tracked - work that ran in parallel is counted once")</code> (tooltip and name; the day header's longer <code>t("{wall} on the clock, {tracked} tracked - …")</code> is not reused, since the clock time is already on the line above). Reused: <code>t("{n} entries")</code>, <code>t("vacation")</code>, <code>t("sick leave")</code>, <code>t("day off")</code>. Dates, weekdays and <i>September 2026</i> come from <code>Intl</code> with <code>formattingLocale()</code>.</span></li>
   </ul>
@@ -744,11 +749,11 @@ pre.sketch b { color: var(--text); font-weight: 600; }
     <li><b>Notion's outline as the model (owner).</b> <span>Measured on a live Notion page: 2px rounded dashes, 16px long (12px a level deeper), right-aligned, 14px apart; inactive ones the text colour at about 30% (dark <code>rgba(255,252,235,0.306)</code>), the active one bright with <code>box-shadow: 0 0 3px</code> in its own colour; 200ms transitions; hovering the column opens a panel of headings. Taken: 2px rounded bars flush right, <code>--text</code> at an opacity, one dash lit above the rest - the current day at full strength with a 4px glow, the rest of the range the accent at 80% - 180ms transitions, a tick that grows on hover. Not taken: the lengths (ours are the calendar: 12 / 20 / 28px), 14px apart (too tight for a label on every row - 20px), and the panel - our labels are always there, as the owner first asked, so hover only brightens a row and the tooltip gives the full date.</span></li>
     <li><b>No spine, no thumb (owner).</b> <span>The 1px spine joined the ticks into a comb and read as one more line beside the scrollbar; the 3px accent thumb over it said where the feed was, but only on that line. Now the ticks stand alone against the window's edge, and the ticks of the shown days carry the accent themselves - the same information, one mark fewer. Today's tick lost its accent with it: an accent tick means "on screen".</span></li>
     <li><b>Flush with the window's edge (owner).</b> <span><code>right: 0</code>, not a fixed offset from the cards: the ticks are where the eye finds the scrollbar, and a wider window adds air between the cards and the labels, never between the ticks and the edge. The width follows the margin (at most 176px), so the ruler still never comes closer than 12px to the cards.</span></li>
-    <li><b>Compact between 85 and 88rem, not gone.</b> <span>The larger scale and the tick zone need about 150px with the times, which only 88rem gives; rather than lose the ruler on 1360-1407px windows (a 1366px laptop among them), those get it without the times - dates and ticks need about 95px - and the tooltip and the name carry the time. One CSS rule, not a second layout. Rejected: moving the whole breakpoint to 88rem (the previous state of this revision).</span></li>
+    <li><b>Compact between 85 and 89rem, not gone.</b> <span>The larger scale and the tick zone need about 158px with the times, which only 89rem gives (88rem did, before the type went up a step); rather than lose the ruler on 1360-1423px windows (a 1366px laptop among them), those get it without the times - dates and ticks need about 98px - and the tooltip and the name carry the time. One CSS rule, not a second layout. Rejected: moving the whole breakpoint to where the times fit (the previous state of this revision).</span></li>
     <li><b>Free margin only, hidden below 85rem.</b> <span>Rejected: shifting the column left to make room (the header would move between pages), overlaying the feed's edge (covers durations), a collapsed rail that expands on hover (hides the very labels the owner asked for).</span></li>
     <li><b>Mouse only (owner).</b> <span>No touch variant for now; the media query requires a hovering fine pointer, so tablets of any width get no ruler. Rejected for now: a drag scrubber with 28px rows and a floating date bubble.</span></li>
     <li><b>Fixed to the viewport</b>, <span>not sticky in the flow below the header (its top would move and its bottom would start off-screen).</span></li>
-    <li><b>Every day labelled at a 20px pitch, 12px type (owner: "the scale is too small").</b> <span>Revision 2's 16px and 11px showed more days (52 instead of 41 at 900px) but were too small to read and to hit; 24px shows 17% fewer days again (34) for little gain. Mondays-only labels would be calmer, but the owner asked for every tick to carry its weekday - calm comes from colour instead: dim weekdays, bright dates only where there is work.</span></li>
+    <li><b>Every day labelled at a 20px pitch, 13px type (owner: "the scale is too small").</b> <span>Revision 2's 16px and 11px showed more days (52 instead of 41 at 900px) but were too small to read and to hit; revision 3 first went to 12px, and the type went up a step again at the user's request - the rows stayed 20px, so the days at once did not change; 24px shows 17% fewer days again (34) for little gain. Mondays-only labels would be calmer, but the owner asked for every tick to carry its weekday - calm comes from colour instead: dim weekdays, bright dates only where there is work.</span></li>
     <li><b>Month headers above their days, a year row for past years.</b> <span>In a newest-first ruler the 1st is the last row of its month, so the long tick closes the month and the header opens the next one down. A sticky year row keeps every past month unambiguous without crowding the header.</span></li>
     <li><b>Month headers are buttons (owner).</b> <span>A click lands on the month's newest day with entries - the mouse's PageUp/PageDown, and a stuck header becomes "back to the start of this month". Hover band, focus ring and a tooltip with the target, like a day. The header button is a stop in the arrow-key sequence, so the keyboard reaches it the same way. The year row stays inert for now.</span></li>
     <li><b>Empty days are clickable.</b> <span>The ruler is a time axis: any point on it is a place in the feed. Rejected: inert empty rows (dead zones on every weekend; a near-miss does nothing).</span></li>
@@ -920,7 +925,7 @@ const wdCache = new Map();
 function weekdayWidth(lang) {
   if (wdCache.has(lang)) return wdCache.get(lang);
   const canvas = document.createElement("canvas").getContext("2d");
-  canvas.font = "400 12px " + getComputedStyle(document.body).fontFamily;
+  canvas.font = "400 13px " + getComputedStyle(document.body).fontFamily;
   let widest = 0;
   for (let offset = 0; offset < 7; offset++) widest = Math.max(widest, canvas.measureText(fmts(lang).weekday.format(dateOf(addDays("2026-09-21", offset)))).width);
   const width = Math.ceil(widest);
@@ -1236,8 +1241,8 @@ function buildFrame() {
 function sizeFrame() {
   const width = demo.width === "window" ? document.documentElement.clientWidth : Number(demo.width);
   const wide = demo.width === "window" ? window.matchMedia("(min-width: 85rem)").matches : width >= 1360;
-  // Compact between 85 and 88rem: the rows lose their times (the app's rule reads the real window).
-  const compact = demo.width === "window" ? window.matchMedia("(width < 88rem)").matches : width < 1408;
+  // Compact between 85 and 89rem: the rows lose their times (the app's rule reads the real window).
+  const compact = demo.width === "window" ? window.matchMedia("(width < 89rem)").matches : width < 1424;
   const height = Math.max(560, Math.min(900, window.innerHeight - 16));
   el.frame.style.width = width + "px";
   el.frame.style.height = height + "px";
@@ -1588,7 +1593,7 @@ function readout() {
   }
   const wide = el.frame.hasAttribute("data-wide");
   box.innerHTML =
-    "<span>window</span><span><b>" + el.frame.offsetWidth + " px</b> · ruler " + (wide ? "<i>shown</i>, " + el.nav.offsetWidth + " px at the right edge" + (el.frame.hasAttribute("data-compact") ? ", <b>compact</b> (below 88rem: times in the tooltip)" : "") : "<b>not rendered</b> (below 85rem)") + " · strip " + (demo.stuck ? "stuck, reading line " + STRIP_H + "px" : "not stuck") + "</span>" +
+    "<span>window</span><span><b>" + el.frame.offsetWidth + " px</b> · ruler " + (wide ? "<i>shown</i>, " + el.nav.offsetWidth + " px at the right edge" + (el.frame.hasAttribute("data-compact") ? ", <b>compact</b> (below 89rem: times in the tooltip)" : "") : "<b>not rendered</b> (below 85rem)") + " · strip " + (demo.stuck ? "stuck, reading line " + STRIP_H + "px" : "not stuck") + "</span>" +
     "<span>visible</span><span>" + (first >= 0 ? "<b>" + shortLabel(rows[last].iso, lang) + " – " + shortLabel(rows[first].iso, lang) + "</b> · " + days + " days, " + withEntries + " with entries" : "-") + "</span>" +
     "<span>current</span><span><b>" + (demo.current >= 0 ? shortLabel(rows[demo.current].iso, lang) : "-") + '</b> (aria-current="location", roving tab stop)</span>' +
     "<span>ruler</span><span>" + state + "</span>" +
@@ -1669,7 +1674,7 @@ function renderStates() {
     both({ top: TODAY, bottom: "2026-09-13", hover: "2026-09-22", tip: "2026-09-22" }));
   figure(host, "Keyboard focus, an empty day", "2px accent ring inside the row, over the weekend band; the tick grows as on hover. The tooltip shows for focus too and says where the jump will land.",
     both({ top: TODAY, bottom: "2026-09-13", focus: "2026-09-19", tip: "2026-09-19" }));
-  figure(host, "Compact, 85-88rem", "Between 1360 and 1407px the margin holds the dates and the ticks but not the times: the rows drop them, and the tooltip and the name carry them. Here 140px wide, the ruler at 1360.",
+  figure(host, "Compact, 85-89rem", "Between 1360 and 1423px the margin holds the dates and the ticks but not the times: the rows drop them, and the tooltip and the name carry them. Here 140px wide, the ruler at 1360.",
     both({ top: TODAY, bottom: "2026-09-13", className: "compact", width: 140, hover: "2026-09-22", tip: "2026-09-22" }));
   figure(host, "Parallel work", "An agent worked alongside on Wed 23, so its card reads <i>⏱ clock / tracked</i>. The ruler shows the clock time, the figure before the slash; the tooltip and the name add the tracked sum.",
     both({ top: TODAY, bottom: "2026-09-20", hover: "2026-09-23", tip: "2026-09-23" }), "col");
@@ -1705,7 +1710,7 @@ function renderAlternatives() {
   const one = (options) => (pair) => fragment({ ...options, host: pair, theme: demo.theme });
   const range = { top: "2026-09-24", bottom: "2026-09-06" };
   const days = 19;
-  figure(host, '<span class="badge rec">Chosen</span>The clock time as text, 20px rows', "The day header's first figure, muted and right-aligned just left of the ticks: a number to read, not a shape to estimate. 12px type, at most 176px wide, 41 days on a 900px screen.", one(range));
+  figure(host, '<span class="badge rec">Chosen</span>The clock time as text, 20px rows', "The day header's first figure, muted and right-aligned just left of the ticks: a number to read, not a shape to estimate. 13px type, at most 176px wide, 41 days on a 900px screen.", one(range));
   figure(host, '<span class="badge rej">Rejected</span>Revision 2\'s scale', "16px rows, 11px type, 1px ticks of 6 / 11 / 17px: 52 days on a 900px screen instead of 41, but the owner found the scale too small to read and to hit.", one({ ...range, height: 24 + days * 16, className: "p16" }));
   figure(host, '<span class="badge rej">Rejected</span>24px pitch', "Airy, but 34 days on a 900px screen - 17% fewer than 20px - for little gain in legibility.", one({ ...range, height: HEAD + days * 24, className: "p24" }));
   figure(host, '<span class="badge rej">Rejected</span>Hours bar (revision 1)', "A 4px bar after the date, 10h = 14px: 120px wide instead of 176, so the full ruler could start at 84rem - but the long day is a shape to estimate, not a number, and one more shape beside the ticks. The compact ruler covers those widths instead.", one({ ...range, className: "alt-bar compact", bar: true }));
@@ -1749,13 +1754,13 @@ function renderAnatomy() {
     node.style.top = y - base.top + "px";
   }
   const legend = [
-    [1, "Weekday · date", "12px from x = 6. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "both <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; <code>--text</code> on hover or focus, a 180ms colour transition"],
+    [1, "Weekday · date", "13px from x = 6. Weekday right-aligned in the locale's widest-weekday column; date 2ch tabular, 3px after it", "both <code>--dr-label</code>: <code>color-mix(text-dim 90%, text)</code>, light 80%; <code>--text</code> on hover or focus, a 180ms colour transition"],
     [2, "Day tick", "12 × 2 px, flush with the right edge of the window, <code>border-radius: 1px 0 0 1px</code>, vertically centred", "<code>--text</code> at 45% on a day with entries"],
-    [3, "Clock time", "<code>formatDurationShort(clockMs)</code> - the day header's first figure, parallel work counted once; 11px <code>--mono</code> tabular; right edge 44px from the window's edge, at least 8px after the date; only on days with entries, and only from 88rem", "<code>--dr-label</code>, never accented; <code>--text</code> on hover"],
+    [3, "Clock time", "<code>formatDurationShort(clockMs)</code> - the day header's first figure, parallel work counted once; 12px <code>--mono</code> tabular; right edge 44px from the window's edge, at least 8px after the date; only on days with entries, and only from 89rem", "<code>--dr-label</code>, never accented; <code>--text</code> on hover"],
     [4, "Current day", "The lit tick at the reading line (<code>aria-current</code>), above the rest of the range", "<code>--dr-lit</code> at opacity 1, <code>box-shadow: 0 0 4px --dr-lit</code>"],
     [5, "1st of month tick", "28 × 2 px; wins over Monday", "as any tick"],
     [6, "Lit ticks", "The days the feed shows, mapped continuously from it; lengths unchanged; the labels stay muted", "<code>--dr-lit</code> at opacity 0.8: <code>--accent</code>; light <code>color-mix(accent 60%, text)</code>"],
-    [7, "Month header (button)", "28px, text bottom-aligned 0.35rem up, from x = 2; sticky; the button is its bottom 24px across the full width, radius 4", "12px 600 <code>--text</code> on <code>--bg</code>; hover: the name <code>--dr-lit</code>, no band"],
+    [7, "Month header (button)", "28px, text bottom-aligned 0.35rem up, from x = 2; sticky; the button is its bottom 24px across the full width, radius 4", "13px 600 <code>--text</code> on <code>--bg</code>; hover: the name <code>--dr-lit</code>, no band"],
     [8, "Monday tick", "20 × 2 px", "as any tick"],
     [9, "Day without entries", "Same tick length, fainter; dim date, no time", "tick <code>--text</code> at 22%"],
     [10, "Weekend band", "The full row, 20px a day, square ends; Saturday and Sunday one block; time off replaces it", "<code>rgba(96,125,190,0.13)</code>, both themes (the Reports chart's)"],
@@ -1770,13 +1775,13 @@ function renderPlacement() {
   // Breakpoint table, drawn at 1/8: the ruler is the margin less 12px, at most 176px, against the edge.
   const scale = 1 / 8;
   const rows = [
-    { width: 1920 }, { width: 1600 }, { width: 1440 }, { width: 1440, scrollbar: 17 }, { width: 1408 }, { width: 1408, scrollbar: 17 }, { width: 1407 }, { width: 1366 }, { width: 1360 }, { width: 1360, scrollbar: 17 }, { width: 1359 }, { width: 1280 },
+    { width: 1920 }, { width: 1600 }, { width: 1440 }, { width: 1440, scrollbar: 17 }, { width: 1424 }, { width: 1424, scrollbar: 17 }, { width: 1423 }, { width: 1366 }, { width: 1360 }, { width: 1360, scrollbar: 17 }, { width: 1359 }, { width: 1280 },
   ];
   document.getElementById("bp").innerHTML = rows.map((item) => {
     const layout = item.width - (item.scrollbar || 0);
     const margin = (layout - 1056) / 2;
     const shown = item.width >= 1360;
-    const compact = item.width < 1408;
+    const compact = item.width < 1424;
     const ruler = Math.min(176, margin - 12);
     const columnLeft = margin * scale;
     const text = shown

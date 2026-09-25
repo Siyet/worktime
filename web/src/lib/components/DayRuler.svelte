@@ -698,7 +698,7 @@
        model's RULER_PITCH and RULER_HEAD, whatever the browser's font size; the
        type is rem and follows it. */
     --dr-w: min(11rem, calc(50% - 33.75rem));
-    --dr-pitch: 20px;
+    --dr-pitch: 23px;
     --dr-head: 28px;
     /* Ticks: 2px bars against the right edge, a Monday longer than a day and the
        1st longer still; a hovered one grows by --dr-tick-grow. The labels keep

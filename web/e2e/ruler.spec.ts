@@ -304,13 +304,13 @@ test.describe("day ruler", () => {
     await open(page, server.url);
     expect(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(20);
     const height = (selector: string) => page.locator(selector).first().evaluate((element) => element.getBoundingClientRect().height);
-    expect(await height(".dr-li")).toBe(20);
+    expect(await height(".dr-li")).toBe(23);
     expect(await height(".dr-mhead")).toBe(28);
     // A whole month, header and rows: the model's height for it. The first month
     // is the current one, which never has a year row above it.
     const month = page.locator(".dr-month").first();
     const rows = await month.locator(".dr-li").count();
-    expect(await month.evaluate((element) => element.getBoundingClientRect().height)).toBe(28 + rows * 20);
+    expect(await month.evaluate((element) => element.getBoundingClientRect().height)).toBe(28 + rows * 23);
     expect(await pageErrors(page)).toEqual([]);
   });
 
